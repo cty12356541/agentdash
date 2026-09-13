@@ -1,8 +1,10 @@
 ﻿# agentdash · claude-code 集成包安装器(PowerShell 版;类 Unix shell 用 install.sh)
+# 前提:agentdash 二进制在 PATH——hook 直调二进制子命令,零 Python 前置(spec §6 修订)。
 # 用法:.\install.ps1 [-Target <目标项目目录>](默认当前目录)
-# 动作:hooks/skill 复制进 <目标>\.claude\,并在 settings.json 幂等注册三钩子。
-# 幂等:重复执行只刷新文件与自家注册,不动 settings.json 其他内容。
-# 兼容 Windows PowerShell 5.1+(-AsHashtable 不可用;::new 为 5.0+ 语法)。
+# 动作:skill 复制;settings.json 幂等注册三钩子(命令为常量,无路径 baked);
+#       .gitignore 幂等追加 .agentdash/(M-2);清理老版本 Python 垫片残留。
+# 幂等:重复执行只刷新自家注册与文件,不动 settings.json 其他内容。
+# 兼容 Windows PowerShell 5.1+(::new 为 5.0+ 语法)。
 param(
     [string]$Target = (Get-Location).Path
 )
@@ -17,34 +19,42 @@ if (-not (Test-Path -LiteralPath $Target -PathType Container)) {
     Write-Error "[agentdash] 目标目录不存在: $Target"
 }
 
-# --- 复制 hooks / skill ---
-$hookDir  = Join-Path $Target '.claude\agentdash\hooks'
+# --- 前提检测:agentdash 在 PATH ---
+$agentdashCmd = Get-Command -Name 'agentdash' -ErrorAction SilentlyContinue
+if (-not $agentdashCmd) {
+    Write-Error "[agentdash] 未找到 agentdash —— hook 直调二进制,需要它先在 PATH。安装方式二选一:`n  1) 仓库内安装:  cargo install --path <agentdash 仓库根目录>`n  2) 发布件:      从项目 Releases 下载对应平台二进制,放入 PATH"
+}
+
+# --- skill 复制 ---
 $skillDir = Join-Path $Target '.claude\skills\agentdash'
-New-Item -ItemType Directory -Force -Path $hookDir  | Out-Null
 New-Item -ItemType Directory -Force -Path $skillDir | Out-Null
-Copy-Item (Join-Path $here 'hooks\record_event.py') (Join-Path $hookDir 'record_event.py') -Force
 Copy-Item (Join-Path $here 'skills\agentdash\SKILL.md') (Join-Path $skillDir 'SKILL.md') -Force
 
-# --- 探测 hook 运行时解释器(py -3 → python → python3;Windows 优先官方启动器)---
-$py = $null
-foreach ($c in @(
-    @{ Exe = 'py';      Args = @('-3') },
-    @{ Exe = 'python';  Args = @() },
-    @{ Exe = 'python3'; Args = @() }
-)) {
-    try {
-        & $c.Exe @($c.Args + @('-c', 'import sys')) | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            $py = (@($c.Exe) + @($c.Args)) -join ' '
-            break
+# --- 清理被二进制方案替代的 Python 垫片残留(老版本安装产物)---
+$staleHook = Join-Path $Target '.claude\agentdash\hooks\record_event.py'
+if (Test-Path -LiteralPath $staleHook) {
+    Remove-Item -LiteralPath $staleHook -Force
+    foreach ($dir in @('agentdash\hooks', 'agentdash')) {
+        $p = Join-Path $Target (Join-Path '.claude' $dir)
+        if ((Test-Path -LiteralPath $p) -and -not (Get-ChildItem -LiteralPath $p)) {
+            Remove-Item -LiteralPath $p -Force   # 仅删空目录,非空保留用户内容
         }
-    } catch { }
-}
-if (-not $py) {
-    Write-Error '[agentdash] 未找到 py/python —— hook 需要它;文件已复制,请装好 Python 后重跑'
+    }
 }
 
-# --- settings.json 幂等注册 ---
+# --- M-2:.gitignore 幂等追加 .agentdash/ ---
+$gitignore = Join-Path $Target '.gitignore'
+$hasEntry = $false
+if (Test-Path -LiteralPath $gitignore) {
+    $hasEntry = [bool](Select-String -LiteralPath $gitignore -Pattern '^\s*\.agentdash/?\s*$' -Quiet)
+}
+if (-not $hasEntry) {
+    # .NET 追加:UTF-8 无 BOM(BOM 会使 .gitignore 首行模式失配)
+    [System.IO.File]::AppendAllText($gitignore, '.agentdash/' + [Environment]::NewLine)
+}
+Write-Host "[agentdash] .gitignore ensured: .agentdash/ ($gitignore)"
+
+# --- settings.json 幂等注册三钩子 ---
 $settingsPath = Join-Path $Target '.claude\settings.json'
 $data = $null
 if (Test-Path -LiteralPath $settingsPath) {
@@ -63,7 +73,11 @@ if (-not ($data.PSObject.Properties['hooks'])) {
 }
 $hooks = $data.hooks
 
-$cmd = '{0} "{1}"' -f $py, (Join-Path $hookDir 'record_event.py')
+$commands = [ordered]@{
+    PostToolUse  = 'agentdash hook posttooluse || true'
+    Stop         = 'agentdash hook stop || true'
+    SubagentStop = 'agentdash hook subagentstop || true'
+}
 
 function Remove-AgentdashBlocks {
     param($Existing)
@@ -76,8 +90,10 @@ function Remove-AgentdashBlocks {
                 foreach ($h in @($block.hooks)) {
                     $c = ''
                     if ($h -and $h.PSObject.Properties['command']) { $c = [string]$h.command }
-                    # 自家旧注册判定:命令同时含 agentdash 与 record_event.py
-                    if (-not ($c.Contains('agentdash') -and $c.Contains('record_event.py'))) { $kept += $h }
+                    # 自家注册判定:新形态 `agentdash hook`;旧形态含 record_event.py(一并替换)
+                    if (-not (($c -like '*agentdash hook*') -or (($c -like '*agentdash*') -and ($c -like '*record_event.py*')))) {
+                        $kept += $h
+                    }
                 }
                 if ($kept.Count -gt 0) {
                     $block.hooks = $kept
@@ -91,10 +107,10 @@ function Remove-AgentdashBlocks {
     return $out  # 不加逗号包装:让调用侧 @(...) 收集为扁平块数组
 }
 
-foreach ($event in @('PostToolUse', 'Stop', 'SubagentStop')) {
+foreach ($event in $commands.Keys) {
     $existing = $null
     if ($hooks.PSObject.Properties[$event]) { $existing = $hooks.$event }
-    $newEntry = [pscustomobject]@{ type = 'command'; command = $cmd }
+    $newEntry = [pscustomobject]@{ type = 'command'; command = $commands[$event] }
     $newBlock = [pscustomobject]@{ hooks = @($newEntry) }
     # PostToolUse 不设 matcher = 全工具(其他工具也要落 tool 事件)
     $merged = @(Remove-AgentdashBlocks $existing) + @($newBlock)

@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # agentdash · claude-code 集成包安装器(bash 版;Windows PowerShell 用 install.ps1)
+# 前提:agentdash 二进制在 PATH——hook 直调二进制子命令,零 Python 前置(spec §6 修订)。
 # 用法:./install.sh [目标项目目录](默认当前目录)
-# 动作:hooks/skill 复制进 <目标>/.claude/,并在 settings.json 幂等注册三钩子。
-# 幂等:重复执行只刷新文件与自家注册,不动 settings.json 其他内容。
+# 动作:
+#   1. 检测 agentdash 在 PATH(缺失 → 打印安装指引并退出)
+#   2. skill 复制进 <目标>/.claude/skills/agentdash/
+#   3. <目标>/.claude/settings.json 幂等注册三钩子(命令为常量,无路径 baked)
+#   4. <目标>/.gitignore 幂等追加 .agentdash/(M-2)
+#   5. 清理老版本 Python 垫片残留(record_event.py 及空目录)
+# 幂等:重复执行只刷新自家注册与文件,不动 settings.json 其他内容。
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,98 +18,90 @@ if [ ! -d "$target" ]; then
   exit 1
 fi
 
-mkdir -p "$target/.claude/agentdash/hooks" "$target/.claude/skills/agentdash"
-cp "$here/hooks/record_event.py" "$target/.claude/agentdash/hooks/record_event.py"
-cp "$here/skills/agentdash/SKILL.md" "$target/.claude/skills/agentdash/SKILL.md"
-
-# 探测 hook 运行时解释器(python3 → python → py -3)
-py=""
-for c in python3 python "py -3"; do
-  if $c -c "import sys" >/dev/null 2>&1; then py="$c"; break; fi
-done
-if [ -z "$py" ]; then
-  echo "[agentdash] 未找到 python3/python —— hook 需要它;文件已复制,请装好 Python 后重跑" >&2
+# --- 前提检测:agentdash 在 PATH ---
+if ! command -v agentdash >/dev/null 2>&1; then
+  echo "[agentdash] 未找到 agentdash —— hook 直调二进制,需要它先在 PATH。安装方式二选一:" >&2
+  echo "  1) 仓库内安装:  cargo install --path <agentdash 仓库根目录>" >&2
+  echo "  2) 发布件:      从项目 Releases 下载对应平台二进制,放入 PATH" >&2
   exit 1
 fi
 
-script="$target/.claude/agentdash/hooks/record_event.py"
-case "$script" in
-  /*) abs="$script" ;;
-  *)  abs="$(cd "$(dirname "$script")" && pwd)/$(basename "$script")" ;;
-esac
-# MSYS/Git Bash:POSIX 绝对路径(/tmp、/d/…)对原生 Windows python 无效,
-# baked 进 settings.json 的命令须是真 Windows 路径(cygpath -m 混合式,双平台可读)。
-if command -v cygpath >/dev/null 2>&1; then
-  abs="$(cygpath -m "$abs")"
-  target_w="$(cygpath -m "$target")"
-else
-  target_w="$target"
+mkdir -p "$target/.claude/skills/agentdash"
+cp "$here/skills/agentdash/SKILL.md" "$target/.claude/skills/agentdash/SKILL.md"
+
+# --- 清理被二进制方案替代的 Python 垫片残留(老版本安装产物)---
+rm -f "$target/.claude/agentdash/hooks/record_event.py"
+rmdir "$target/.claude/agentdash/hooks" "$target/.claude/agentdash" 2>/dev/null || true
+
+# --- M-2:目标仓 .gitignore 幂等追加 .agentdash/ ---
+gitignore="$target/.gitignore"
+if [ ! -f "$gitignore" ] || ! grep -qE '^[[:space:]]*\.agentdash/?[[:space:]]*$' "$gitignore"; then
+  printf '.agentdash/\n' >> "$gitignore"
 fi
-cmd="$py \"$abs\" || true"
+echo "[agentdash] .gitignore ensured: .agentdash/ ($gitignore)"
 
-"$py" - "$target_w/.claude/settings.json" "$cmd" <<'PYEOF'
-import json
-import shutil
-import sys
-from pathlib import Path
+# --- settings.json 幂等注册三钩子 ---
+settings="$target/.claude/settings.json"
 
-settings_path, hook_cmd = sys.argv[1], sys.argv[2]
-path = Path(settings_path)
-raw = None
-if path.exists():
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError:
-        raw = None
-try:
-    data = json.loads(raw) if raw else {}
-except ValueError:
-    # 损坏的 settings.json:备份后重建,不吞用户文件
-    shutil.copy2(path, str(path) + ".bak-agentdash")
-    data = {}
-if not isinstance(data, dict):
-    data = {}
-hooks = data.setdefault("hooks", {})
-if not isinstance(hooks, dict):
-    hooks = {}
-    data["hooks"] = hooks
+write_fresh_settings() {
+  cat > "$settings" <<'EOF'
+{
+  "hooks": {
+    "PostToolUse": [
+      {"hooks": [{"type": "command", "command": "agentdash hook posttooluse || true"}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "agentdash hook stop || true"}]}
+    ],
+    "SubagentStop": [
+      {"hooks": [{"type": "command", "command": "agentdash hook subagentstop || true"}]}
+    ]
+  }
+}
+EOF
+}
 
-MARKER_CMD, MARKER_FILE = "agentdash", "record_event.py"
-entry = {"type": "command", "command": hook_cmd}
+merge_with_jq() {
+  # 语义自家注册判定:新形态 `agentdash hook …`;旧形态含 record_event.py(一并替换)
+  local tmp="$settings.tmp-agentdash"
+  if jq '
+    def ours: (.command // "") | (test("record_event[.]py") or test("agentdash hook"));
+    def clean:
+      map((.hooks //= []) | .hooks |= map(select((ours) | not)))
+      | map(select((.hooks | length) > 0));
+    .hooks //= {}
+    | .hooks.PostToolUse  = ((.hooks.PostToolUse  // []) | clean)
+        + [{hooks: [{type: "command", command: "agentdash hook posttooluse || true"}]}]
+    | .hooks.Stop         = ((.hooks.Stop         // []) | clean)
+        + [{hooks: [{type: "command", command: "agentdash hook stop || true"}]}]
+    | .hooks.SubagentStop = ((.hooks.SubagentStop // []) | clean)
+        + [{hooks: [{type: "command", command: "agentdash hook subagentstop || true"}]}]
+  ' "$settings" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$settings"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
 
-
-def is_ours(h) -> bool:
-    if not isinstance(h, dict):
-        return False
-    c = str(h.get("command", ""))
-    return MARKER_CMD in c and MARKER_FILE in c
-
-
-def clean(existing):
-    """剔除自家旧注册(幂等),保留其他内容;返回 list。"""
-    if not isinstance(existing, list):
-        return []
-    out = []
-    for block in existing:
-        if not isinstance(block, dict):
-            continue
-        hs = block.get("hooks")
-        if isinstance(hs, list):
-            kept = [h for h in hs if not is_ours(h)]
-            if not kept:
-                continue
-            block = dict(block, hooks=kept)
-        out.append(block)
-    return out
-
-
-for event in ("PostToolUse", "Stop", "SubagentStop"):
-    hooks[event] = clean(hooks.get(event)) + [{"hooks": [dict(entry)]}]
-    # PostToolUse 不设 matcher = 全工具(其他工具也要落 tool 事件)
-
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-print("[agentdash] hooks registered in %s: PostToolUse/Stop/SubagentStop" % path)
-PYEOF
+if [ ! -f "$settings" ]; then
+  write_fresh_settings
+  echo "[agentdash] hooks registered (fresh): $settings"
+elif command -v jq >/dev/null 2>&1 && jq -e . "$settings" >/dev/null 2>&1 && merge_with_jq; then
+  echo "[agentdash] hooks registered (merged): $settings"
+elif command -v jq >/dev/null 2>&1; then
+  # JSON 损坏:备份后重建,不吞用户文件
+  cp "$settings" "$settings.bak-agentdash"
+  write_fresh_settings
+  echo "[agentdash] settings.json 损坏,已备份为 $settings.bak-agentdash 后重建注册"
+else
+  # 降级:无 jq 不动用户文件,打印手工合并指引(其余安装产物已完成)
+  echo "[agentdash] 未找到 jq,不改动既有 $settings;请把以下三段并入其 hooks(或装 jq 后重跑):" >&2
+  cat >&2 <<'EOF'
+    "PostToolUse":  [{"hooks": [{"type": "command", "command": "agentdash hook posttooluse || true"}]}],
+    "Stop":         [{"hooks": [{"type": "command", "command": "agentdash hook stop || true"}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "agentdash hook subagentstop || true"}]}]
+EOF
+fi
 
 echo "[agentdash] installed into $target/.claude (skill: /agentdash)"

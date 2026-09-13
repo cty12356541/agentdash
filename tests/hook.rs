@@ -1,0 +1,652 @@
+//! claude-code kit hook 的 Rust 集成测试(W1-008b)。
+//!
+//! 移植原 `kits/claude-code/tests/test_record_event.py` 的 fixture 断言(该 Python
+//! 垫片随二进制方案退役):全链路子进程回放 `agentdash hook <event>` + stdin 载荷,
+//! 断言 `.agentdash/events.jsonl` 行序与字段(spec §4.2),含 gate running→passed 折叠、
+//! 退出码/摘要提取、降级路径(损坏输入恒退 0 不落盘)与 hooks.json 清单;
+//! 另有并发用例:8 线程 × N 行同文件灌入,断言零丢失(文件锁语义)。
+
+use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use serde_json::{Value, json};
+
+/// 被测二进制(cargo 注入的绝对路径,bin-only crate 走子进程回放)。
+const EXE: &str = env!("CARGO_BIN_EXE_agentdash");
+/// 仓库根(用于断言 kits 下的 hooks.json 清单)。
+const MANIFEST: &str = env!("CARGO_MANIFEST_DIR");
+
+// ---------------------------------------------------------------- helpers
+
+/// 自清理临时目录(测试工作仓:载荷 `cwd` 指向这里,events.jsonl 落这里)。
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(tag: &str) -> Self {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("agentdash-hook-{tag}-{pid}-{n}"));
+        fs::create_dir_all(&dir).expect("create tempdir");
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        drop(fs::remove_dir_all(&self.0));
+    }
+}
+
+/// 子进程回放:`args` 为 hook 子命令参数,`raw` 为 stdin 原文。
+fn feed(args: &[&str], raw: &str, cwd: &Path) -> Output {
+    let mut child = Command::new(EXE)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentdash");
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(raw.as_bytes())
+        .expect("write stdin");
+    child.wait_with_output().expect("wait agentdash")
+}
+
+/// 按事件名回放载荷(`{"hook", event}`)。
+fn feed_payload(event: &str, payload: &Value, cwd: &Path) -> Output {
+    feed(&["hook", event], &payload.to_string(), cwd)
+}
+
+/// 载荷复制并把 `cwd` 指向测试目录。
+fn in_cwd(payload: &Value, cwd: &Path) -> Value {
+    let mut out = payload.clone();
+    out["cwd"] = json!(cwd.to_string_lossy());
+    out
+}
+
+/// 成功回放且 stderr 为空(hook 铁律:绝不向宿主报错)。
+fn assert_silent_success(out: &Output, context: &str) {
+    assert!(
+        out.status.success(),
+        "{context}: hook 退出码非 0,stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "{context}: hook 向宿主报错: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn events_path(cwd: &Path) -> PathBuf {
+    cwd.join(".agentdash").join("events.jsonl")
+}
+
+fn pending_path(cwd: &Path) -> PathBuf {
+    cwd.join(".agentdash").join("pending_gate.json")
+}
+
+fn read_events(cwd: &Path) -> Vec<Value> {
+    fs::read_to_string(events_path(cwd))
+        .expect("events.jsonl readable")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("event line json"))
+        .collect()
+}
+
+/// ISO8601 本地时区秒级:`YYYY-MM-DDTHH:MM:SS±HH:MM`(25 字节)。
+fn is_iso8601_local(ts: &str) -> bool {
+    let b = ts.as_bytes();
+    let digits = |slice: &[u8]| slice.iter().all(u8::is_ascii_digit);
+    b.len() == 25
+        && digits(&b[0..4])
+        && b[4] == b'-'
+        && digits(&b[5..7])
+        && b[7] == b'-'
+        && digits(&b[8..10])
+        && b[10] == b'T'
+        && digits(&b[11..13])
+        && b[13] == b':'
+        && digits(&b[14..16])
+        && b[16] == b':'
+        && digits(&b[17..19])
+        && matches!(b[19], b'+' | b'-')
+        && digits(&b[20..22])
+        && b[22] == b':'
+        && digits(&b[23..25])
+}
+
+// ---------------------------------------------------------------- fixtures
+
+/// `PostToolUse` · bash `cargo test`(命中 gate)。
+fn cargo_test_post() -> Value {
+    json!({
+        "session_id": "s-w1-008",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo test --all", "description": "run tests"},
+        "tool_response": {
+            "stdout": "running 298 tests\ntest result: ok. 298 passed; 0 failed; finished in 1.23s\n",
+            "stderr": "",
+            "interrupted": false,
+            "status": 0
+        }
+    })
+}
+
+/// Stop(折叠在途 gate)。
+fn stop_payload() -> Value {
+    json!({
+        "session_id": "s-w1-008",
+        "hook_event_name": "Stop",
+        "stop_hook_active": true
+    })
+}
+
+// ---------------------------------------------------------------- tests
+
+#[test]
+fn three_hooks_replay_with_gate_fold() {
+    let t = TempDir::new("replay");
+    let edit_post = json!({
+        "session_id": "s-w1-008",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "src/main.rs", "old_string": "a", "new_string": "b"},
+        "tool_response": {"structuredPatch": "@@ -1 +1 @@"}
+    });
+    let subagent_stop = json!({
+        "session_id": "s-sub-1",
+        "transcript_path": "C:/t/sub.jsonl",
+        "hook_event_name": "SubagentStop"
+    });
+
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "cargo test posttooluse",
+    );
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&edit_post, t.path()), t.path()),
+        "edit posttooluse",
+    );
+    assert_silent_success(
+        &feed_payload("subagentstop", &in_cwd(&subagent_stop, t.path()), t.path()),
+        "subagentstop",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "stop",
+    );
+
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 4, "恰四行: gate/tool/agent/gate");
+    assert_eq!(
+        [
+            evs[0]["kind"].as_str().unwrap(),
+            evs[1]["kind"].as_str().unwrap(),
+            evs[2]["kind"].as_str().unwrap(),
+            evs[3]["kind"].as_str().unwrap()
+        ],
+        ["gate", "tool", "agent", "gate"]
+    );
+    // 行1:gate running
+    assert_eq!(evs[0]["gate"], "cargo-test");
+    assert_eq!(evs[0]["state"], "running");
+    // 行2:tool 事件 phase=end + exit + summary
+    assert_eq!(evs[1]["tool"], "edit");
+    assert_eq!(evs[1]["phase"], "end");
+    assert_eq!(evs[1]["exit"], 0);
+    assert_eq!(evs[1]["summary"], "src/main.rs");
+    // 行3:agent completed
+    assert_eq!(evs[2]["event"], "completed");
+    // 行4:折叠 passed + exit + 摘要行
+    assert_eq!(evs[3]["gate"], "cargo-test");
+    assert_eq!(evs[3]["state"], "passed");
+    assert_eq!(evs[3]["exit"], 0);
+    assert!(
+        evs[3]["detail"].as_str().unwrap().contains("298 passed"),
+        "detail 应含测试数字: {}",
+        evs[3]["detail"]
+    );
+    assert!(
+        evs[1..].iter().all(|e| e["state"] != "running"),
+        "折叠后不得残留 running"
+    );
+    // 折叠只做一次:pending_gate.json 消费后删除
+    assert!(!pending_path(t.path()).exists(), "暂存应被消费删除");
+    // ts:ISO8601 本地时区(带偏移)
+    for e in &evs {
+        assert!(
+            is_iso8601_local(e["ts"].as_str().unwrap()),
+            "ts 非本地 ISO8601 秒级: {}",
+            e["ts"]
+        );
+    }
+}
+
+#[test]
+fn failed_gate_fold() {
+    let t = TempDir::new("failed");
+    let payload = json!({
+        "session_id": "s",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "go test ./..."},
+        "tool_response": {
+            "stdout": "",
+            "stderr": "FAIL\t./pkg [build failed]\nexit status 1\n",
+            "interrupted": false,
+            "status": 1
+        }
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+        "go test posttooluse",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(
+        [
+            evs[0]["state"].as_str().unwrap(),
+            evs[1]["state"].as_str().unwrap()
+        ],
+        ["running", "failed"]
+    );
+    assert_eq!(evs[1]["exit"], 1);
+    assert_eq!(
+        evs[1]["detail"], "exit status 1",
+        "空 stdout 摘要取 stderr 末行"
+    );
+}
+
+#[test]
+fn utf8_payload_roundtrip() {
+    let t = TempDir::new("utf8");
+    let payload = json!({
+        "session_id": "s",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo 仪表盘", "description": "中文描述 ✓"},
+        "tool_response": {"stdout": "ok\n", "status": 0}
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+        "utf8 posttooluse",
+    );
+    let raw = fs::read_to_string(events_path(t.path())).expect("events.jsonl");
+    assert!(raw.contains("echo 仪表盘"), "中文原文落盘(非转义): {raw}");
+    let evs = read_events(t.path());
+    assert_eq!(evs[0]["summary"], "echo 仪表盘");
+}
+
+#[test]
+fn gate_commands() {
+    let cases = [
+        ("cargo test", Some("cargo-test")),
+        ("cargo test --all --offline", Some("cargo-test")),
+        (
+            "cd /d/agentdash && cargo clippy -- -D warnings",
+            Some("cargo-clippy"),
+        ),
+        ("cargo fmt --check", Some("cargo-fmt")),
+        ("go test ./...", Some("go-test")),
+        ("npm test -- --watchAll=false", Some("npm-test")),
+        ("gh pr checks 12", Some("gh-pr-checks")),
+        ("cargo  test", Some("cargo-test")), // 词间多空白(\s+)
+        ("cargo\ttest", Some("cargo-test")), // 制表符空白
+        ("cargo build --release", None),     // 非验证门
+        ("python -m unittest discover -v", None),
+        ("xcargo test", None), // 词边界:前缀粘连不匹配
+        ("", None),
+    ];
+    for (command, expected) in cases {
+        let t = TempDir::new("gate");
+        let payload = json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_response": {"stdout": "", "status": 0}
+        });
+        assert_silent_success(
+            &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+            "gate replay",
+        );
+        let evs = read_events(t.path());
+        assert_eq!(evs.len(), 1, "command={command:?} 恰一行");
+        match expected {
+            Some(gate) => {
+                assert_eq!(evs[0]["kind"], "gate", "command={command:?}");
+                assert_eq!(evs[0]["gate"], gate, "command={command:?}");
+            }
+            None => assert_eq!(evs[0]["kind"], "tool", "command={command:?}"),
+        }
+    }
+}
+
+#[test]
+fn non_gate_bash_is_tool_event() {
+    let t = TempDir::new("tool");
+    let payload = json!({
+        "session_id": "s",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "ls -la"},
+        "tool_response": {"stdout": "total 0\n", "status": 0}
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+        "ls posttooluse",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["kind"], "tool");
+    assert_eq!(evs[0]["tool"], "bash");
+    assert_eq!(evs[0]["exit"], 0);
+    assert_eq!(evs[0]["summary"], "ls -la");
+}
+
+#[test]
+fn summary_truncated_to_80() {
+    let t = TempDir::new("clip");
+    let payload = json!({
+        "session_id": "s",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "x".repeat(200)},
+        "tool_response": {"stdout": "", "status": 0}
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+        "clip posttooluse",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(
+        evs[0]["summary"].as_str().unwrap().chars().count(),
+        80,
+        "摘要按字符截 80"
+    );
+}
+
+#[test]
+fn exit_code_variants() {
+    let cases = [
+        (json!({"status": 0}), 0),
+        (json!({"exit_code": 3}), 3),
+        (json!({"interrupted": true, "status": 0}), 130),
+        (json!({"is_error": true}), 1),
+        (json!({"ok": true}), 0),
+        (json!("plain string response"), 0),
+        (Value::Null, 0),
+    ];
+    for (response, expected) in cases {
+        let t = TempDir::new("exit");
+        let payload = json!({
+            "session_id": "s",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_response": response
+        });
+        assert_silent_success(
+            &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+            "exit replay",
+        );
+        let evs = read_events(t.path());
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0]["exit"], expected, "response={response}");
+    }
+}
+
+#[test]
+fn summary_line_variants() {
+    // 摘要提取经 gate 折叠路径可见(bash 非 gate 的 tool 行 summary 恒为命令本身)
+    let cases = [
+        (json!({"stdout": "a\n\nb  \n", "stderr": ""}), "b"),
+        (json!({"stdout": "", "stderr": "boom\nboom\n"}), "boom"),
+        (json!({"stdout": ""}), ""),
+        (json!("not-a-dict"), ""),
+    ];
+    for (response, expected) in cases {
+        let t = TempDir::new("summary");
+        let payload = json!({
+            "session_id": "s",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cargo test"},
+            "tool_response": response
+        });
+        assert_silent_success(
+            &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+            "summary replay",
+        );
+        assert_silent_success(
+            &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+            "summary fold",
+        );
+        let evs = read_events(t.path());
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[1]["detail"], expected, "response={response}");
+    }
+}
+
+// ------------------------------------------------------------ 降级路径(铁律)
+
+#[test]
+fn invalid_json_stdin_degrades() {
+    let t = TempDir::new("corrupt");
+    assert_silent_success(
+        &feed(&["hook", "posttooluse"], "{{{{not json\n", t.path()),
+        "损坏 JSON",
+    );
+    assert!(!events_path(t.path()).exists(), "损坏输入不得落盘");
+}
+
+#[test]
+fn empty_stdin_degrades() {
+    let t = TempDir::new("empty");
+    assert_silent_success(&feed(&["hook", "stop"], "", t.path()), "空 stdin");
+    assert!(!events_path(t.path()).exists(), "空输入不得落盘");
+}
+
+#[test]
+fn non_dict_payload_degrades() {
+    let t = TempDir::new("nondict");
+    assert_silent_success(
+        &feed(
+            &["hook", "posttooluse"],
+            "[\"list\", \"not\", \"dict\"]",
+            t.path(),
+        ),
+        "非对象载荷",
+    );
+    assert!(!events_path(t.path()).exists(), "非对象载荷不得落盘");
+}
+
+#[test]
+fn stop_without_pending_writes_nothing() {
+    let t = TempDir::new("nopending");
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "无暂存 stop",
+    );
+    assert!(!events_path(t.path()).exists(), "无暂存不落任何行");
+}
+
+#[test]
+fn stop_with_corrupt_pending_degrades() {
+    let t = TempDir::new("corruptpending");
+    let pending = pending_path(t.path());
+    fs::create_dir_all(pending.parent().unwrap()).expect("mkdir .agentdash");
+    fs::write(&pending, "{{corrupt").expect("write pending");
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "损坏暂存 stop",
+    );
+    assert!(!pending.exists(), "损坏暂存应被消费删除");
+    assert!(!events_path(t.path()).exists(), "损坏暂存不产生幽灵事件");
+}
+
+#[test]
+fn payload_without_tool_name_skipped() {
+    let t = TempDir::new("notool");
+    let payload = json!({"hook_event_name": "PostToolUse", "cwd": t.path().to_string_lossy()});
+    assert_silent_success(
+        &feed_payload("posttooluse", &payload, t.path()),
+        "无 tool_name",
+    );
+    assert!(!events_path(t.path()).exists(), "无 tool_name 不得落盘");
+}
+
+#[test]
+fn unknown_event_arg_is_silent() {
+    let t = TempDir::new("bogus");
+    let payload = json!({"hook_event_name": "Stop", "cwd": t.path().to_string_lossy()});
+    assert_silent_success(
+        &feed(&["hook", "bogus"], &payload.to_string(), t.path()),
+        "未知事件",
+    );
+    assert!(!events_path(t.path()).exists(), "未知事件不得落盘");
+}
+
+// ------------------------------------------------------------ 事件名回退与清单
+
+#[test]
+fn stop_folds_without_event_arg_via_payload_name() {
+    let t = TempDir::new("noarg");
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "cargo test posttooluse",
+    );
+    // 不传事件参数:载荷 hook_event_name 分派(老版本宿主防御)
+    let stop = json!({"hook_event_name": "Stop", "cwd": t.path().to_string_lossy()});
+    assert_silent_success(&feed(&["hook"], &stop.to_string(), t.path()), "无参 stop");
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(
+        [
+            evs[0]["kind"].as_str().unwrap(),
+            evs[1]["kind"].as_str().unwrap()
+        ],
+        ["gate", "gate"]
+    );
+    assert_eq!(evs[1]["state"], "passed");
+}
+
+#[test]
+fn hooks_json_registers_three_events_with_binary_command() {
+    let path = Path::new(MANIFEST).join("kits/claude-code/hooks/hooks.json");
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("hooks.json readable"))
+            .expect("hooks.json 合法 JSON");
+    let hooks = manifest["hooks"].as_object().expect("hooks 对象");
+    assert_eq!(hooks.len(), 3, "恰注册三事件");
+    for event in ["PostToolUse", "Stop", "SubagentStop"] {
+        let blocks = hooks[event]
+            .as_array()
+            .unwrap_or_else(|| panic!("{event} 无注册块"));
+        assert!(!blocks.is_empty(), "{event} 无注册块");
+        for block in blocks {
+            assert!(
+                block.get("matcher").is_none(),
+                "{event} 不应设 matcher(全工具)"
+            );
+            for hook_entry in block["hooks"].as_array().expect("hook 列表") {
+                let cmd = hook_entry["command"].as_str().expect("command");
+                assert!(
+                    cmd.contains("agentdash hook"),
+                    "{event} 非二进制直调: {cmd}"
+                );
+                assert!(
+                    cmd.ends_with("|| true"),
+                    "{event} 缺 || true 静默保险: {cmd}"
+                );
+                assert!(
+                    !cmd.contains("record_event.py") && !cmd.contains("python"),
+                    "{event} 残留 Python 垫片: {cmd}"
+                );
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ 并发零丢失
+
+#[test]
+fn concurrent_appends_zero_loss() {
+    const THREADS: usize = 8;
+    const LINES_PER_THREAD: usize = 12;
+    let t = TempDir::new("conc");
+    let cwd = t.path().to_path_buf();
+    let handles: Vec<_> = (0..THREADS)
+        .map(|thread| {
+            let cwd = cwd.clone();
+            std::thread::spawn(move || {
+                for line in 0..LINES_PER_THREAD {
+                    let payload = json!({
+                        "hook_event_name": "SubagentStop",
+                        "cwd": cwd.to_string_lossy(),
+                        "agent_name": format!("t{thread}-{line}")
+                    });
+                    let out = feed_payload("subagentstop", &payload, &cwd);
+                    assert!(
+                        out.status.success(),
+                        "hook 失败: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                }
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().expect("thread 完整结束");
+    }
+
+    let text = fs::read_to_string(events_path(&cwd)).expect("events.jsonl");
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut total = 0;
+    for line in text.lines() {
+        let ev: Value = serde_json::from_str(line).expect("每行都应是完整 JSON(零撕裂)");
+        let who = ev["who"].as_str().expect("who 完整").to_owned();
+        *counts.entry(who).or_insert(0) += 1;
+        total += 1;
+    }
+    assert_eq!(
+        total,
+        THREADS * LINES_PER_THREAD,
+        "零丢失:{THREADS} 线程 × {LINES_PER_THREAD} 行应全部落盘"
+    );
+    for thread in 0..THREADS {
+        for line in 0..LINES_PER_THREAD {
+            assert_eq!(
+                counts[format!("t{thread}-{line}").as_str()],
+                1,
+                "t{thread}-{line} 应恰落一次"
+            );
+        }
+    }
+}

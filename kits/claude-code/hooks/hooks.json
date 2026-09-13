@@ -4,7 +4,7 @@
       {
         "hooks": [
           {"type": "command",
-           "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_event.py\" || true"}
+           "command": "agentdash hook posttooluse || true"}
         ]
       }
     ],
@@ -12,7 +12,7 @@
       {
         "hooks": [
           {"type": "command",
-           "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_event.py\" || true"}
+           "command": "agentdash hook stop || true"}
         ]
       }
     ],
@@ -20,7 +20,7 @@
       {
         "hooks": [
           {"type": "command",
-           "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_event.py\" || true"}
+           "command": "agentdash hook subagentstop || true"}
         ]
       }
     ]
