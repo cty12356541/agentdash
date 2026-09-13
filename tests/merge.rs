@@ -110,6 +110,17 @@ fn three_sources_merge_into_dashboard() {
 
     // 契约层可信序最高:任务来自台账(车道序在前),而非 git 伪任务
     assert_eq!(dash.tasks.len(), 3);
+    // 契约任务 since = ledger.json 文件 mtime(RFC 3339 UTC;三任务同源同戳)
+    let mtime = fs::metadata(dir.join("ledger.json"))
+        .expect("stat ledger.json")
+        .modified()
+        .expect("mtime");
+    let expected_since = model::utc_timestamp(
+        mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("post-epoch mtime")
+            .as_secs(),
+    );
     assert_eq!(
         dash.tasks[0],
         TaskView {
@@ -118,17 +129,31 @@ fn three_sources_merge_into_dashboard() {
             state: TaskState::Active,
             lane: Some("A-impl".to_owned()),
             note: Some("fix round 2/5".to_owned()),
-        }
+            fix_round: Some((2, 5)),
+            since: Some(expected_since.clone()),
+        },
+        "note `fix round 2/5` 解析为 fix_round;since 取台账 mtime"
     );
     assert_eq!(dash.tasks[1].id, "2");
     assert_eq!(dash.tasks[1].state, TaskState::Done);
     assert_eq!(dash.tasks[1].lane.as_deref(), Some("A-impl"));
     assert_eq!(dash.tasks[1].note, None);
+    assert_eq!(dash.tasks[1].fix_round, None, "无 note 不得臆造 fix_round");
+    assert_eq!(
+        dash.tasks[1].since.as_deref(),
+        Some(expected_since.as_str()),
+        "契约任务一律带台账 mtime since"
+    );
     assert_eq!(
         dash.tasks[2].lane, None,
         "未入任何车道的任务尾接,车道为 None"
     );
     assert_eq!(dash.tasks[2].label, "implement git snapshot");
+    assert_eq!(
+        dash.tasks[2].since.as_deref(),
+        Some(expected_since.as_str()),
+        "未入车道任务同为契约任务,since 同源"
+    );
 
     // milestone 由 ledger wave/title 聚合:1/3 done
     assert_eq!(dash.milestones.len(), 1);
@@ -195,6 +220,8 @@ fn git_only_repo_builds_pseudo_task_chain() {
         assert_eq!(task.state, TaskState::Pending, "伪任务恒为 pending");
         assert_eq!(task.lane, None);
         assert_eq!(task.note, None);
+        assert_eq!(task.fix_round, None, "伪任务无 note 何来 fix_round");
+        assert_eq!(task.since, None, "git 伪任务不设 since(无逐任务时刻)");
     }
     assert!(
         dash.warnings.is_empty(),
@@ -264,6 +291,12 @@ fn corrupt_ledger_warns_and_event_layer_still_merges() {
     );
     assert_eq!(dash.tasks.len(), 2, "git 伪任务兜底");
     assert!(dash.tasks.iter().all(|t| t.state == TaskState::Pending));
+    assert!(
+        dash.tasks
+            .iter()
+            .all(|t| t.since.is_none() && t.fix_round.is_none()),
+        "兜底伪任务不带 since/fix_round"
+    );
     assert!(dash.milestones.is_empty());
     assert!(
         !dash.warnings.iter().any(|w| w.contains("no data sources")),
@@ -327,4 +360,83 @@ fn utc_timestamp_formats_known_epochs() {
     assert_eq!(model::utc_timestamp(0), "1970-01-01T00:00:00Z");
     assert_eq!(model::utc_timestamp(1_700_000_000), "2023-11-14T22:13:20Z");
     assert_eq!(model::utc_timestamp(951_782_400), "2000-02-29T00:00:00Z");
+}
+
+/// 第六组(W2-002):note → `fix_round` 解析矩阵——全角/半角/混排空格容忍,
+/// 大小写容忍;非数字、零分母、缺词一概保持 `None`(解析不了不臆造)。
+#[test]
+fn fix_round_parses_tolerantly_or_stays_none() {
+    const LEDGER_NOTES: &str = r#"{
+      "$schema": "agentdash.tasklog.v1",
+      "title": "fix note parsing",
+      "tasks": {
+        "a": {"label": "全角空格", "state": "active", "note": "fix　round　3/7"},
+        "b": {"label": "连续半角空格", "state": "active", "note": "fix  round  2/5"},
+        "c": {"label": "大写容忍", "state": "active", "note": "FIX ROUND 4/6"},
+        "d": {"label": "非数字", "state": "active", "note": "fix round x/y"},
+        "e": {"label": "零分母", "state": "active", "note": "fix round 1/0"},
+        "f": {"label": "缺 fix 词", "state": "active", "note": "round 2/5"},
+        "g": {"label": "分数缺一", "state": "active", "note": "fix round 2"}
+      }
+    }"#;
+    let repo = fixture_repo("fix-notes");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER_NOTES).expect("write ledger.json");
+
+    let dash = model::merge(&repo);
+
+    let round_of = |id: &str| {
+        dash.tasks
+            .iter()
+            .find(|task| task.id == id)
+            .unwrap_or_else(|| panic!("task {id} missing"))
+            .fix_round
+    };
+    assert_eq!(round_of("a"), Some((3, 7)), "全角空格(U+3000)容忍");
+    assert_eq!(round_of("b"), Some((2, 5)), "连续半角空格容忍");
+    assert_eq!(round_of("c"), Some((4, 6)), "大小写容忍");
+    assert_eq!(round_of("d"), None, "非数字解析不了保持 None");
+    assert_eq!(round_of("e"), None, "零分母不是合法轮次");
+    assert_eq!(round_of("f"), None, "缺 `fix` 词不解析");
+    assert_eq!(round_of("g"), None, "缺 `/M` 不解析");
+    // 全部为契约任务:since 一律取台账 mtime
+    assert!(
+        dash.tasks.iter().all(|task| task.since.is_some()),
+        "契约任务一律携带台账 mtime since: {:?}",
+        dash.tasks
+    );
+    cleanup(&repo);
+}
+
+/// 第七组(W2-002):台账警告贯通 Dashboard 时加 `ledger:` 源前缀,
+/// 与事件层警告(`events.jsonl …`)和损坏降级行(`corrupt ledger.json: …`)可区分。
+#[test]
+fn contract_warnings_carry_ledger_source_prefix() {
+    const LEDGER_OLD_SCHEMA: &str = r#"{
+      "$schema": "agentdash.tasklog.v0",
+      "title": "prefixed warnings",
+      "tasks": {"1": {"label": "合法任务", "state": "pending"}}
+    }"#;
+    let repo = fixture_repo("warn-prefix");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER_OLD_SCHEMA).expect("write ledger.json");
+
+    let dash = model::merge(&repo);
+
+    assert!(
+        dash.warnings
+            .iter()
+            .any(|w| w.starts_with("ledger: unknown `$schema`")),
+        "台账警告必须带 `ledger:` 源前缀透传: {:?}",
+        dash.warnings
+    );
+    assert!(
+        !dash.warnings.iter().any(|w| w.contains("corrupt")),
+        "合法(仅警告)台账不得混入 corrupt 降级行: {:?}",
+        dash.warnings
+    );
+    assert_eq!(dash.tasks.len(), 1, "警告不降级任务本身");
+    cleanup(&repo);
 }

@@ -14,6 +14,19 @@ cargo install --path .
 agentdash --version   # 自检
 ```
 
+### 插件市场(Claude Code)
+
+```bash
+claude plugin marketplace add cty12356541/agentdash
+claude plugin install agentdash@agentdash-marketplace
+agentdash --version   # 自检:hook 直调二进制,必须已在 PATH
+```
+
+市场安装只装 hooks + skill(插件体 `kits/claude-code/`),**不内嵌二进制**——
+hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo install --path .`
+或从 GitHub Releases 下载放入 PATH,Windows release 资产后续手动挂)。预构建
+分发策略见 `bin/README.md`,集成包细节见 `kits/claude-code/README.md`。
+
 ### claude-code 集成包(可选)
 
 把 Claude Code 会话事件接进 agentdash:

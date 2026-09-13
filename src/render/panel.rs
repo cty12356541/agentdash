@@ -7,10 +7,14 @@ use super::{
     C_ACTIVE, C_BOLD, C_DONE, C_END, C_PENDING, C_STALLED, C_WARN, Visual, active_milestone,
     clamp_width, display_width, milestone_state, project_label, round_half_even, visual,
 };
+use crate::contract::TaskState;
 use crate::model::{AgentView, Dashboard, GateView, MilestoneView, TaskView};
 
 /// 面板默认宽。
 pub const DEFAULT_PANEL_WIDTH: usize = 64;
+
+/// 任务停滞阈值:任务 `since` 距 `generated_at` 超过 2 小时(严格大于)打 ⚑。
+const STALE_THRESHOLD_SECS: u64 = 2 * 60 * 60;
 
 /// 面板:页眉统计 → 健康 → 轨迹 → 车道任务区。宽度先经 40..120 钳位。
 #[must_use]
@@ -33,7 +37,7 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
             Visual::Pending | Visual::Blocked => resting += 1,
         }
     }
-    // TODO(model):Dashboard 无 velocity(commits_7d)字段,吞吐段暂缺(W2-T2)。
+    // 吞吐暂无逐时刻数据,以里程碑计数近似(见区块 B 速度线)
     let agents = dash.agents.len();
 
     // 页眉:项目 · 活跃里程碑
@@ -72,7 +76,10 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
         }
     }
     for warning in &dash.warnings {
-        lines.push(format!("{C_WARN}⚠ {warning}{C_END}"));
+        lines.push(format!(
+            "{C_WARN}⚠ {}{C_END}",
+            elide(warning, width.saturating_sub(2))
+        ));
     }
     lines.push("─".repeat(width));
 
@@ -85,6 +92,9 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     lines.push(format!("{C_BOLD}轨迹 · {done_ms} 里程碑{C_END}"));
     for milestone in dash.milestones.iter().rev().take(5).rev() {
         lines.push(milestone_line(milestone, width));
+    }
+    if let Some(speed) = speed_line(&dash.milestones) {
+        lines.push(speed);
     }
     let planned = dash
         .milestones
@@ -113,7 +123,7 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
         for (name, members) in &lane_groups {
             lines.push(format!("{C_BOLD}{name}{C_END}"));
             for task in members {
-                lines.push(task_line(task));
+                lines.push(task_line(task, &dash.generated_at));
             }
         }
         // TODO(render):屏障行(claude-dash `  {barrier}`)——模型已携带 barriers
@@ -136,23 +146,93 @@ fn clock_slice(rfc3339: &str) -> String {
     }
 }
 
-/// 任务行:`<mark> <id> <label>[ · <note>]`(着色;在跑时长后缀待 since 字段)。
-fn task_line(task: &TaskView) -> String {
+/// 速度线:里程碑无逐任务时刻,吞吐以「最近 3 波 done 均值(任务/波次)」
+/// 近似(银行家舍入);单里程碑无均值可言,返回 [`None`] 不打。
+fn speed_line(milestones: &[MilestoneView]) -> Option<String> {
+    if milestones.len() < 2 {
+        return None;
+    }
+    let window = milestones.len().min(3);
+    let recent_done: usize = milestones
+        .iter()
+        .rev()
+        .take(window)
+        .map(|milestone| milestone.done)
+        .sum();
+    let per_wave = round_half_even(recent_done, window);
+    Some(format!("  速度 {per_wave} 任务/波次"))
+}
+
+/// 任务行:`<mark> <id> <label>[ · <note>][ R<N>/<M>][ ⚑]`——R 尾缀出自
+/// `fix_round`(W2-002);since 距 `generated_at` 超过 2 小时([`STALE_THRESHOLD_SECS`])
+/// 打停滞 ⚑,无戳/坏戳/时刻在未来一律不打(不虚报)。
+fn task_line(task: &TaskView, generated_at: &str) -> String {
     let state = visual(task.state);
-    // TODO(model):无 since 字段,在跑时长后缀(· 2h)暂缺
     let note = task
         .note
         .as_deref()
         .map_or(String::new(), |note| format!(" · {note}"));
+    let fix_round = task
+        .fix_round
+        .map_or(String::new(), |(done, total)| format!(" R{done}/{total}"));
+    let is_stale = task.state != TaskState::Done
+        && task
+            .since
+            .as_deref()
+            .and_then(rfc3339_to_secs)
+            .zip(rfc3339_to_secs(generated_at))
+            .is_some_and(|(since, now)| now.saturating_sub(since) > STALE_THRESHOLD_SECS);
+    let stale_flag = if is_stale { " ⚑" } else { "" };
     format!(
-        "{}{} {} {}{}{}",
+        "{}{} {} {}{}{}{}{}",
         state.color(),
         state.mark(),
         task.id,
         task.label,
         note,
+        fix_round,
+        stale_flag,
         C_END
     )
+}
+
+/// 纯函数:`YYYY-MM-DDTHH:MM:SSZ` → Unix 纪元秒(Hinnant civil 逆变换,与
+/// `model::utc_timestamp` 互逆)。形态不符、字段越界或年份为 0 返回 [`None`]。
+fn rfc3339_to_secs(text: &str) -> Option<u64> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return None;
+    }
+    let field = |range: std::ops::Range<usize>| text.get(range)?.parse::<i64>().ok();
+    let (year, month, day) = (field(0..4)?, field(5..7)?, field(8..10)?);
+    let (hour, minute, second) = (field(11..13)?, field(14..16)?, field(17..19)?);
+    if year < 1
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=59).contains(&second)
+    {
+        return None;
+    }
+    let (year, month) = if month <= 2 {
+        (year - 1, month + 12)
+    } else {
+        (year, month)
+    };
+    let era = year / 400;
+    let yoe = year - era * 400;
+    let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days * 86_400 + hour * 3_600 + minute * 60 + second).ok()
 }
 
 /// 在跑 agent 行:`▶ <who>[ · <task>][ · <MM-DDTHH:MM>]`,超宽整行截断。

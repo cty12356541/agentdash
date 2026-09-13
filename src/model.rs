@@ -3,7 +3,8 @@
 //! 降级矩阵(承 AD-ERR-001:降级不失败):
 //! - 契约缺失或损坏 → 警告行 + git 伪任务兜底(`recent` 每条提交一个
 //!   [`TaskView`] 单链,恒 `pending`);事件层不受影响,照常合并。
-//! - 契约合法 → 台账警告透传;lane 未声明的任务尾接(按 id 字典序,保证确定性)。
+//! - 契约合法 → 台账警告加 `ledger:` 源前缀透传;lane 未声明的任务尾接
+//!   (按 id 字典序,保证确定性)。
 //! - 三源全无 → 空态 + 引导文案进 [`Dashboard::warnings`]。
 //!
 //! 挂载约定:本模块经顶层路径(`crate::contract` / `crate::events` /
@@ -38,6 +39,12 @@ pub struct TaskView {
     pub lane: Option<String>,
     /// 附加说明(如 `fix round 2/5`)。
     pub note: Option<String>,
+    /// 修复轮次:从 [`Self::note`] 解析 `fix round N/M`(全/半角空格与
+    /// 大小写容忍);note 缺失或解析不了保持 [`None`]。
+    pub fix_round: Option<(u32, u32)>,
+    /// 任务时刻的 RFC 3339 串:契约任务 = `ledger.json` 文件 mtime
+    /// (台账整体最后一次落盘时刻);git 伪任务不设([`None`],无逐任务时刻)。
+    pub since: Option<String>,
 }
 
 /// 屏障边视图(W1-007 起随模型携带;与 `render::graph` 的图侧类型同构,
@@ -141,8 +148,16 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         match contract::parse_ledger(&text) {
             Ok(ledger) => {
                 contract_ok = true;
-                warnings.extend(ledger.warnings.iter().cloned());
-                tasks = contract_tasks(&ledger);
+                // 台账自带警告加源前缀透传,与事件层/损坏降级行可区分
+                warnings.extend(
+                    ledger
+                        .warnings
+                        .iter()
+                        .map(|warning| format!("ledger: {warning}")),
+                );
+                // 契约任务 since 统一取台账文件 mtime(台账整体落盘时刻)
+                let since = file_mtime_iso(&ledger_path);
+                tasks = contract_tasks(&ledger, since.as_deref());
                 milestones.push(milestone_of(&ledger));
                 barriers = ledger
                     .barriers
@@ -231,7 +246,8 @@ fn read_source(path: &Path, label: &str, warnings: &mut Vec<String>) -> Option<S
 
 /// 台账 → 任务视图:车道声明序在前(任务在多车道出现取首见),
 /// 未入车道的任务尾接并按 id 字典序排列,保证输出确定性。
-fn contract_tasks(ledger: &contract::Ledger) -> Vec<TaskView> {
+/// `since` 逐任务化:契约任务一律携带台账文件 mtime。
+fn contract_tasks(ledger: &contract::Ledger, since: Option<&str>) -> Vec<TaskView> {
     let mut tasks = Vec::with_capacity(ledger.tasks.len());
     let mut placed: Vec<&str> = Vec::with_capacity(ledger.tasks.len());
     for lane in &ledger.lanes {
@@ -247,6 +263,8 @@ fn contract_tasks(ledger: &contract::Ledger) -> Vec<TaskView> {
                     state: spec.state,
                     lane: Some(lane.name.clone()),
                     note: spec.note.clone(),
+                    fix_round: spec.note.as_deref().and_then(parse_fix_round),
+                    since: since.map(str::to_owned),
                 });
             }
         }
@@ -265,9 +283,41 @@ fn contract_tasks(ledger: &contract::Ledger) -> Vec<TaskView> {
             state: spec.state,
             lane: None,
             note: spec.note.clone(),
+            fix_round: spec.note.as_deref().and_then(parse_fix_round),
+            since: since.map(str::to_owned),
         });
     }
     tasks
+}
+
+/// 从 note 解析修复轮次 `fix round N/M`:全/半角空格(含连续混排)与
+/// 大小写容忍;N/M 须为非负整数且 M>0,其余形态(缺词、非数字、零分母)
+/// 一概 [`None`]——解析不了不臆造。
+fn parse_fix_round(note: &str) -> Option<(u32, u32)> {
+    // 全角空格(U+3000)归一为半角,交给 split_whitespace 吃掉任意空白
+    let normalized: String = note
+        .chars()
+        .map(|ch| if ch == '\u{3000}' { ' ' } else { ch })
+        .collect();
+    let mut words = normalized.split_whitespace();
+    let fix = words.next()?;
+    let round = words.next()?;
+    let fraction = words.next()?;
+    if !fix.eq_ignore_ascii_case("fix") || !round.eq_ignore_ascii_case("round") {
+        return None;
+    }
+    let (done, total) = fraction.split_once('/')?;
+    let done = done.parse::<u32>().ok()?;
+    let total = total.parse::<u32>().ok()?;
+    (total > 0).then_some((done, total))
+}
+
+/// 文件 mtime → RFC 3339 UTC 串;不可读、mtime 早于纪元等失败路径一律
+/// [`None`](降级为无时刻,绝不失败)。
+fn file_mtime_iso(path: &Path) -> Option<String> {
+    let modified = fs::metadata(path).ok()?.modified().ok()?;
+    let secs = modified.duration_since(UNIX_EPOCH).ok()?.as_secs();
+    Some(utc_timestamp(secs))
 }
 
 /// 台账 → 里程碑:`wave` / `title` 原样携带,`done` 数由任务状态聚合。
@@ -301,6 +351,8 @@ fn git_tasks(git: &GitFacts) -> Vec<TaskView> {
                 state: TaskState::Pending,
                 lane: None,
                 note: None,
+                fix_round: None,
+                since: None,
             }
         })
         .collect()

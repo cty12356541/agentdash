@@ -48,6 +48,8 @@ fn task(id: &str, label: &str, lane: &str) -> TaskView {
         state: TaskState::Done,
         lane: Some(lane.into()),
         note: None,
+        fix_round: None,
+        since: None,
     }
 }
 
