@@ -597,7 +597,8 @@ fn local_utc_offset(utc: i64) -> i64 {
             isdst: 0,
             gmtoff: 0,
         };
-        if localtime_r(&utc, &mut tm).is_null() {
+        // &raw 显式化:CI stable(1.98)clippy borrow_as_ptr 拒绝隐式借用转裸指针
+        if localtime_r(&raw const utc, &raw mut tm).is_null() {
             return 0;
         }
         if tm.gmtoff.abs() >= 86_400 {
