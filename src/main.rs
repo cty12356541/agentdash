@@ -1,5 +1,10 @@
 //! agentdash: agent progress dashboard CLI (W1-001 command skeleton).
 
+mod contract;
+mod events;
+mod hook;
+mod sources;
+
 use std::process::ExitCode;
 
 const USAGE: &str = "\
@@ -11,6 +16,7 @@ Commands:
   render  Render the dashboard panel for a plan
   oneline Print a one-line status summary for a plan
   watch   Watch a plan directory and refresh the dashboard live
+  hook    Consume a host-tool hook payload from stdin (integration kits)
 
 Arguments:
   [PATH]  Path to the project or plan directory [default: .]
@@ -28,6 +34,10 @@ fn main() -> ExitCode {
         None | Some("-h" | "--help") => {
             println!("{USAGE}");
             ExitCode::SUCCESS
+        }
+        Some("hook") => {
+            // 集成包钩子:agentdash hook <event>,payload 从 stdin 读(W1-008b 车道实现)
+            hook::run(args.get(1).map(String::as_str))
         }
         Some(cmd) if OK_CMDS.contains(&cmd) => {
             if args.len() > 2 {
