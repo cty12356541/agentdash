@@ -2,9 +2,11 @@
 //!
 //! - 视图:面板 ⇄ 图(`g` 切换),文本取自 `render` 层,SGR 码换算为
 //!   ratatui 样式(`spans_from_ansi`),每帧只提交与上一帧的单元格差;
-//! - 键位:`f` 进入输入态(行编辑 task id,⏎ 确认 / Esc 取退)、`c` 与 `⏎`
-//!   发送聚焦提示(环境变量 `DASH_TMUX_TARGET` 存在且 tmux 可用 →
-//!   `tmux send-keys`,否则状态行给可复制文本)、`q`/Ctrl-C 退出;
+//! - 键位:`f` 进入输入态(行编辑 task id,⏎ 确认 / Esc 取退)、`c` 发送聚焦
+//!   提示(环境变量 `DASH_TMUX_TARGET` 存在且 tmux 可用 → `tmux send-keys`,
+//!   否则状态行给可复制文本)、`d`/⏎ 进任务详情右栏(40%,Esc/`d` 返回)、
+//!   `↑`/`↓` 在波次间滚动(渲染视图按选中波次折算任务集,纯函数
+//!   [`select_wave`])、`?` 全键位帮助覆盖层(任意键关闭)、`q`/Ctrl-C 退出;
 //! - 鼠标:SGR 左键点击 → [`handle_click`] 复用 `render::graph` 的布局几何
 //!   与 [`render::graph::hit_test`] 命中(仅图视图);
 //! - 分级刷新:模型每 interval 档重建,git 快照仅每 30s 边界重取(节流做在
@@ -29,14 +31,14 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::{Frame, Terminal};
 
-use crate::model::{self, Dashboard};
-use crate::render::{self, graph::Cell};
+use crate::model::{self, Dashboard, GateView, TaskView};
+use crate::render::{self, C_ACTIVE, C_DONE, C_END, C_STALLED, elide, graph::Cell};
 use crate::sources::git::{self, GitFacts};
 
 /// 模型重建节奏默认档(秒;`agentdash watch` 的 interval)。
@@ -121,13 +123,16 @@ pub fn once_output(dash: &Dashboard, raw_cols: Option<usize>, default: usize) ->
 
 // ---------- 可测纯函数(键位映射 / 行编辑 / 刷新节拍 / 命中 / 投递) ----------
 
-/// 键位语义态:常规单键命令 vs 输入态行编辑。
+/// 键位语义态:常规单键命令 vs 输入态行编辑 vs 帮助覆盖层模态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     /// 常规:单键命令。
     Normal,
     /// 输入:行编辑 task id。
     Editing,
+    /// 帮助覆盖层:任意键关闭。关闭吞键做在 `on_key` 入口(模态),不走
+    /// [`key_action`] 映射表——该态落到常规表仅保持函数全定义。
+    Help,
 }
 
 /// 键盘动作(W1-007 键位表)。
@@ -143,10 +148,22 @@ pub enum Action {
     Cancel,
     /// 进入输入态(常规 `f`)。
     StartInput,
-    /// 发送/打印聚焦提示(常规 `c` 或 `⏎`)。
+    /// 发送/打印聚焦提示(常规 `c`)。
     FocusHint,
     /// 面板 ⇄ 图(常规 `g`)。
     ToggleView,
+    /// 详情态开/关(常规 `d`:有聚焦进详情,已开则返回)。
+    ToggleDetail,
+    /// ⏎ 打开聚焦任务详情(无聚焦/任务不在模时运行层回落聚焦提示)。
+    EnterDetail,
+    /// 返回列表(详情态 Esc)。
+    Back,
+    /// 帮助覆盖层开(常规 `?`;关闭走 `on_key` 的模态吞键,任意键返回)。
+    Help,
+    /// 上一波次(常规 ↑)。
+    PrevWave,
+    /// 下一波次(常规 ↓)。
+    NextWave,
     /// 退出(常规 `q`、任意态 Ctrl-C)。
     Quit,
     /// 忽略。
@@ -172,7 +189,13 @@ pub fn key_action(mode: InputMode, key: KeyEvent) -> Action {
         (_, KeyCode::Char('q')) if !ctrl => Action::Quit,
         (_, KeyCode::Char('g')) if !ctrl => Action::ToggleView,
         (_, KeyCode::Char('f')) if !ctrl => Action::StartInput,
-        (_, KeyCode::Char('c') | KeyCode::Enter) if !ctrl => Action::FocusHint,
+        (_, KeyCode::Char('c')) if !ctrl => Action::FocusHint,
+        (_, KeyCode::Enter) if !ctrl => Action::EnterDetail,
+        (_, KeyCode::Char('d')) if !ctrl => Action::ToggleDetail,
+        (_, KeyCode::Char('?')) if !ctrl => Action::Help,
+        (_, KeyCode::Up) if !ctrl => Action::PrevWave,
+        (_, KeyCode::Down) if !ctrl => Action::NextWave,
+        (_, KeyCode::Esc) => Action::Back,
         _ => Action::Ignore,
     }
 }
@@ -251,6 +274,148 @@ pub fn focus_delivery(target: Option<&str>, tmux_available: bool, text: &str) ->
         },
         None => Delivery::Print(text.to_owned()),
     }
+}
+
+// ---------- W2-003 详情面板 / W2-004 波次滚动与帮助(纯函数) ----------
+
+/// 详情右栏行(纯函数,快照可测):`label`/`state`/`lane`/`note`/`fix_round`/
+/// `since` + 关联 gates(模型无 task↔gate 关联,全量列出)+ 该任务事件
+/// tail——事件层暂未随 [`Dashboard`] 携带(W2-008 接入),以占位行明示。
+/// 每行按显示宽截断(`width` 为栏内容宽;只裁行宽,不裁行数),着色在截断
+/// 后注入。
+#[must_use]
+pub fn detail_lines(task: &TaskView, dash: &Dashboard, width: usize) -> Vec<String> {
+    let state = render::visual(task.state);
+    let body = format!("状态  {} {}", state.mark(), task.state.as_str());
+    let mut lines = vec![
+        field_line("标签", &task.label, width),
+        format!("{}{}{C_END}", state.color(), elide(&body, width)),
+        field_line("车道", task.lane.as_deref().unwrap_or("-"), width),
+        field_line("备注", task.note.as_deref().unwrap_or("-"), width),
+        field_line(
+            "轮次",
+            &task.fix_round.map_or_else(
+                || "-".to_owned(),
+                |(done, total)| format!("R{done}/{total}"),
+            ),
+            width,
+        ),
+        field_line("时刻", task.since.as_deref().unwrap_or("-"), width),
+    ];
+    lines.push(String::from("验证门"));
+    if dash.gates.is_empty() {
+        lines.push(String::from("  -"));
+    } else {
+        for gate in &dash.gates {
+            lines.push(gate_line(gate, width));
+        }
+    }
+    lines.push(String::from("事件"));
+    // 事件 tail(最近 10 条,agent+gate 过滤)待 W2-008:Dashboard 尚无事件投影
+    lines.push(String::from("  事件层 W2-008 接入"));
+    lines
+}
+
+/// `键  值` 行,按显示宽截断(详情栏窄侧板防顶穿)。
+fn field_line(label: &str, value: &str, width: usize) -> String {
+    elide(&format!("{label}  {value}"), width)
+}
+
+/// 详情栏 gate 行(三态映射承 panel):`  <mark> <name> <state>[ · <detail>]`。
+fn gate_line(gate: &GateView, width: usize) -> String {
+    let (mark, color) = gate_visual(&gate.state);
+    let body = if gate.detail.is_empty() {
+        format!("  {mark} {} {}", gate.name, gate.state)
+    } else {
+        format!("  {mark} {} {} · {}", gate.name, gate.state, gate.detail)
+    };
+    format!("{color}{}{C_END}", elide(&body, width))
+}
+
+/// gate 状态串 → (标记, ANSI 前景色):passed ✓ 绿 / failed ✗ 黄 / 其余 ▶ 蓝。
+fn gate_visual(state: &str) -> (&'static str, &'static str) {
+    match state {
+        "passed" => ("✓", C_DONE),
+        "failed" => ("✗", C_STALLED),
+        _ => ("▶", C_ACTIVE),
+    }
+}
+
+/// 波次选中折算(纯函数,W2-004):选中索引钳位进里程碑界内,返回
+/// `(折算索引, 可见任务集)`。任务↔波次关联模型未携带(单账本即单波),
+/// 过滤规则:任务 `id` 以波次串为前缀段(`W2` 匹配 `W2-003`,不匹配
+/// `W25-T1`)。无里程碑、选中波次未声明编号或全不匹配 → 回退全量——宁可
+/// 多显示不少显示;关联字段入模后(W3 多账本)应收严此回退。
+#[must_use]
+pub fn select_wave(dash: &Dashboard, selected: usize) -> (usize, Vec<&TaskView>) {
+    let idx = selected.min(dash.milestones.len().saturating_sub(1));
+    let Some(milestone) = dash.milestones.get(idx) else {
+        return (0, dash.tasks.iter().collect());
+    };
+    let Some(wave) = milestone.wave.as_deref() else {
+        return (idx, dash.tasks.iter().collect());
+    };
+    let matched: Vec<&TaskView> = dash
+        .tasks
+        .iter()
+        .filter(|task| wave_matches(&task.id, wave))
+        .collect();
+    if matched.is_empty() {
+        (idx, dash.tasks.iter().collect())
+    } else {
+        (idx, matched)
+    }
+}
+
+/// 任务 id 与波次串的前缀段匹配:分隔符或串尾定界(`W2`~`W2-003` 成立,
+/// 不吃 `W25` 的半截词)。
+fn wave_matches(id: &str, wave: &str) -> bool {
+    match id.strip_prefix(wave) {
+        None => false,
+        Some(rest) => match rest.chars().next() {
+            None => true,
+            Some(ch) => !ch.is_alphanumeric(),
+        },
+    }
+}
+
+/// 选中波次的渲染视图(纯函数):[`Dashboard`] 仅把 `tasks` 折算为可见集
+/// (克隆换集),里程碑/屏障/git 原样——model 不动,波次过滤收口在 tui 层,
+/// `render` 层不感知滚动。
+#[must_use]
+pub fn wave_view(dash: &Dashboard, selected: usize) -> Dashboard {
+    let (_, visible) = select_wave(dash, selected);
+    let mut view = dash.clone();
+    view.tasks = visible.into_iter().cloned().collect();
+    view
+}
+
+/// 页眉波次标注(纯函数):`波次 <wave> <k>/<n>`;无里程碑返回空串(不标注)。
+#[must_use]
+pub fn wave_tag(dash: &Dashboard, selected: usize) -> String {
+    if dash.milestones.is_empty() {
+        return String::new();
+    }
+    let idx = selected.min(dash.milestones.len() - 1);
+    let total = dash.milestones.len();
+    let wave = dash.milestones[idx].wave.as_deref().unwrap_or("-");
+    format!("波次 {wave} {}/{total}", idx + 1)
+}
+
+/// 全键位帮助卡片(W2-004,纯函数):一行一键位,`?` 覆盖层与测试共用。
+#[must_use]
+pub fn help_lines() -> Vec<String> {
+    vec![
+        "g      面板 ⇄ 图切换".to_owned(),
+        "f      输入 task id 聚焦".to_owned(),
+        "c      发送聚焦提示(tmux send-keys 或可复制文本)".to_owned(),
+        "⏎      打开聚焦任务详情(无聚焦回落提示)".to_owned(),
+        "d      任务详情开/关(Esc 或 d 返回)".to_owned(),
+        "Esc    返回列表(详情态)".to_owned(),
+        "↑/↓    切换选中波次(↑ 上一波,↓ 下一波)".to_owned(),
+        "?      本帮助(任意键关闭)".to_owned(),
+        "q      退出(Ctrl-C 任意态)".to_owned(),
+    ]
 }
 
 /// 渲染层 SGR 调色 → ratatui 样式:只识别 render 层实际发出的码
@@ -385,7 +550,7 @@ enum View {
     Graph,
 }
 
-/// watch 会话状态(一帧一刷新;几何缓存随模型重建)。
+/// watch 会话状态(一帧一刷新;几何随选中波次每帧折算重建)。
 struct Watch {
     /// 监视的仓库/计划目录。
     repo: PathBuf,
@@ -393,8 +558,12 @@ struct Watch {
     interval: u64,
     /// 当前视图。
     view: View,
-    /// 输入态(行编辑 task id)。
-    editing: bool,
+    /// 详情态(右栏 40% 详情卡片)。
+    detail: bool,
+    /// 选中波次索引(`dashboard.milestones` 下标,渲染时钳位)。
+    wave: usize,
+    /// 键位语义态(常规/行编辑/帮助覆盖层)。
+    mode: InputMode,
     /// 输入缓冲。
     input: String,
     /// 聚焦任务 id。
@@ -413,7 +582,7 @@ struct Watch {
     git_facts: GitFacts,
     /// 当前模型。
     dash: Dashboard,
-    /// 图布局几何(命中测试与渲染共用)。
+    /// 图布局几何(命中测试与渲染共用;draw 每帧按选中波次折算重建)。
     layers: Vec<Vec<Cell>>,
     /// 视图区高度(点击越界判定;draw 时更新)。
     view_height: u16,
@@ -424,22 +593,23 @@ impl Watch {
         // 首帧全量:git 快照与模型同步取,此后进入分级节拍
         let git_facts = git::snapshot(repo);
         let dash = model::merge_with_git(repo, git_facts.clone());
-        let layers = layout_layers(&dash);
         Self {
             repo: repo.to_owned(),
             interval: interval_secs.max(1),
             view: View::Panel,
-            editing: false,
+            detail: false,
+            wave: 0,
+            mode: InputMode::Normal,
             input: String::new(),
             focused: None,
-            message: "就绪:g 换视图 f 聚焦 c/⏎ 提示 q 退出".to_owned(),
+            message: "就绪:g 换视图 f 聚焦 ⏎/d 详情 ↑↓ 波次 ? 帮助 q 退出".to_owned(),
             quit: false,
             clock: Instant::now(),
             last_model: 0,
             last_git: 0,
             git_facts,
             dash,
-            layers,
+            layers: Vec::new(),
             view_height: 0,
         }
     }
@@ -448,6 +618,7 @@ impl Watch {
     ///
     /// 节流做在 merge 外(W1-007):git 探测最重(多命令 × 3s 超时上限),
     /// watch 持快照缓存经 `merge_with_git` 注入,`model::merge` 语义不变。
+    /// 图布局几何不在此缓存:随选中波次的可见任务集在 [`draw`] 每帧折算。
     fn refresh(&mut self) {
         let now = self.clock.elapsed().as_secs();
         let rebuild = model_due(now, self.last_model, self.interval);
@@ -459,26 +630,25 @@ impl Watch {
             self.last_git = now;
         }
         self.dash = model::merge_with_git(&self.repo, self.git_facts.clone());
-        self.layers = layout_layers(&self.dash);
         self.last_model = now;
     }
 
-    /// 键事件分派(映射表见 [`key_action`])。
+    /// 键事件分派(映射表见 [`key_action`])。帮助覆盖层为模态:任意键关闭
+    /// 且不透传(含 q/Ctrl-C,再按一次才生效)。
     fn on_key(&mut self, key: KeyEvent) {
-        let mode = if self.editing {
-            InputMode::Editing
-        } else {
-            InputMode::Normal
-        };
-        match key_action(mode, key) {
+        if self.mode == InputMode::Help {
+            self.mode = InputMode::Normal;
+            return;
+        }
+        match key_action(self.mode, key) {
             Action::Quit => self.quit = true,
             Action::StartInput => {
-                self.editing = true;
+                self.mode = InputMode::Editing;
                 self.input.clear();
                 self.message = String::from("输入 task id");
             }
             Action::Submit => {
-                self.editing = false;
+                self.mode = InputMode::Normal;
                 let id = self.input.trim().to_owned();
                 if id.is_empty() {
                     self.message = String::from("空 id:聚焦未改动");
@@ -489,7 +659,7 @@ impl Watch {
                 self.input.clear();
             }
             Action::Cancel => {
-                self.editing = false;
+                self.mode = InputMode::Normal;
                 self.input.clear();
                 self.message = String::from("取消输入");
             }
@@ -497,6 +667,27 @@ impl Watch {
                 self.input = edit_line(&self.input, &action);
             }
             Action::FocusHint => self.focus_hint(),
+            Action::ToggleDetail => {
+                if self.detail {
+                    self.close_detail();
+                } else {
+                    self.open_detail();
+                }
+            }
+            Action::EnterDetail => {
+                if !self.detail && !self.open_detail() {
+                    // 无聚焦/任务不在模:沿用 ⏎ 原聚焦提示行为
+                    self.focus_hint();
+                }
+            }
+            Action::Back => {
+                if self.detail {
+                    self.close_detail();
+                }
+            }
+            Action::Help => self.mode = InputMode::Help,
+            Action::PrevWave => self.shift_wave(false),
+            Action::NextWave => self.shift_wave(true),
             Action::ToggleView => {
                 self.view = match self.view {
                     View::Panel => View::Graph,
@@ -536,6 +727,43 @@ impl Watch {
         }
     }
 
+    /// 尝试打开详情(W2-003):聚焦 id 命中当前模型任务才开;未聚焦或任务
+    /// 已被模型刷新洗掉时不开,给反馈行。
+    fn open_detail(&mut self) -> bool {
+        let Some(id) = self.focused.clone() else {
+            self.message = String::from("详情未开:未聚焦(f 输入 id,或图视图点击节点)");
+            return false;
+        };
+        if self.dash.tasks.iter().any(|task| task.id == id) {
+            self.detail = true;
+            self.message = format!("详情:{id}(Esc/d 返回)");
+            true
+        } else {
+            self.message = format!("详情未开:任务 {id} 不在当前模型(刷新后重试)");
+            false
+        }
+    }
+
+    /// 关详情返回列表。
+    fn close_detail(&mut self) {
+        self.detail = false;
+        self.message = String::from("返回列表");
+    }
+
+    /// 波次滚动(W2-004):`down` 为真走 ↓ 下一波,否则 ↑ 上一波;界内钳位,
+    /// 无波次不动,状态行给新标注。
+    fn shift_wave(&mut self, down: bool) {
+        if self.dash.milestones.is_empty() {
+            return;
+        }
+        self.wave = if down {
+            (self.wave + 1).min(self.dash.milestones.len() - 1)
+        } else {
+            self.wave.saturating_sub(1)
+        };
+        self.message = wave_tag(&self.dash, self.wave);
+    }
+
     /// SGR 左键:图视图命中节点即聚焦;面板视图无节点几何,忽略。
     fn on_click(&mut self, mouse: MouseEvent) {
         if self.view != View::Graph || mouse.row >= self.view_height {
@@ -548,22 +776,33 @@ impl Watch {
         self.focused = Some(id);
     }
 
-    /// 状态行(单行):键位帮助 + 聚焦 + git 快照 + 消息。
+    /// 状态行(单行):键位帮助(含 ?)+ 视图/详情态 + 波次标注 + 聚焦 +
+    /// git 快照 + 消息。
     fn status_line(&self) -> String {
-        if self.editing {
+        if self.mode == InputMode::Editing {
             let input = &self.input;
             return format!(" 聚焦 id: {input}▏(⏎ 确认 · Backspace 删除 · Esc 取消)");
         }
-        let view_label = match self.view {
-            View::Panel => "面板",
-            View::Graph => "图",
+        let view_label = if self.detail {
+            "详情"
+        } else {
+            match self.view {
+                View::Panel => "面板",
+                View::Graph => "图",
+            }
+        };
+        let tag = wave_tag(&self.dash, self.wave);
+        let wave = if tag.is_empty() {
+            String::new()
+        } else {
+            format!(" │ {tag}")
         };
         let focus = self.focused.as_deref().unwrap_or("—");
         let git = &self.dash.git;
         let branch = git.branch.as_deref().unwrap_or("-");
         let head = git.head_short.as_deref().unwrap_or("-");
         format!(
-            " [{}] f 聚焦 c/⏎ 提示 g 切换 q 退出 │ 聚焦:{focus} │ {branch}@{head} ↑{} ↓{} ●{} │ {}",
+            " [{}] f 聚焦 c 提示 ⏎/d 详情 g 切换 ↑↓ 波次 ? 帮助 q 退出 │ 聚焦:{focus}{wave} │ {branch}@{head} ↑{} ↓{} ●{} │ {}",
             view_label, git.ahead, git.behind, git.dirty, self.message
         )
     }
@@ -586,27 +825,97 @@ fn layout_layers(dash: &Dashboard) -> Vec<Vec<Cell>> {
     render::graph::layout_layers(dash, &graph_barriers(dash))
 }
 
-/// 一帧:视图区(面板或图)+ 底部状态行。视图区窄于 40 列时框化视图必破图
-/// ([AD-ERR-004]),视图区退化 oneline 单行,状态行照常。
+/// 一帧:视图区(面板或图;详情态右分栏 60% 主区 + 40% 详情)+ 底部状态行,
+/// 帮助覆盖层最上。主区窄于 40 列时框化视图必破图([AD-ERR-004]),退化
+/// oneline 单行,状态行照常。波次过滤收口在 tui 层:每帧把模型折算成选中
+/// 波次的渲染视图,布局几何随之重建(命中测试与渲染同源)。
 fn draw(frame: &mut Frame, app: &mut Watch) {
     let area = frame.area();
     let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
     app.view_height = rows[0].height;
-    let width = usize::from(rows[0].width).max(1);
-    let rendered = if width < render::MIN_WIDTH {
-        render::render_oneline(&app.dash)
+    let view_dash = wave_view(&app.dash, app.wave);
+    app.layers = layout_layers(&view_dash);
+    if app.detail {
+        let cols = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(rows[0]);
+        render_main(frame, cols[0], &view_dash, app.view);
+        render_detail(frame, cols[1], app);
     } else {
-        match app.view {
-            View::Panel => render::render_panel(&app.dash, width),
-            View::Graph => render::graph::render_graph(&app.dash, width),
+        render_main(frame, rows[0], &view_dash, app.view);
+    }
+    frame.render_widget(app.status_line(), rows[1]);
+    if app.mode == InputMode::Help {
+        render_help(frame, area);
+    }
+}
+
+/// 主视图区:窄态退化 oneline,否则面板/图。
+fn render_main(frame: &mut Frame, area: Rect, dash: &Dashboard, view: View) {
+    let width = usize::from(area.width).max(1);
+    let rendered = if width < render::MIN_WIDTH {
+        render::render_oneline(dash)
+    } else {
+        match view {
+            View::Panel => render::render_panel(dash, width),
+            View::Graph => render::graph::render_graph(dash, width),
         }
     };
     let lines: Vec<_> = rendered
         .lines()
         .map(|line| Line::from(spans_from_ansi(line)))
         .collect();
-    frame.render_widget(Paragraph::new(lines), rows[0]);
-    frame.render_widget(app.status_line(), rows[1]);
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// 详情右栏(40%):聚焦任务的详情卡片;聚焦任务被模型刷新洗掉时框内给
+/// 提示行(不白板)。
+fn render_detail(frame: &mut Frame, area: Rect, app: &Watch) {
+    let Some(task) = app
+        .focused
+        .as_deref()
+        .and_then(|id| app.dash.tasks.iter().find(|task| task.id == id))
+    else {
+        let block = Block::default().borders(Borders::ALL).title("详情");
+        frame.render_widget(Paragraph::new("聚焦任务不在当前模型").block(block), area);
+        return;
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!("详情 {} · Esc/d 返回", task.id));
+    let inner_width = usize::from(area.width).saturating_sub(2).max(1);
+    let lines: Vec<_> = detail_lines(task, &app.dash, inner_width)
+        .into_iter()
+        .map(|line| Line::from(spans_from_ansi(&line)))
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// 帮助覆盖层(W2-004):居中键位卡片;关闭由 [`Watch::on_key`] 的模态吞键。
+fn render_help(frame: &mut Frame, area: Rect) {
+    let card = centered(area, 70, 45);
+    frame.render_widget(Clear, card);
+    let lines: Vec<_> = help_lines().into_iter().map(Line::from).collect();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("键位帮助(任意键关闭)");
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
+
+/// 居中取 `percent_x` × `percent_y` 的子矩形(双轴百分比留白)。
+fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let rows = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Fill(1),
+    ])
+    .split(area);
+    let cols = Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Fill(1),
+    ])
+    .split(rows[1]);
+    cols[1]
 }
 
 /// tmux 是否可用(`tmux -V` 探测;spawn 失败或非零一律不可用)。

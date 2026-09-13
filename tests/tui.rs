@@ -3,6 +3,10 @@
 //! 入模后 `render_graph` 默认入口与显式入口的双轨收敛,以及窄终端形态
 //! 退化与输出宽度决策(AD-ERR-004,纯函数注入列数)。不测真终端。
 //!
+//! W2 批二增补:任务详情面板(`detail_lines` 快照/截断,`d`/⏎/Esc 键位)、
+//! 多波次滚动(`select_wave`/`wave_view`/`wave_tag` 过滤与钳位)与 help
+//! 覆盖层键位表(`?`,全键位标注)。
+//!
 //! agentdash 是纯二进制 crate,集成测试按 `#[path]` 在 crate 根挂载模块树,
 //! 与 `tests/merge.rs` / `tests/render_graph.rs` 同约定;挂载源中本测试未
 //! 触达的 pub 项在此 crate 属死代码,按文件级 allow 放行。
@@ -29,7 +33,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Color, Modifier};
 
 use contract::TaskState;
-use model::{BarrierEdges, Dashboard, MilestoneView, TaskView};
+use model::{BarrierEdges, Dashboard, GateView, MilestoneView, TaskView};
 use render::graph::Cell;
 use sources::git::GitFacts;
 use tui::{Action, Delivery, InputMode};
@@ -172,8 +176,8 @@ fn normal_mode_key_map() {
     );
     assert_eq!(
         tui::key_action(InputMode::Normal, key(KeyCode::Enter, none)),
-        Action::FocusHint,
-        "⏎ 打印聚焦提示"
+        Action::EnterDetail,
+        "⏎ 进详情(无聚焦时运行层回落聚焦提示)"
     );
     assert_eq!(
         tui::key_action(InputMode::Normal, key(KeyCode::Char('x'), none)),
@@ -487,4 +491,237 @@ fn framed_widths_clamped_and_nontty_takes_default() {
         render::DEFAULT_PANEL_WIDTH,
     ));
     assert!(framed.lines().count() > 1, "非 tty 冒烟仍出整帧面板");
+}
+
+// ---------- W2-003 详情面板(纯函数快照/截断) ----------
+
+/// 富字段任务样例:`note`/`fix_round`/`since` 齐备,状态走富态 `FixRound`(⚑)。
+fn detail_dash() -> Dashboard {
+    Dashboard {
+        tasks: vec![TaskView {
+            id: "T2".into(),
+            label: "scope by_id 索引".into(),
+            state: TaskState::FixRound,
+            lane: Some("B".into()),
+            note: Some("fix round 2/5".into()),
+            fix_round: Some((2, 5)),
+            since: Some("2026-09-13T08:30:00Z".into()),
+        }],
+        milestones: Vec::new(),
+        warnings: Vec::new(),
+        barriers: Vec::new(),
+        git: GitFacts::absent(),
+        agents: Vec::new(),
+        gates: vec![
+            GateView {
+                name: "pre-merge".into(),
+                state: "passed".into(),
+                detail: "test+clippy".into(),
+            },
+            GateView {
+                name: "ship".into(),
+                state: "failed".into(),
+                detail: "1 red".into(),
+            },
+        ],
+        generated_at: GENERATED_AT.into(),
+    }
+}
+
+#[test]
+fn detail_lines_snapshot_fields_complete() {
+    let dash = detail_dash();
+    let lines: Vec<String> = tui::detail_lines(&dash.tasks[0], &dash, 80)
+        .iter()
+        .map(|line| strip_ansi(line))
+        .collect();
+    assert_eq!(lines[0], "标签  scope by_id 索引");
+    assert_eq!(lines[1], "状态  ⚑ fix-round");
+    assert_eq!(lines[2], "车道  B");
+    assert_eq!(lines[3], "备注  fix round 2/5");
+    assert_eq!(lines[4], "轮次  R2/5");
+    assert_eq!(lines[5], "时刻  2026-09-13T08:30:00Z");
+    assert_eq!(lines[6], "验证门");
+    assert_eq!(lines[7], "  ✓ pre-merge passed · test+clippy");
+    assert_eq!(lines[8], "  ✗ ship failed · 1 red");
+    assert_eq!(lines[9], "事件");
+    assert_eq!(
+        lines[10], "  事件层 W2-008 接入",
+        "事件 tail 待 Dashboard 携带前为占位行"
+    );
+    assert_eq!(lines.len(), 11, "字段齐:7 字段 + 门区块 + 事件区块");
+}
+
+#[test]
+fn detail_lines_absent_fields_show_dash_placeholder() {
+    let dash = w25_dash(); // T1..T4 无 note/fix_round/since,无 gates
+    let lines: Vec<String> = tui::detail_lines(&dash.tasks[0], &dash, 80)
+        .iter()
+        .map(|line| strip_ansi(line))
+        .collect();
+    assert_eq!(lines[0], "标签  fiber join 即回收");
+    assert_eq!(lines[1], "状态  ✓ done");
+    assert_eq!(lines[2], "车道  A");
+    assert_eq!(lines[3], "备注  -");
+    assert_eq!(lines[4], "轮次  -");
+    assert_eq!(lines[5], "时刻  -");
+    assert_eq!(lines[7], "  -", "无 gate 时显示占位,整段不消失");
+}
+
+#[test]
+fn detail_lines_elide_to_budget() {
+    let dash = detail_dash();
+    let lines = tui::detail_lines(&dash.tasks[0], &dash, 20);
+    assert_eq!(lines.len(), 11, "截断只裁行宽,不裁行数");
+    for line in &lines {
+        let plain = strip_ansi(line);
+        assert!(
+            render::display_width(&plain) <= 20,
+            "行超显示宽预算:{plain}"
+        );
+    }
+    assert!(
+        lines.iter().any(|line| strip_ansi(line).ends_with('…')),
+        "长字段截断以省略号收尾"
+    );
+}
+
+// ---------- W2-003/W2-004 新键位(d/?/Esc/↑/↓/⏎) ----------
+
+#[test]
+fn detail_help_wave_key_map() {
+    let none = KeyModifiers::NONE;
+    assert_eq!(
+        tui::key_action(InputMode::Normal, key(KeyCode::Char('d'), none)),
+        Action::ToggleDetail
+    );
+    assert_eq!(
+        tui::key_action(InputMode::Normal, key(KeyCode::Char('?'), none)),
+        Action::Help
+    );
+    assert_eq!(
+        tui::key_action(InputMode::Normal, key(KeyCode::Esc, none)),
+        Action::Back
+    );
+    assert_eq!(
+        tui::key_action(InputMode::Normal, key(KeyCode::Up, none)),
+        Action::PrevWave
+    );
+    assert_eq!(
+        tui::key_action(InputMode::Normal, key(KeyCode::Down, none)),
+        Action::NextWave
+    );
+}
+
+// ---------- W2-004 多波次滚动(纯函数过滤/钳位) ----------
+
+/// 双波次样例:W2 波任务以波次串为 id 前缀段(W2-003/W2-004);历史波次 W1
+/// 的关联任务全不匹配(回退全量,现行单账本即单波的形态)。
+fn wave_dash() -> Dashboard {
+    Dashboard {
+        tasks: vec![
+            task("W2-003", "详情面板", "A"),
+            task("W2-004", "波次滚动", "B"),
+            task("T9", "发布件", "C"),
+        ],
+        milestones: vec![
+            MilestoneView {
+                wave: Some("W1".into()),
+                title: "一期".into(),
+                done: 3,
+                total: 3,
+            },
+            MilestoneView {
+                wave: Some("W2".into()),
+                title: "二期".into(),
+                done: 0,
+                total: 2,
+            },
+        ],
+        warnings: Vec::new(),
+        barriers: vec![BarrierEdges {
+            after: vec!["W2-003".into()],
+            unlocks: vec!["W2-004".into()],
+        }],
+        git: GitFacts::absent(),
+        agents: Vec::new(),
+        gates: Vec::new(),
+        generated_at: GENERATED_AT.into(),
+    }
+}
+
+#[test]
+fn select_wave_filters_tasks_and_clamps() {
+    let dash = wave_dash();
+    let (idx, visible) = tui::select_wave(&dash, 1);
+    assert_eq!(idx, 1);
+    let ids: Vec<&str> = visible.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["W2-003", "W2-004"],
+        "选中 W2:仅前缀段匹配任务可见"
+    );
+
+    // 历史波次 W1 无关联任务:回退全量(宁可多显示不少显示)
+    let (_, visible) = tui::select_wave(&dash, 0);
+    assert_eq!(visible.len(), 3, "全不匹配回退全量");
+
+    let (idx, _) = tui::select_wave(&dash, 99);
+    assert_eq!(idx, 1, "越界钳位到末波");
+
+    let bare = empty_dash();
+    let (idx, visible) = tui::select_wave(&bare, 7);
+    assert_eq!(idx, 0, "无里程碑索引归零");
+    assert!(visible.is_empty());
+}
+
+#[test]
+fn wave_view_swaps_only_tasks() {
+    let dash = wave_dash();
+    let view = tui::wave_view(&dash, 1);
+    let ids: Vec<&str> = view.tasks.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["W2-003", "W2-004"],
+        "渲染视图按选中波次折算任务集"
+    );
+    assert_eq!(view.milestones, dash.milestones, "里程碑原样保留");
+    assert_eq!(
+        view.barriers, dash.barriers,
+        "屏障原样保留(图侧自滤未知 id)"
+    );
+    assert_eq!(view.git, dash.git, "git 快照原样保留");
+}
+
+#[test]
+fn wave_tag_marks_current_over_total() {
+    let dash = wave_dash();
+    assert_eq!(tui::wave_tag(&dash, 0), "波次 W1 1/2");
+    assert_eq!(tui::wave_tag(&dash, 1), "波次 W2 2/2");
+    assert_eq!(tui::wave_tag(&dash, 99), "波次 W2 2/2", "越界钳位");
+    assert_eq!(tui::wave_tag(&w25_dash(), 0), "波次 W25 1/1");
+    assert_eq!(tui::wave_tag(&empty_dash(), 0), "", "无波次不标注");
+}
+
+// ---------- W2-004 帮助覆盖层(全键位) ----------
+
+#[test]
+fn help_lines_cover_all_keys() {
+    let help = tui::help_lines().join("\n");
+    for token in ["g", "f", "c", "⏎", "d", "Esc", "↑", "↓", "?", "q"] {
+        assert!(help.contains(token), "帮助缺键位标注:{token}");
+    }
+    let lines = tui::help_lines();
+    assert!(
+        lines.iter().any(|line| line.starts_with("d ")),
+        "详情键独立条目"
+    );
+    assert!(
+        lines.iter().any(|line| line.starts_with("? ")),
+        "帮助键独立条目"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("任意键关闭")),
+        "关闭方式可见"
+    );
 }
