@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+/target
+# dogfood:台账提交,事件产物不提交
+/.agentdash/*
+!/.agentdash/ledger.json
+!/.agentdash/config.toml

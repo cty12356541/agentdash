@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook posttooluse || true"}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook stop || true"}
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook subagentstop || true"}
+        ]
+      }
+    ]
+  }
+}

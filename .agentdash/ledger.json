@@ -1,0 +1,34 @@
+{
+  "$schema": "agentdash.tasklog.v1",
+  "wave": "W1",
+  "title": "一期:Rust 内核 + claude-code-kit",
+  "lanes": [
+    {"name": "T1-scaffold", "tasks": ["T1"]},
+    {"name": "T2-contract", "tasks": ["T2"]},
+    {"name": "T3-events", "tasks": ["T3"]},
+    {"name": "T4-git-source", "tasks": ["T4"]},
+    {"name": "T8b-claude-code-kit", "tasks": ["T8b"]},
+    {"name": "T5-model-merge", "tasks": ["T5"]},
+    {"name": "T6-render", "tasks": ["T6"]},
+    {"name": "T7-tui-watch", "tasks": ["T7"]},
+    {"name": "T9-release", "tasks": ["T9"]}
+  ],
+  "tasks": {
+    "T1": {"label": "脚手架与 CI", "state": "done"},
+    "T2": {"label": "契约层 ledger.json", "state": "done"},
+    "T3": {"label": "事件层 events.jsonl", "state": "done"},
+    "T4": {"label": "git 观察者源", "state": "done"},
+    "T5": {"label": "模型合并", "state": "done"},
+    "T6": {"label": "渲染移植(oneline + panel + graph)", "state": "done"},
+    "T7": {"label": "TUI watch", "state": "done"},
+    "T8b": {"label": "claude-code-kit(hook 直调二进制)", "state": "done"},
+    "T9": {"label": "集成验收与发布件", "state": "done"}
+  },
+  "barriers": [
+    {"id": "B1", "after": ["T1"], "unlocks": ["T2", "T3", "T4", "T8b"]},
+    {"id": "B2", "after": ["T2", "T3", "T4"], "unlocks": ["T5"]},
+    {"id": "B3", "after": ["T5"], "unlocks": ["T6"]},
+    {"id": "B4", "after": ["T6"], "unlocks": ["T7"]},
+    {"id": "B5", "after": ["T7", "T8b"], "unlocks": ["T9"]}
+  ]
+}

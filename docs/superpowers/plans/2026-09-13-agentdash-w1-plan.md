@@ -86,7 +86,7 @@
 
 ### Task 8 (W1-008):claude-code-kit
 
-**Files:** `kits/claude-code/hooks/hooks.json`、`kits/claude-code/hooks/record_event.py`(或小型静态 shim 调二进制)、`kits/claude-code/skills/agentdash/SKILL.md`、`kits/claude-code/install.sh|.ps1`、`kits/claude-code/README.md`、`kits/claude-code/tests/`
+**Files:** `kits/claude-code/hooks/hooks.json`(直调 `agentdash hook <event>` 二进制子命令,**零 Python 前置**——2026-09-13 用户纠偏,与 spec §2 推广铁律对齐)、`src/hook.rs`(stdin JSON→events.jsonl 追加,gate 提取逻辑;**文件锁保证并发追加零丢失**)、`kits/claude-code/skills/agentdash/SKILL.md`、`install.sh|.ps1`、`README.md`;测试移植为 Rust 集成测试(fixture 载荷 JSON 保留复用)
 **Interfaces:** hook 消费 PostToolUse/Stop/SubagentStop 载荷 → 追加 `.agentdash/events.jsonl`;**gate 提取**:bash 命令匹配(cargo test|clippy|fmt|go test|npm test|gh pr checks)→ `gate` 事件 running(Stop 时折叠 end+exit+摘要行)
 
 - [ ] Step 1: fixture 回放测试:三钩子样例载荷 → 断言 events.jsonl 行(含一条 gate running→passed)

@@ -84,7 +84,7 @@
 
 ## 6. Claude Code 集成包(一期)
 
-- hooks:PostToolUse/Stop/SubagentStop → 提取 gate/agent/tool 事件追加 events.jsonl(**新增 gate 提取**:匹配 bash 命令前缀 cargo test/clippy/fmt/go test/npm test + 退出码与输出摘要)
+- hooks:PostToolUse/Stop/SubagentStop → **直调 `agentdash hook <event>` 二进制子命令**(零 Python 前置,2026-09-13 修订),由内核的 hook 模块提取 gate/agent/tool 事件追加 events.jsonl(匹配 cargo test/clippy/fmt/go test/npm test/gh pr checks + 退出码摘要);并发追加以文件锁保证零丢失
 - skill `/agentdash`:点播渲染 + 状态跃迁附图约定(承 /dash)
 - 分发:插件市场(`claude plugin marketplace add`)+ 独立脚本安装;二进制进插件 `bin/`
 
