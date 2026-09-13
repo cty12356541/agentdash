@@ -1,6 +1,7 @@
 //! W1-007 TUI 集成测试:键→动作映射、行编辑、SGR 鼠标命中(空面板与 w25
-//! 样例)、刷新节拍(注入时钟)、聚焦投递判定、SGR→Span 换算,以及 barriers
-//! 入模后 `render_graph` 默认入口与显式入口的双轨收敛。不测真终端。
+//! 样例)、刷新节拍(注入时钟)、聚焦投递判定、SGR→Span 换算、barriers
+//! 入模后 `render_graph` 默认入口与显式入口的双轨收敛,以及窄终端形态
+//! 退化与输出宽度决策(AD-ERR-004,纯函数注入列数)。不测真终端。
 //!
 //! agentdash 是纯二进制 crate,集成测试按 `#[path]` 在 crate 根挂载模块树,
 //! 与 `tests/merge.rs` / `tests/render_graph.rs` 同约定;挂载源中本测试未
@@ -30,7 +31,7 @@ use ratatui::style::{Color, Modifier};
 
 use contract::TaskState;
 use model::{BarrierEdges, Dashboard, MilestoneView, TaskView};
-use render::Cell;
+use render::graph::Cell;
 use sources::git::GitFacts;
 use tui::{Action, Delivery, InputMode};
 
@@ -99,15 +100,15 @@ fn empty_dash() -> Dashboard {
 
 /// 模型屏障 → 图屏障(与 tui 内部换形同款);布局几何取自同一源。
 fn layout(dash: &Dashboard) -> Vec<Vec<Cell>> {
-    let barriers: Vec<render::BarrierEdges> = dash
+    let barriers: Vec<render::graph::BarrierEdges> = dash
         .barriers
         .iter()
-        .map(|barrier| render::BarrierEdges {
+        .map(|barrier| render::graph::BarrierEdges {
             after: barrier.after.clone(),
             unlocks: barrier.unlocks.clone(),
         })
         .collect();
-    render::layout_layers(dash, &barriers)
+    render::graph::layout_layers(dash, &barriers)
 }
 
 fn cell_of(layers: &[Vec<Cell>], id: &str) -> Cell {
@@ -414,19 +415,22 @@ fn default_render_graph_consumes_model_barriers() {
     let t4 = cell_of(&layers, "T4");
     assert!(t4.line > t3.line, "车道互不重叠,层间差只能来自模型屏障边");
     // 默认单参入口 == 显式入口(双轨收敛:默认版委托同一实现)
-    let explicit_barriers: Vec<render::BarrierEdges> = dash
+    let explicit_barriers: Vec<render::graph::BarrierEdges> = dash
         .barriers
         .iter()
-        .map(|barrier| render::BarrierEdges {
+        .map(|barrier| render::graph::BarrierEdges {
             after: barrier.after.clone(),
             unlocks: barrier.unlocks.clone(),
         })
         .collect();
-    let default_plain = strip_ansi(&render::render_graph(&dash, render::DEFAULT_GRAPH_WIDTH));
-    let explicit_plain = strip_ansi(&render::render_graph_with(
+    let default_plain = strip_ansi(&render::graph::render_graph(
+        &dash,
+        render::graph::DEFAULT_GRAPH_WIDTH,
+    ));
+    let explicit_plain = strip_ansi(&render::graph::render_graph_with(
         &dash,
         &explicit_barriers,
-        render::DEFAULT_GRAPH_WIDTH,
+        render::graph::DEFAULT_GRAPH_WIDTH,
     ));
     assert_eq!(default_plain, explicit_plain, "两轨输出逐字一致");
     // 屏障真正进了画图:T4 框顶有入线箭头(无边时孤立节点无 ▼)
@@ -437,11 +441,47 @@ fn default_render_graph_consumes_model_barriers() {
     );
 }
 
-// ---------- 输出宽度 ----------
+// ---------- 窄终端形态退化(AD-ERR-004) ----------
 
 #[test]
-fn stdout_width_always_clamped() {
-    // 测试进程 stdout 是否 tty 不定;钳位结果必须落在 40..=120
-    let width = tui::stdout_width(render::DEFAULT_PANEL_WIDTH);
-    assert!((40..=120).contains(&width));
+fn narrow_terminal_degrades_to_oneline() {
+    // 原始 39 列(钳位下限之下):决策必须先于钳位——先钳到 40 就看不出
+    // 终端本来就窄,框化视图只会顶穿终端
+    assert_eq!(
+        tui::output_form(Some(39), render::DEFAULT_PANEL_WIDTH),
+        tui::OutputForm::OneLine
+    );
+    // 单帧输出退化为 oneline:单行、含 "[dash]"、无框字符(框化破图)
+    let out = strip_ansi(&tui::once_output(
+        &w25_dash(),
+        Some(39),
+        render::DEFAULT_PANEL_WIDTH,
+    ));
+    assert!(out.contains("[dash]"), "窄终端输出 oneline 形态");
+    assert_eq!(out.lines().count(), 1, "oneline 恰一行");
+    assert!(!out.contains('┌'), "不得含框字符(框化视图必破图)");
+}
+
+#[test]
+fn framed_widths_clamped_and_nontty_takes_default() {
+    // 40 列起(含边界)仍出框化视图,宽度钳 40..120
+    assert_eq!(
+        tui::output_form(Some(40), render::DEFAULT_PANEL_WIDTH),
+        tui::OutputForm::Framed(40)
+    );
+    assert_eq!(
+        tui::output_form(Some(200), render::graph::DEFAULT_GRAPH_WIDTH),
+        tui::OutputForm::Framed(120)
+    );
+    // 非 tty(管道/重定向)无列数:按 default 档走框化(冒烟路径不缩水)
+    assert_eq!(
+        tui::output_form(None, render::DEFAULT_PANEL_WIDTH),
+        tui::OutputForm::Framed(render::DEFAULT_PANEL_WIDTH)
+    );
+    let framed = strip_ansi(&tui::once_output(
+        &w25_dash(),
+        None,
+        render::DEFAULT_PANEL_WIDTH,
+    ));
+    assert!(framed.lines().count() > 1, "非 tty 冒烟仍出整帧面板");
 }

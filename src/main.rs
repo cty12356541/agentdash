@@ -54,7 +54,8 @@ fn main() -> ExitCode {
 }
 
 /// `render panel|graph [PATH]`:打印对应渲染。宽度非 tty 用默认、tty 读终端
-/// 列钳 40..120;模型走多源合并(损坏降级为警告行,不失败)。
+/// 原始列:低于 40 列退化为 oneline 单行(AD-ERR-004),否则钳 40..120 出
+/// 框化视图;模型走多源合并(损坏降级为警告行,不失败)。
 fn cmd_render(rest: &[String]) -> ExitCode {
     let Some(view) = rest.first().map(String::as_str) else {
         eprintln!("error: render needs a view: `render panel|graph [PATH]`\n\n{USAGE}");
@@ -62,7 +63,7 @@ fn cmd_render(rest: &[String]) -> ExitCode {
     };
     let default_width = match view {
         "panel" => render::DEFAULT_PANEL_WIDTH,
-        "graph" => render::DEFAULT_GRAPH_WIDTH,
+        "graph" => render::graph::DEFAULT_GRAPH_WIDTH,
         other => {
             eprintln!("error: unknown render view `{other}` (expected panel|graph)\n\n{USAGE}");
             return ExitCode::from(2);
@@ -72,12 +73,16 @@ fn cmd_render(rest: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     let dash = model::merge(&path);
-    let width = tui::stdout_width(default_width);
-    let rendered = match view {
-        "panel" => render::render_panel(&dash, width),
-        _ => render::render_graph(&dash, width),
-    };
-    println!("{rendered}");
+    match tui::output_form(tui::stdout_cols(), default_width) {
+        tui::OutputForm::OneLine => println!("{}", render::render_oneline(&dash)),
+        tui::OutputForm::Framed(width) => {
+            let rendered = match view {
+                "panel" => render::render_panel(&dash, width),
+                _ => render::graph::render_graph(&dash, width),
+            };
+            println!("{rendered}");
+        }
+    }
     ExitCode::SUCCESS
 }
 

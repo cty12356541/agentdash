@@ -6,8 +6,9 @@
 //! 以 `merge` 链路为主;本组测试手工构造 `Dashboard`(精确控制黄金样例),
 //! 未触达的 pub 项在此 crate 属死代码,按文件级 allow 放行。
 //!
-//! 屏障集经 `render::BarrierEdges` 显式传入(`Dashboard` 暂不携带 barriers,
-//! 见 render 模块 TODO;W2 扩 model 后收敛回单参签名)。
+//! 屏障集经 `graph::BarrierEdges` 显式传入(黄金样例需精确控制边集;
+//! `Dashboard` 已随 T7 携带 barriers,消费模型屏障的默认单参入口见
+//! `graph::render_graph`)。
 
 #![allow(dead_code)]
 
@@ -26,8 +27,9 @@ use std::collections::HashMap;
 
 use contract::TaskState;
 use model::{Dashboard, MilestoneView, TaskView};
-use render::{
-    BarrierEdges, Cell, DEFAULT_GRAPH_WIDTH, display_width, hit_test, layout_layers, render_graph,
+use render::display_width;
+use render::graph::{
+    BarrierEdges, Cell, DEFAULT_GRAPH_WIDTH, hit_test, layout_layers, render_graph,
     render_graph_with,
 };
 use sources::git::GitFacts;
@@ -390,4 +392,25 @@ fn done_tasks_render_green_with_ansi() {
     let out = render_graph_with(&dash, &barriers, DEFAULT_GRAPH_WIDTH);
     assert!(out.contains("\x1b[32m"), "done 绿");
     assert!(out.contains('▼') && out.contains('│'), "连接符在位");
+}
+
+// ---------- 屏障只进图视图(panel/oneline 不随 barriers 变化) ----------
+
+#[test]
+fn barriers_reach_graph_views_only() {
+    let with_bars = w25_dash();
+    let mut without = w25_dash();
+    without.barriers.clear();
+    // 面板屏障行尚未渲染(见 render::panel 的 TODO):模型入模前后,
+    // panel/oneline 输出必须逐字一致——屏障面只能由 graph 视图承载
+    assert_eq!(
+        render::render_panel(&with_bars, render::DEFAULT_PANEL_WIDTH),
+        render::render_panel(&without, render::DEFAULT_PANEL_WIDTH),
+        "panel 输出不随 barriers 变化"
+    );
+    assert_eq!(
+        render::render_oneline(&with_bars),
+        render::render_oneline(&without),
+        "oneline 输出不随 barriers 变化"
+    );
 }

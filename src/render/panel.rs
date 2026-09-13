@@ -117,7 +117,8 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
                 lines.push(task_line(task));
             }
         }
-        // TODO(model):屏障行(claude-dash `  {barrier}`)——Dashboard 暂不携带 barriers
+        // TODO(render):屏障行(claude-dash `  {barrier}`)——模型已携带 barriers
+        // (T7 入模),面板侧渲染仍未做,待后续车道
     }
     lines.join("\n")
 }

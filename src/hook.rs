@@ -216,8 +216,8 @@ fn on_subagent_stop(payload: &Map<String, Value>) {
     if let Some(who) = who {
         event["who"] = json!(clip(who));
     }
-    // 注:events.rs 重放(W1-003)对 agent 事件要求 who+task 双字段;SubagentStop 载荷无 task,
-    // 本行按车道 brief 只发 who(重放侧记一条警告行,不中断)——接口缺口已在 task-8b 报告上报。
+    // 注:events.rs 重放以 `who` 为 agent 事件主键,`task` 只是可选注记;
+    // 宿主 SubagentStop 载荷天然无 task,本行只发 who 即满足重放契约。
     with_lock(&dir, || append_line(&dir, &event));
 }
 

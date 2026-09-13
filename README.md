@@ -43,7 +43,8 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 | `agentdash watch [--once] [PATH]` | 常驻 TUI(5s 刷新档,git 快照 30s 节流;`q`/Ctrl-C 退出);`--once` 或非 tty stdin 渲染一帧即退 |
 | `agentdash hook <EVENT>` | 消费宿主 hook 载荷(stdin),折叠后追加 `.agentdash/events.jsonl` |
 
-`[PATH]` 缺省 `.`;渲染宽度非 tty 用默认、tty 按终端列钳 40..120。
+`[PATH]` 缺省 `.`;渲染宽度非 tty 用默认、tty 按终端列钳 40..120,
+窄于 40 列时框化视图必破图,`render`/`watch` 自动退化为 oneline 单行。
 
 ## 数据契约 v1(两文件)
 
@@ -67,5 +68,5 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 ## 与 claude-dash 的关系
 
 claude-dash 是已**冻结的参考实现**:agentdash 的渲染与单行算法移植自它,
-以其实测黄金断言语义(76 断言翻译)为准;它不再演进,新能力一律在
-agentdash 落地。两者数据文件互不通用。
+以 claude-dash 76 断言套件的实测语义为准(本仓移植黄金断言 21 条);
+它不再演进,新能力一律在 agentdash 落地。两者数据文件互不通用。

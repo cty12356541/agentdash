@@ -6,7 +6,7 @@
 //!   发送聚焦提示(环境变量 `DASH_TMUX_TARGET` 存在且 tmux 可用 →
 //!   `tmux send-keys`,否则状态行给可复制文本)、`q`/Ctrl-C 退出;
 //! - 鼠标:SGR 左键点击 → [`handle_click`] 复用 `render::graph` 的布局几何
-//!   与 [`render::hit_test`] 命中(仅图视图);
+//!   与 [`render::graph::hit_test`] 命中(仅图视图);
 //! - 分级刷新:模型每 interval 档重建,git 快照仅每 30s 边界重取(节流做在
 //!   merge 外:持有快照缓存经 [`model::merge_with_git`] 注入,合并语义不变;
 //!   到期判定用注入时钟的纯函数 [`model_due`] / [`git_due`],可测);
@@ -36,7 +36,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::{Frame, Terminal};
 
 use crate::model::{self, Dashboard};
-use crate::render::{self, Cell};
+use crate::render::{self, graph::Cell};
 use crate::sources::git::{self, GitFacts};
 
 /// 模型重建节奏默认档(秒;`agentdash watch` 的 interval)。
@@ -63,29 +63,60 @@ pub fn watch(repo: &Path, interval_secs: u64) -> io::Result<()> {
     outcome.and(restored)
 }
 
-/// 单帧冒烟(`--once`):重建一次模型,打印默认面板帧后返回。
+/// 单帧冒烟(`--once`):重建一次模型,经 [`once_output`] 决策形态后打印。
 ///
 /// # Errors
 /// 打印失败(如管道关闭)时透传 `io::Error`。
 pub fn watch_once(repo: &Path) -> io::Result<()> {
     let dash = model::merge(repo);
-    let width = stdout_width(render::DEFAULT_PANEL_WIDTH);
-    let mut out = io::stdout();
-    writeln!(out, "{}", render::render_panel(&dash, width))
+    let frame = once_output(&dash, stdout_cols(), render::DEFAULT_PANEL_WIDTH);
+    writeln!(io::stdout(), "{frame}")
 }
 
-/// 输出宽度:非 tty 用默认;tty 读终端列并经 40..120 钳位
-/// ([`render::clamp_width`],panel/graph 共用)。
+/// 原始终端列数(AD-ERR-004):非 tty(管道/重定向)或读取失败 → `None`
+/// (调用方以 `default` 档兜底)。**不钳位**——形态退化判定必须先于
+/// [`render::clamp_width`],先钳到 40 就看不出终端本来就窄。
 #[must_use]
-pub fn stdout_width(default: usize) -> usize {
-    let cols = if io::stdout().is_terminal() {
+pub fn stdout_cols() -> Option<usize> {
+    if io::stdout().is_terminal() {
         crossterm::terminal::size()
             .ok()
             .map(|(cols, _)| usize::from(cols))
     } else {
         None
-    };
-    render::clamp_width(cols.unwrap_or(default))
+    }
+}
+
+/// 输出形态(AD-ERR-004):框化视图(带 40..120 钳位宽)或窄终端退化的
+/// oneline 单行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputForm {
+    /// 框化视图(panel/graph),字段为钳位后的宽度。
+    Framed(usize),
+    /// oneline 单行(statusline)。
+    OneLine,
+}
+
+/// 形态决策(`render`/`watch` 出图前的收口,纯函数可测):原始列数低于
+/// [`render::MIN_WIDTH`] 时框化视图必破图(钳位下限硬抬 40 会顶穿终端),
+/// 退化 oneline 单行;否则按 40..120 钳位宽出框化视图。非 tty 无列数,
+/// 按 `default` 档走框化(管道冒烟不缩水)。
+#[must_use]
+pub fn output_form(raw_cols: Option<usize>, default: usize) -> OutputForm {
+    match raw_cols.unwrap_or(default) {
+        cols if cols < render::MIN_WIDTH => OutputForm::OneLine,
+        cols => OutputForm::Framed(render::clamp_width(cols)),
+    }
+}
+
+/// 单帧输出(`--once`/管道冒烟,`render` 命令同判):形态决策 + 默认面板
+/// 渲染收口,纯函数([`watch_once`] 的可测内核)。
+#[must_use]
+pub fn once_output(dash: &Dashboard, raw_cols: Option<usize>, default: usize) -> String {
+    match output_form(raw_cols, default) {
+        OutputForm::OneLine => render::render_oneline(dash),
+        OutputForm::Framed(width) => render::render_panel(dash, width),
+    }
 }
 
 // ---------- 可测纯函数(键位映射 / 行编辑 / 刷新节拍 / 命中 / 投递) ----------
@@ -175,7 +206,7 @@ pub fn git_due(now_secs: u64, last_git_secs: u64, model_rebuild: bool) -> bool {
 }
 
 /// 终端点击 → 命中任务 id:把终端 0 基坐标减去视图区原点后,换算成渲染文本
-/// 1 基行号复用 [`render::hit_test`](与 `render_graph` 布局同几何);空白/偏移
+/// 1 基行号复用 [`render::graph::hit_test`](与 `render_graph` 布局同几何);空白/偏移
 /// 越界返回 `None`。
 #[must_use]
 pub fn handle_click(
@@ -188,7 +219,7 @@ pub fn handle_click(
     if col < origin_x || row < origin_y {
         return None;
     }
-    render::hit_test(
+    render::graph::hit_test(
         layers,
         usize::from(col - origin_x),
         usize::from(row - origin_y) + 1,
@@ -540,30 +571,35 @@ impl Watch {
 
 /// 模型屏障 → 图布局输入(model 与 render 的同构类型换形;与
 /// `render_graph` 默认入口同一语义,布局几何与渲染共用一份屏障边)。
-fn graph_barriers(dash: &Dashboard) -> Vec<render::BarrierEdges> {
+fn graph_barriers(dash: &Dashboard) -> Vec<render::graph::BarrierEdges> {
     dash.barriers
         .iter()
-        .map(|barrier| render::BarrierEdges {
+        .map(|barrier| render::graph::BarrierEdges {
             after: barrier.after.clone(),
             unlocks: barrier.unlocks.clone(),
         })
         .collect()
 }
 
-/// 图布局几何(命中测试与渲染共用 `render::layout_layers` 单一几何源)。
+/// 图布局几何(命中测试与渲染共用 `graph::layout_layers` 单一几何源)。
 fn layout_layers(dash: &Dashboard) -> Vec<Vec<Cell>> {
-    render::layout_layers(dash, &graph_barriers(dash))
+    render::graph::layout_layers(dash, &graph_barriers(dash))
 }
 
-/// 一帧:视图区(面板或图)+ 底部状态行。
+/// 一帧:视图区(面板或图)+ 底部状态行。视图区窄于 40 列时框化视图必破图
+/// ([AD-ERR-004]),视图区退化 oneline 单行,状态行照常。
 fn draw(frame: &mut Frame, app: &mut Watch) {
     let area = frame.area();
     let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
     app.view_height = rows[0].height;
     let width = usize::from(rows[0].width).max(1);
-    let rendered = match app.view {
-        View::Panel => render::render_panel(&app.dash, width),
-        View::Graph => render::render_graph(&app.dash, width),
+    let rendered = if width < render::MIN_WIDTH {
+        render::render_oneline(&app.dash)
+    } else {
+        match app.view {
+            View::Panel => render::render_panel(&app.dash, width),
+            View::Graph => render::graph::render_graph(&app.dash, width),
+        }
     };
     let lines: Vec<_> = rendered
         .lines()

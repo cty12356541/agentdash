@@ -6,23 +6,18 @@
 //!
 //! 算法移植自 claude-dash `dashlib/render_oneline.py` / `render_panel.py` /
 //! `render_graph.py`,以其实测黄金断言语义为准;输入面收敛为
-//! `model::Dashboard`。模型暂缺的展示字段(activity / velocity / barriers)
-//! 以 0 / 空呈现并留 TODO,不扩 model(扩字段属后续车道)。
+//! `model::Dashboard`。模型暂缺的展示字段(activity / velocity)
+//! 以 0 / 空呈现并留 TODO,不扩 model(扩字段属后续车道;barriers 已随
+//! W1-007 入模)。
 
-mod graph;
+pub mod graph;
 mod oneline;
 mod panel;
 
-// W1 过渡:重导出面由接线车道(main 命令)消费,在那之前 bin 目标视为未用;
-// 接线落地后删除本 allow。
-#[allow(unused_imports)]
-pub use graph::{
-    BarrierEdges, Cell, DEFAULT_GRAPH_WIDTH, hit_test, layout_layers, render_graph,
-    render_graph_with,
-};
-#[allow(unused_imports)]
+// graph 面不做平铺 re-export:本模块被 bin 与各集成测试目标分别挂载,各目标
+// 消费面不同构(如 render_panel 目标不消费 graph 组),平铺必有逐目标未用
+// import;消费方一律走 `graph::` 路径。panel/oneline 各目标全消费,保持平铺。
 pub use oneline::render_oneline;
-#[allow(unused_imports)]
 pub use panel::{DEFAULT_PANEL_WIDTH, render_panel};
 
 use crate::contract::TaskState;
@@ -37,12 +32,18 @@ pub(crate) const C_WARN: &str = "\x1b[33m";
 pub(crate) const C_BOLD: &str = "\x1b[1m";
 pub(crate) const C_END: &str = "\x1b[0m";
 
+/// 宽度钳下限(Brief:40..120);低于它的终端出不了框化视图——形态退化
+/// 判定(AD-ERR-004,见 `tui::output_form`)以它为线。
+pub const MIN_WIDTH: usize = 40;
+/// 宽度钳上限(Brief:40..120)。
+pub const MAX_WIDTH: usize = 120;
+
 /// 宽度钳(Brief:40..120);panel/graph 的宽度参数一律先经此钳位。
 pub(crate) const fn clamp_width(width: usize) -> usize {
-    if width < 40 {
-        40
-    } else if width > 120 {
-        120
+    if width < MIN_WIDTH {
+        MIN_WIDTH
+    } else if width > MAX_WIDTH {
+        MAX_WIDTH
     } else {
         width
     }
