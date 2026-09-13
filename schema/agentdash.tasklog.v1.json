@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentdash.tasklog.v1",
+  "title": "agentdash task ledger v1",
+  "description": "agentdash 通用任务契约的任务台账(spec §4.1;agent 或人写,位于 <repo>/.agentdash/ledger.json)。JSON Schema 是发布给集成包的严格校验面;内核运行时解析为容错语义:未知字段忽略、未知 $schema 与未声明 profile 的富态(review/fix-round)降级为警告而非错误(AD-ERR-001/003)。",
+  "type": "object",
+  "required": ["title"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": {
+      "const": "agentdash.tasklog.v1"
+    },
+    "wave": {
+      "type": "string",
+      "description": "波次编号(如 W23)。"
+    },
+    "title": {
+      "type": "string",
+      "description": "波次标题(必填)。"
+    },
+    "profile": {
+      "type": "string",
+      "description": "语义超集标识(如 sdd);声明后 review/fix-round 富态有效,内核只保证最小核。"
+    },
+    "lanes": {
+      "$ref": "#/$defs/lanes"
+    },
+    "tasks": {
+      "$ref": "#/$defs/tasks"
+    },
+    "barriers": {
+      "$ref": "#/$defs/barriers"
+    }
+  },
+  "$defs": {
+    "lanes": {
+      "type": "array",
+      "description": "车道列表;数组顺序即展示顺序。",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "车道名(如 A-impl)。"
+          },
+          "tasks": {
+            "$ref": "#/$defs/taskIds"
+          }
+        }
+      }
+    },
+    "tasks": {
+      "type": "object",
+      "description": "任务表:id → 规格。",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["label", "state"],
+        "additionalProperties": true,
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "动词短语标签。"
+          },
+          "state": {
+            "description": "最小核 pending→active→done,终态 blocked;review/fix-round 为可选富态。",
+            "enum": ["pending", "active", "review", "fix-round", "done", "blocked"]
+          },
+          "note": {
+            "type": "string",
+            "description": "附加说明(如 fix round 2/5)。"
+          }
+        }
+      }
+    },
+    "barriers": {
+      "type": "array",
+      "description": "屏障列表;after 满足后放行 unlocks。",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "屏障 id(如 B1)。"
+          },
+          "after": {
+            "$ref": "#/$defs/taskIds"
+          },
+          "unlocks": {
+            "$ref": "#/$defs/taskIds"
+          }
+        }
+      }
+    },
+    "taskIds": {
+      "type": "array",
+      "description": "任务 id 引用;字符串或整数,统一按字符串解释。",
+      "items": {
+        "type": ["string", "integer"]
+      }
+    }
+  },
+  "examples": [
+    {
+      "$schema": "agentdash.tasklog.v1",
+      "wave": "W23",
+      "title": "波次标题",
+      "profile": "sdd",
+      "lanes": [
+        {"name": "A-impl", "tasks": [1, 2]}
+      ],
+      "tasks": {
+        "1": {"label": "动词短语", "state": "active", "note": "fix round 2/5"}
+      },
+      "barriers": [
+        {"id": "B1", "after": [1], "unlocks": [2]}
+      ]
+    }
+  ]
+}
