@@ -35,3 +35,8 @@ gh api PR/checks 缓存 120s(`.agentdash/cache/gh.json`);断网降级 + stalenes
 
 ## 本机级安装(推广验证,随批一并行)
 release 构建 → `~/.cargo/bin/agentdash.exe`(PATH);用户级 hooks(~/.claude/settings.json 三事件直调);`~/.claude/skills/agentdash/`;fixture 载荷验证落点正确。
+
+### T9 (W2-009):插件市场全生态链路
+仓库转公开;.claude-plugin/{marketplace,plugin}.json(插件体=kits/claude-code 布局 + bin/ 预构建 Windows 二进制,README 注明他平台 cargo install);`claude plugin marketplace add cty12356541/agentdash` → `claude plugin install` 到干净环境,真装真用。
+### T10 (W2-010):computer-use 双场景视觉验证
+场景一 dogfood:agentdash 仓自身侧栏 watch(真数据);场景二 独立项目模拟:tempdir 新仓(git init + 手写 ledger + 模拟 events)跑 watch/graph/panel 截图核验。两场景各出截图与文字报告。
