@@ -53,6 +53,7 @@ fn w25_dash() -> Dashboard {
         }],
         warnings: Vec::new(),
         gates: HashMap::new(),
+        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;面板样例不用屏障
         git: GitFacts::absent(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
@@ -64,6 +65,7 @@ fn dash_with(tasks: Vec<TaskView>) -> Dashboard {
         milestones: Vec::new(),
         warnings: Vec::new(),
         gates: HashMap::new(),
+        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;面板样例不用屏障
         git: GitFacts::absent(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     }

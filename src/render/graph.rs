@@ -41,8 +41,9 @@ type Overlay = (usize, usize, String, usize);
 /// 文字行 → 该行节点框的列区间表(路由让路判定用)。
 type BoxRanges = HashMap<usize, Vec<(usize, usize)>>;
 
-/// 屏障边(W1 输入缺口:`Dashboard` 暂不携带屏障,渲染入口以显式参数补位;
-/// TODO(model): 后续把台账 barriers 并入 `Dashboard` 后收敛回单参签名)。
+/// 图侧屏障边(布局/渲染输入;W1-007 起模型携带同构的
+/// `model::BarrierEdges`,默认入口 [`render_graph`] 自动换形消费,
+/// 显式传参路径保留给测试与手工构造)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BarrierEdges {
     /// 前置任务 id 集(after)。
@@ -236,10 +237,20 @@ fn layout_rows(layers: &[Vec<&TaskView>]) -> Vec<Vec<Cell>> {
     rows
 }
 
-/// 无屏障边的简化入口(接口契约签名);等价于 [`render_graph_with`] 传空屏障集。
+/// 默认入口:消费 `Dashboard.barriers`(W1-007 起模型携带屏障,双轨收敛——
+/// 默认版把模型屏障换形后委托 [`render_graph_with`];需要显式屏障集的
+/// 调用方仍可用后者)。
 #[must_use]
 pub fn render_graph(dash: &Dashboard, width: usize) -> String {
-    render_graph_with(dash, &[], width)
+    let barriers: Vec<BarrierEdges> = dash
+        .barriers
+        .iter()
+        .map(|barrier| BarrierEdges {
+            after: barrier.after.clone(),
+            unlocks: barrier.unlocks.clone(),
+        })
+        .collect();
+    render_graph_with(dash, &barriers, width)
 }
 
 /// 框化节点 DAG:任意跨层边均路由(竖穿 + 角折 + ▼ 入框顶)。

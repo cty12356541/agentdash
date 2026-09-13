@@ -62,6 +62,7 @@ fn w25_dash() -> Dashboard {
         }],
         warnings: Vec::new(),
         gates: HashMap::new(),
+        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
         git: GitFacts::absent(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
@@ -243,6 +244,7 @@ fn cjk_label_fits_box() {
         milestones: Vec::new(),
         warnings: Vec::new(),
         gates: HashMap::new(),
+        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
         git: GitFacts::absent(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
@@ -282,6 +284,7 @@ fn cycle_remaining_merges_into_last_layer() {
         milestones: Vec::new(),
         warnings: Vec::new(),
         gates: HashMap::new(),
+        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
         git: GitFacts::absent(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
@@ -308,6 +311,7 @@ fn lane_chain_forms_layers() {
         milestones: Vec::new(),
         warnings: Vec::new(),
         gates: HashMap::new(),
+        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
         git: GitFacts::absent(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     };

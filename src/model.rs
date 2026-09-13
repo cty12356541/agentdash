@@ -41,6 +41,16 @@ pub struct TaskView {
     pub note: Option<String>,
 }
 
+/// 屏障边视图(W1-007 起随模型携带;与 `render::graph` 的图侧类型同构,
+/// 渲染/布局入口各自换形消费)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BarrierEdges {
+    /// 前置任务 id 集(after)。
+    pub after: Vec<String>,
+    /// 放行任务 id 集(unlocks)。
+    pub unlocks: Vec<String>,
+}
+
 /// 里程碑视图:按台账 `wave` / `title` 聚合的任务完成度。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MilestoneView {
@@ -69,6 +79,8 @@ pub struct Dashboard {
     pub tasks: Vec<TaskView>,
     /// 里程碑列表(只来自台账;无契约时为空)。
     pub milestones: Vec<MilestoneView>,
+    /// 台账屏障边(after → unlocks;无契约时为空)。
+    pub barriers: Vec<BarrierEdges>,
     /// 三层收集的全部警告(契约降级/事件残缺行/引导文案)。
     pub warnings: Vec<String>,
     /// 验证门终态视图(取自 [`events::EventModel`],后到覆盖先到)。
@@ -85,13 +97,21 @@ pub struct Dashboard {
 /// 任何单源损坏都不 `panic`、不失败:降级为警告行,其余源照常。
 #[must_use]
 pub fn merge(repo: &Path) -> Dashboard {
+    merge_with_git(repo, git::snapshot(repo))
+}
+
+/// [`merge`] 的分级刷新变体(watch 30s 节流档,W1-007):git 快照由调用方
+/// 注入,使最重的 git 探测能压到 30s 边界、其余源照常按 interval 档重建;
+/// 合并语义与 [`merge`] 完全一致。
+#[must_use]
+pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
     let mut warnings = Vec::new();
-    let git = git::snapshot(repo);
 
     // 契约层(可信序最高):合法则任务/里程碑出自台账;损坏降级为警告行
     let mut contract_ok = false;
     let mut tasks = Vec::new();
     let mut milestones = Vec::new();
+    let mut barriers = Vec::new();
     let ledger_path = repo.join(".agentdash").join("ledger.json");
     if let Some(text) = read_source(&ledger_path, "ledger.json", &mut warnings) {
         match contract::parse_ledger(&text) {
@@ -100,6 +120,14 @@ pub fn merge(repo: &Path) -> Dashboard {
                 warnings.extend(ledger.warnings.iter().cloned());
                 tasks = contract_tasks(&ledger);
                 milestones.push(milestone_of(&ledger));
+                barriers = ledger
+                    .barriers
+                    .iter()
+                    .map(|barrier| BarrierEdges {
+                        after: barrier.after.clone(),
+                        unlocks: barrier.unlocks.clone(),
+                    })
+                    .collect();
             }
             // `Display` 已带 `corrupt ledger.json:` 前缀,作警告行直接透传
             Err(err) => warnings.push(err.to_string()),
@@ -128,6 +156,7 @@ pub fn merge(repo: &Path) -> Dashboard {
     Dashboard {
         tasks,
         milestones,
+        barriers,
         warnings,
         gates,
         git,
