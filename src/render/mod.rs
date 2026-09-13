@@ -144,6 +144,31 @@ pub fn display_width(text: &str) -> usize {
     text.chars().map(|ch| if is_wide(ch) { 2 } else { 1 }).sum()
 }
 
+/// 按显示宽截断到 `budget` 列内的最长前缀(panel 与详情栏同一算法;
+/// W2-003 起上收为渲染层公共助手,批三双轨收敛时 panel 私有副本并入)。
+pub(crate) fn truncate_width(text: &str, budget: usize) -> String {
+    for cut in (0..=text.chars().count()).rev() {
+        let prefix: String = text.chars().take(cut).collect();
+        if display_width(&prefix) <= budget {
+            return prefix;
+        }
+    }
+    String::new()
+}
+
+/// 截断并在发生截断时以 `…`(1 列)收尾;总宽仍不超 `budget`。
+pub(crate) fn elide(text: &str, budget: usize) -> String {
+    let cut = truncate_width(text, budget);
+    if cut.chars().count() == text.chars().count() {
+        return cut;
+    }
+    let mut out = truncate_width(text, budget.saturating_sub(1));
+    if display_width(&out) < budget {
+        out.push('…');
+    }
+    out
+}
+
 /// EAW W/F 判定(子集;全表待引入 `unicode-width` 依赖后替换——TODO(deps))。
 fn is_wide(ch: char) -> bool {
     matches!(
