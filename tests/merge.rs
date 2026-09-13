@@ -1,0 +1,267 @@
+//! W1-005 模型合并集成测试:三源齐全 / 仅 git / 全无 / 契约损坏 四组。
+//!
+//! agentdash 当前是纯二进制 crate(无 lib 目标),集成测试按 `#[path]` 在 crate
+//! 根挂载 `src` 模块树,使 model.rs 内部的 `crate::contract` / `crate::events` /
+//! `crate::sources::git` 顶层路径照常解析(mod 声明序经 rustfmt 字母序重排,
+//! 与解析无关)。
+
+#[path = "../src/contract.rs"]
+mod contract;
+#[path = "../src/events.rs"]
+mod events;
+#[path = "../src/model.rs"]
+mod model;
+#[path = "../src/sources/mod.rs"]
+mod sources;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use contract::TaskState;
+use events::GateState;
+use model::TaskView;
+use sources::git::GitFacts;
+
+/// 三源齐全组的合法台账:两个车道任务 + 一个未入车道任务,1/3 done。
+const LEDGER: &str = r#"{
+  "$schema": "agentdash.tasklog.v1",
+  "wave": "W1",
+  "title": "wave one",
+  "lanes": [{"name": "A-impl", "tasks": ["1", "2"]}],
+  "tasks": {
+    "1": {"label": "implement contract", "state": "active", "note": "fix round 2/5"},
+    "2": {"label": "implement events", "state": "done"},
+    "3": {"label": "implement git snapshot", "state": "pending"}
+  }
+}"#;
+
+/// 三源齐全组的事件流:第 2 行故意残缺,验证事件警告穿透;第 3 行覆盖第 1 行 gate。
+const EVENTS: &str = r#"{"kind":"gate","gate":"test","state":"running"}
+not json at all
+{"kind":"gate","gate":"test","state":"passed","detail":"3 passed"}
+"#;
+
+fn run_git(repo: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .status()
+        .expect("git should be on PATH for tests");
+    assert!(
+        status.success(),
+        "git {args:?} failed in {}",
+        repo.display()
+    );
+}
+
+fn next_dir(name: &str) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let serial = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "agentdash-w1-005-{name}-{}-{serial}",
+        std::process::id()
+    ))
+}
+
+fn cleanup(path: &Path) {
+    let _ = fs::remove_dir_all(path);
+}
+
+/// 建一个受控 fixture 仓库:git init + 本地身份 + 固定分支名 main + 2 次提交。
+fn fixture_repo(name: &str) -> PathBuf {
+    let repo = next_dir(name);
+    fs::create_dir_all(&repo).expect("create fixture dir");
+    run_git(&repo, &["init"]);
+    run_git(&repo, &["config", "user.name", "agentdash-test"]);
+    run_git(
+        &repo,
+        &["config", "user.email", "agentdash-test@example.com"],
+    );
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    run_git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    fs::write(repo.join("a.txt"), "first\n").expect("write a.txt");
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "one"]);
+    fs::write(repo.join("b.txt"), "second\n").expect("write b.txt");
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "two"]);
+    repo
+}
+
+/// 第一组:契约 + 事件 + git 三源齐全。
+#[test]
+fn three_sources_merge_into_dashboard() {
+    let repo = fixture_repo("three");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER).expect("write ledger.json");
+    fs::write(dir.join("events.jsonl"), EVENTS).expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+
+    // 契约层可信序最高:任务来自台账(车道序在前),而非 git 伪任务
+    assert_eq!(dash.tasks.len(), 3);
+    assert_eq!(
+        dash.tasks[0],
+        TaskView {
+            id: "1".to_owned(),
+            label: "implement contract".to_owned(),
+            state: TaskState::Active,
+            lane: Some("A-impl".to_owned()),
+            note: Some("fix round 2/5".to_owned()),
+        }
+    );
+    assert_eq!(dash.tasks[1].id, "2");
+    assert_eq!(dash.tasks[1].state, TaskState::Done);
+    assert_eq!(dash.tasks[1].lane.as_deref(), Some("A-impl"));
+    assert_eq!(dash.tasks[1].note, None);
+    assert_eq!(
+        dash.tasks[2].lane, None,
+        "未入任何车道的任务尾接,车道为 None"
+    );
+    assert_eq!(dash.tasks[2].label, "implement git snapshot");
+
+    // milestone 由 ledger wave/title 聚合:1/3 done
+    assert_eq!(dash.milestones.len(), 1);
+    let milestone = &dash.milestones[0];
+    assert_eq!(milestone.wave.as_deref(), Some("W1"));
+    assert_eq!(milestone.title, "wave one");
+    assert_eq!(milestone.done, 1);
+    assert_eq!(milestone.total, 3);
+    assert!(!milestone.is_complete());
+
+    // 事件层照常合并:gate 后到覆盖先到;残缺行警告穿透
+    assert_eq!(
+        dash.gates.get("test"),
+        Some(&GateState::Passed {
+            detail: "3 passed".to_owned(),
+        })
+    );
+    assert!(
+        dash.warnings
+            .iter()
+            .any(|w| w.contains("line 2: invalid JSON")),
+        "事件警告必须穿透到模型层: {:?}",
+        dash.warnings
+    );
+    assert!(
+        !dash.warnings.iter().any(|w| w.contains("corrupt")),
+        "合法台账不得产生 corrupt 警告: {:?}",
+        dash.warnings
+    );
+
+    // git 层始终采集快照;generated_at 为 RFC 3339 UTC 串
+    assert!(dash.git.present);
+    assert_eq!(dash.git.recent.len(), 2);
+    assert!(!dash.generated_at.is_empty());
+    assert!(dash.generated_at.ends_with('Z'));
+    cleanup(&repo);
+}
+
+/// 第二组:仅 git(无契约)→ 最近提交伪任务单链。
+#[test]
+fn git_only_repo_builds_pseudo_task_chain() {
+    let repo = fixture_repo("git-only");
+
+    let dash = model::merge(&repo);
+
+    assert!(dash.milestones.is_empty(), "milestone 只来自台账");
+    assert_eq!(dash.tasks.len(), 2, "recent 每条提交一个伪任务");
+    assert_eq!(dash.tasks[0].label, "two", "新提交在前(recent 序)");
+    assert_eq!(dash.tasks[1].label, "one");
+    assert_eq!(
+        dash.tasks[0].id,
+        dash.git.recent[0].split(' ').next().expect("sha token"),
+        "伪任务 id 取提交行的短 SHA token"
+    );
+    let mut ids: Vec<&str> = dash.tasks.iter().map(|t| t.id.as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 2, "伪任务 id 不得重复");
+    for task in &dash.tasks {
+        assert_eq!(task.state, TaskState::Pending, "伪任务恒为 pending");
+        assert_eq!(task.lane, None);
+        assert_eq!(task.note, None);
+    }
+    assert!(
+        dash.warnings.is_empty(),
+        "仅 git 是正常降级路径,不得告警: {:?}",
+        dash.warnings
+    );
+    assert!(dash.gates.is_empty());
+    assert!(dash.git.present);
+    cleanup(&repo);
+}
+
+/// 第三组:全无(无台账、无事件、非 git 仓)→ 空态 + 引导文案。
+#[test]
+fn nothing_at_all_yields_guidance() {
+    let dir = next_dir("empty");
+    fs::create_dir_all(&dir).expect("create plain dir");
+
+    let dash = model::merge(&dir);
+
+    assert_eq!(dash.tasks, Vec::<TaskView>::new());
+    assert!(dash.milestones.is_empty());
+    assert!(dash.gates.is_empty());
+    assert_eq!(dash.git, GitFacts::absent());
+    assert!(
+        dash.warnings
+            .iter()
+            .any(|w| w.contains(".agentdash/ledger.json") && w.contains("events.jsonl")),
+        "全无空态必须携带引导文案: {:?}",
+        dash.warnings
+    );
+    assert!(!dash.generated_at.is_empty());
+    cleanup(&dir);
+}
+
+/// 第四组:契约损坏 → 警告行 + 事件层照常 + git 伪任务兜底。
+#[test]
+fn corrupt_ledger_warns_and_event_layer_still_merges() {
+    let repo = fixture_repo("corrupt");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), "{ not json").expect("write broken ledger");
+    fs::write(
+        dir.join("events.jsonl"),
+        r#"{"kind":"gate","gate":"review","state":"passed","detail":"ok"}"#,
+    )
+    .expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+
+    assert!(
+        dash.warnings
+            .iter()
+            .any(|w| w.starts_with("corrupt ledger.json")),
+        "损坏契约必须降级为警告行: {:?}",
+        dash.warnings
+    );
+    assert_eq!(
+        dash.gates.get("review"),
+        Some(&GateState::Passed {
+            detail: "ok".to_owned(),
+        }),
+        "事件层不受契约损坏影响,照常合并"
+    );
+    assert_eq!(dash.tasks.len(), 2, "git 伪任务兜底");
+    assert!(dash.tasks.iter().all(|t| t.state == TaskState::Pending));
+    assert!(dash.milestones.is_empty());
+    assert!(
+        !dash.warnings.iter().any(|w| w.contains("no data sources")),
+        "git 在场时不得出现全无引导: {:?}",
+        dash.warnings
+    );
+    cleanup(&repo);
+}
+
+/// 附加:RFC 3339 纯函数钉死(闰日、纪元零点)。
+#[test]
+fn utc_timestamp_formats_known_epochs() {
+    assert_eq!(model::utc_timestamp(0), "1970-01-01T00:00:00Z");
+    assert_eq!(model::utc_timestamp(1_700_000_000), "2023-11-14T22:13:20Z");
+    assert_eq!(model::utc_timestamp(951_782_400), "2000-02-29T00:00:00Z");
+}
