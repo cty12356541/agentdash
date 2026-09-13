@@ -4,11 +4,6 @@
 //! 非致命偏差(未知 `$schema`、未声明 `profile` 的富态)→ 降级 + 记入 [`Ledger::warnings`];
 //! 未知字段一律忽略(`JSON` `Schema` 是发布给集成包的严格校验面,见 `schema/agentdash.tasklog.v1.json`)。
 
-// bin 目标尚未把 contract 接线进 main(W1-001 骨架;接线属后续渲染/汇总车道,不归本车道写集),
-// pub 项因此在 bin 目标触发 dead_code;tests/contract.rs 经 `#[path]` 引入后全量使用这些项。
-// 接线车道消费本模块后应删除本 allow。
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::fmt;
 

@@ -4,9 +4,6 @@
 //! 约定:目录无 `.git`、git 不可用、命令非零退出或单命令超时,一律降级为
 //! 空值(`GitFacts::absent()` / 字段空),绝不 panic、绝不阻塞渲染。
 
-// W1 阶段快照尚未被 render/oneline 接线(其他车道负责);接线落地后移除本允许。
-#![allow(dead_code)]
-
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};

@@ -1,8 +1,14 @@
 //! agentdash: agent progress dashboard CLI (W1-001 command skeleton).
 
+// W1 过渡:render 与 model 尚未接线进命令(W1-007+ 车道),bin 目标按死代码
+// 放行;接线车道消费后应删除本 allow。
+#![allow(dead_code)]
+
 mod contract;
 mod events;
 mod hook;
+mod model;
+mod render;
 mod sources;
 
 use std::process::ExitCode;

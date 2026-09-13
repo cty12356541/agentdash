@@ -6,9 +6,6 @@
 //! `ts` 保留原串不做时区运算,乱序容忍 = 后到事件按到达序处理。
 //! 残缺行(非合法 JSON / 缺关键字段 / 未知 kind)一律丢弃并收集警告,绝不中断重放。
 
-// 渲染/源接线在后续车道接入 main.rs;在那之前 bin 目标视本模块为死代码。
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use serde::Deserialize;
