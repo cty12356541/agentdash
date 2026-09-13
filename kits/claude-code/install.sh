@@ -36,6 +36,11 @@ rmdir "$target/.claude/agentdash/hooks" "$target/.claude/agentdash" 2>/dev/null 
 # --- M-2:目标仓 .gitignore 幂等追加 .agentdash/ ---
 gitignore="$target/.gitignore"
 if [ ! -f "$gitignore" ] || ! grep -qE '^[[:space:]]*\.agentdash/?[[:space:]]*$' "$gitignore"; then
+  # 末行无换行时先补一个:否则 .agentdash/ 粘上最后一行失效,且幂等检查永远失配
+  # ($(… ) 命令替换会吞掉尾部换行:尾字节是换行时结果为空,非换行时为该字符)
+  if [ -f "$gitignore" ] && [ -s "$gitignore" ] && [ -n "$(tail -c1 "$gitignore")" ]; then
+    printf '\n' >> "$gitignore"
+  fi
   printf '.agentdash/\n' >> "$gitignore"
 fi
 echo "[agentdash] .gitignore ensured: .agentdash/ ($gitignore)"

@@ -49,6 +49,13 @@ if (Test-Path -LiteralPath $gitignore) {
     $hasEntry = [bool](Select-String -LiteralPath $gitignore -Pattern '^\s*\.agentdash/?\s*$' -Quiet)
 }
 if (-not $hasEntry) {
+    # 末行无换行时先补一个:否则 .agentdash/ 粘上最后一行失效,且幂等检查永远失配
+    if (Test-Path -LiteralPath $gitignore) {
+        $text = [System.IO.File]::ReadAllText($gitignore)
+        if ($text.Length -gt 0 -and $text[-1] -ne "`n") {
+            [System.IO.File]::AppendAllText($gitignore, [Environment]::NewLine)
+        }
+    }
     # .NET 追加:UTF-8 无 BOM(BOM 会使 .gitignore 首行模式失配)
     [System.IO.File]::AppendAllText($gitignore, '.agentdash/' + [Environment]::NewLine)
 }

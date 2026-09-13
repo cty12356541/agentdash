@@ -9,7 +9,8 @@
 //!
 //! 铁律:自身任何失败(损坏/空 stdin、非对象载荷、IO 错误)一律静默退出 0,
 //! 绝不向宿主报错阻塞会话。并发追加经 `.agentdash/.lock` 文件锁自旋
-//! (`create_new` 循环,上限重试后按降级铁律退化直接写)保证零丢失。
+//! (`create_new` 循环,上限重试后按降级铁律退化直接写)保证零丢失;
+//! 持有方崩溃残留的超龄陈锁(mtime 超阈值)由后续获取方摘除自愈。
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -28,6 +29,9 @@ const EVENTS_NAME: &str = "events.jsonl";
 /// 锁自旋参数:上限重试后退化直接写(绝不让宿主 hook 长等待)。
 const LOCK_MAX_WAIT: Duration = Duration::from_secs(2);
 const LOCK_SLEEP: Duration = Duration::from_millis(2);
+/// 陈锁判定阈值:锁文件 mtime 距今超过该值视为持有方崩溃残留(正常持锁临界区
+/// 是毫秒级单行写入),可摘除自愈——否则此后每个 hook 都要白等 `LOCK_MAX_WAIT`。
+const LOCK_STALE: Duration = Duration::from_secs(10);
 
 /// hook 子命令入口。事件名来自 CLI 参数(如 `agentdash hook posttooluse`),
 /// 缺省时回退载荷 `hook_event_name`(老版本宿主防御;载荷只有 `tool_name` 时视为
@@ -217,9 +221,9 @@ fn on_subagent_stop(payload: &Map<String, Value>) {
     with_lock(&dir, || append_line(&dir, &event));
 }
 
-/// 临界区包装:拿到 `.lock`(`create_new` 自旋,超时退化)后执行 `f`,退出即删锁。
-/// 锁文件可能因进程崩溃残留:超时方按降级铁律直接写(单行小写入近似原子,
-/// 常态零丢失由锁保证)。
+/// 临界区包装:拿到 `.lock`(`create_new` 自旋,陈锁自愈,超时退化)后执行 `f`,
+/// 退出即删锁(仅在自己真持有才删)。持有方崩溃残留的陈锁由获取方摘除自愈;
+/// 自愈后仍拿不到时按降级铁律直接写(单行小写入近似原子,常态零丢失由锁保证)。
 fn with_lock(dir: &Path, f: impl FnOnce()) {
     if fs::create_dir_all(dir).is_err() {
         return; // 目录建不出来:无写目标,静默
@@ -232,8 +236,28 @@ fn with_lock(dir: &Path, f: impl FnOnce()) {
     }
 }
 
-/// 锁获取:先到先得(`create_new`);被占则自旋等待;超时/异常 → false(退化直接写)。
+/// 锁获取:先到先得(`create_new`);被占则自旋等待。锁文件 mtime 超过
+/// `LOCK_STALE` 判为陈锁(持有方已崩溃,不会再有人删它)→ 摘除后重抢:
+/// 等待前先查一次(陈锁不白等),自旋超时后再兜底一次(等待期间诞生的锁
+/// 也可能已超龄)。摘除与获取同走 `create_new` 原子语义——摘后他人先抢到
+/// 则按正常占用继续等/退化,可接受。最终拿不到 → false(退化直接写)。
 fn acquire_lock(lock_path: &Path) -> bool {
+    if is_stale_lock(lock_path) {
+        let _ = fs::remove_file(lock_path);
+    }
+    if spin_for_lock(lock_path) {
+        return true;
+    }
+    if is_stale_lock(lock_path) {
+        let _ = fs::remove_file(lock_path);
+        return try_create_lock(lock_path);
+    }
+    false
+}
+
+/// 自旋抢锁:`create_new` 循环,`LOCK_SLEEP` 步进,`LOCK_MAX_WAIT` 上限;
+/// 超时/异常(目录消失等)→ false。
+fn spin_for_lock(lock_path: &Path) -> bool {
     let deadline = Instant::now() + LOCK_MAX_WAIT;
     loop {
         match OpenOptions::new()
@@ -251,6 +275,25 @@ fn acquire_lock(lock_path: &Path) -> bool {
             Err(_) => return false,
         }
     }
+}
+
+/// 单次 `create_new` 抢锁(摘后重抢亦走此原子判定,避免"查后建"竞态)。
+fn try_create_lock(lock_path: &Path) -> bool {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)
+        .is_ok()
+}
+
+/// 陈锁判定:锁文件 mtime 距今超过 `LOCK_STALE`。metadata/mtime 取不到
+/// (恰被他人摘除)或 mtime 在未来(时钟偏差)→ 非陈锁,照常等待。
+fn is_stale_lock(lock_path: &Path) -> bool {
+    fs::metadata(lock_path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|mtime| SystemTime::now().duration_since(mtime).ok())
+        .is_some_and(|age| age >= LOCK_STALE)
 }
 
 /// 单行追加:整行(含换行)拼好后一次 `write_all`,锁内调用保证并发零丢失。
@@ -276,8 +319,11 @@ fn write_pending(dir: &Path, pending: &Value) {
     let _ = file.write_all(pending.to_string().as_bytes());
 }
 
-/// 验证门命令匹配:词序列 + 词边界 + 词间空白(承 Python 版 `\b` 正则语义):
-/// `xcargo test` 不匹配,`cd x && cargo clippy -- -D warnings` 匹配;按序首中即返。
+/// 验证门命令匹配:连续词序列 + 词边界(承 Python 版 `\bcargo\s+test\b` 的
+/// 相邻语义):目标序列的词必须在命令里**连续**出现,词间只容空白或一枚
+/// `&&`/`;` 分隔符,不得跨任意中间 token——`npm run test` 不匹配 npm-test、
+/// `go build ./... && test` 不匹配 go-test,而 `cargo build && cargo test`
+/// (后段连续)与 `cd x && cargo clippy -- -D warnings` 匹配;按序首中即返。
 fn gate_name(command: &str) -> Option<&'static str> {
     const PATTERNS: [&[&str]; 6] = [
         &["cargo", "test"],
@@ -301,25 +347,62 @@ fn gate_name(command: &str) -> Option<&'static str> {
         .find_map(|(words, name)| match_word_seq(command, words).then_some(name))
 }
 
-/// 词序列匹配:`\b`词`\s+`(词间一个以上空白)`\b`词…
+/// 连续词序列匹配:遍历首词的每个词边界完整出现,自该处确定性延链;任一
+/// occurrence 延链成功即真,全部失败即假(首词多 occurrence 时回溯重试,
+/// 承正则交替语义,如 `cargo; cargo test` 命中后段)。
 fn match_word_seq(haystack: &str, words: &[&str]) -> bool {
+    let Some(first) = words.first() else {
+        return true; // 仅 words 为空时可达;本模块恒传非空词序列
+    };
     let bytes = haystack.as_bytes();
     let mut pos = 0;
+    while let Some(at) = find_word(bytes, first, pos) {
+        if chain_matches(bytes, words, at) {
+            return true;
+        }
+        pos = at + 1;
+    }
+    false
+}
+
+/// 自 `start` 起按序匹配 `words`(首词起于 `start` 且词边界完整,调用方保证):
+/// 后续词必须恰起于前一词之后的分隔符收口处——只越过空白/`&&`/`;`,不跨任何
+/// 中间 token;每词词尾词边界完整(`cargo testing` 不匹配 cargo-test)。
+fn chain_matches(bytes: &[u8], words: &[&str], start: usize) -> bool {
+    let mut cursor = start;
     for (idx, word) in words.iter().enumerate() {
-        let Some(at) = find_word(bytes, word, pos) else {
-            return false;
-        };
-        let end = at + word.len();
+        if idx > 0 && !bytes[cursor..].starts_with(word.as_bytes()) {
+            return false; // 分隔符后第一个词字符处不是本词:序列不连续
+        }
+        cursor += word.len();
+        if cursor < bytes.len() && is_word_byte(bytes[cursor]) {
+            return false; // 词尾须词边界完整
+        }
         if idx + 1 == words.len() {
             return true;
         }
-        let gap = bytes[end..].iter().take_while(|b| is_ws_byte(**b)).count();
-        if gap == 0 {
-            return false; // 词间须有空白(正则 \s+)
+        let sep = separator_len(&bytes[cursor..]);
+        if sep == 0 {
+            return false; // 词间只容分隔符:粘连或隔其他 token 均不连续
         }
-        pos = end + gap;
+        cursor += sep;
     }
-    true // 仅 words 为空时可达;本模块恒传非空词序列
+    true
+}
+
+/// 词间分隔符长度:一段空白;或其前后可再围空白的一枚 `&&`/`;`。其余任何
+/// 字节(`|`、单词、路径…)都不构成分隔。
+fn separator_len(bytes: &[u8]) -> usize {
+    let lead = bytes.iter().take_while(|b| is_ws_byte(**b)).count();
+    let rest = &bytes[lead..];
+    let op = if rest.starts_with(b"&&") {
+        2
+    } else if rest.first() == Some(&b';') {
+        1
+    } else {
+        return lead; // 纯空白(可为 0):后续词须紧跟其收口处
+    };
+    lead + op + rest[op..].iter().take_while(|b| is_ws_byte(**b)).count()
 }
 
 /// 从 `from` 字节起找下一个词边界完整的 `word`。词字符按字节判:ASCII 字母数字、

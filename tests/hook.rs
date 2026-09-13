@@ -12,6 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Value, json};
 
@@ -315,6 +316,11 @@ fn gate_commands() {
         ("gh pr checks 12", Some("gh-pr-checks")),
         ("cargo  test", Some("cargo-test")), // 词间多空白(\s+)
         ("cargo\ttest", Some("cargo-test")), // 制表符空白
+        ("npm run test", None),              // 连续词序列:中间隔 run,不得跨 token 误命中 npm-test
+        ("cargo build && cargo test", Some("cargo-test")), // 后段含连续 cargo test
+        ("go build ./x && go test", Some("go-test")), // 后段含连续 go test
+        ("go build ./... && test", None),    // test 与 go 之间隔 build:不得跨 token 误命中
+        ("go build x/testdata", None),       // test 藏于 testdata(词尾无边界)且与 go 不连续
         ("cargo build --release", None),     // 非验证门
         ("python -m unittest discover -v", None),
         ("xcargo test", None), // 词边界:前缀粘连不匹配
@@ -649,4 +655,81 @@ fn concurrent_appends_zero_loss() {
             );
         }
     }
+}
+
+// ------------------------------------------------------------ 文件锁(陈锁自愈)
+
+fn lock_path(cwd: &Path) -> PathBuf {
+    cwd.join(".agentdash").join(".lock")
+}
+
+/// 预置 `.agentdash/.lock` 并把 mtime 回拨 `age_secs` 秒(0 = 新鲜锁),
+/// 模拟持有方崩溃残留的陈锁 / 在途的正常锁。
+fn seed_lock(cwd: &Path, age_secs: u64) {
+    let lock = lock_path(cwd);
+    fs::create_dir_all(lock.parent().unwrap()).expect("mkdir .agentdash");
+    fs::write(&lock, b"held-by-ghost").expect("write lock");
+    let f = fs::OpenOptions::new()
+        .write(true)
+        .open(&lock)
+        .expect("open lock for backdate");
+    f.set_times(
+        fs::FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(age_secs)),
+    )
+    .expect("backdate lock mtime");
+}
+
+fn subagentstop_payload(cwd: &Path, who: &str) -> Value {
+    json!({
+        "hook_event_name": "SubagentStop",
+        "cwd": cwd.to_string_lossy(),
+        "agent_name": who
+    })
+}
+
+#[test]
+fn stale_lock_self_heals_without_wait() {
+    let t = TempDir::new("stalelock");
+    seed_lock(t.path(), 30); // 超过 10s 陈锁阈值:应摘除立即重抢,不白等 LOCK_MAX_WAIT
+    let start = Instant::now();
+    let out = feed_payload(
+        "subagentstop",
+        &subagentstop_payload(t.path(), "after-stale"),
+        t.path(),
+    );
+    let elapsed = start.elapsed();
+    assert_silent_success(&out, "陈锁自愈回放");
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1, "陈锁自愈后应正常落盘");
+    assert_eq!(evs[0]["who"], "after-stale");
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "陈锁应摘除重抢而非白等 LOCK_MAX_WAIT 再退化: {elapsed:?}"
+    );
+    assert!(
+        !lock_path(t.path()).exists(),
+        "自愈获取的锁退出时应删除(残留则后续 hook 继续白等)"
+    );
+}
+
+#[test]
+fn fresh_lock_still_waits_then_degrades_in_place() {
+    let t = TempDir::new("freshlock");
+    seed_lock(t.path(), 0); // 阈值内的新鲜锁:不摘,自旋超时后按降级铁律退化直接写
+    let start = Instant::now();
+    let out = feed_payload(
+        "subagentstop",
+        &subagentstop_payload(t.path(), "degraded"),
+        t.path(),
+    );
+    let elapsed = start.elapsed();
+    assert_silent_success(&out, "新鲜锁退化回放");
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1, "退化路径仍应落盘(不丢事件)");
+    assert_eq!(evs[0]["who"], "degraded");
+    assert!(
+        elapsed >= Duration::from_millis(1500),
+        "新鲜锁应等满 LOCK_MAX_WAIT 再退化,不得误摘他人锁: {elapsed:?}"
+    );
+    assert!(lock_path(t.path()).exists(), "未持有锁不得删除他人锁文件");
 }
