@@ -1,7 +1,8 @@
 //! `events.jsonl` 事件流重放(W1-003)。
 //!
 //! 一行一 JSON(spec §4.2):`gate` / `agent` / `tool` 三类事件,hook 追加写入。
-//! 重放语义承 state.jsonl:身份首见、标签配对;同一 gate 后到状态覆盖先到;
+//! 重放语义承 state.jsonl:身份首见、gate 后到状态覆盖先到;agent 以 `who` 为主键,
+//! `task` 是可选注记(宿主 `SubagentStop` 载荷天然无 task,hook 侧只发 who)。
 //! `ts` 保留原串不做时区运算,乱序容忍 = 后到事件按到达序处理。
 //! 残缺行(非合法 JSON / 缺关键字段 / 未知 kind)一律丢弃并收集警告,绝不中断重放。
 
@@ -20,11 +21,12 @@ pub enum GateState {
     Failed { detail: String },
 }
 
-/// 仍活跃的子代理:`dispatched` 首见入表,`completed` 按 (who, task) 配对移除。
+/// 仍活跃的子代理:`dispatched` 按 `who` 首见入表(同 who 再派刷新 task 注记,不新建条目),
+/// `completed` 按 `who` 移除;`task` 为可选注记,有则带入显示,无则 [`None`]。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentEntry {
     pub who: String,
-    pub task: String,
+    pub task: Option<String>,
     /// 首次 `dispatched` 事件的 `ts` 原串(缺省为空串)。
     pub first_seen: String,
 }
@@ -36,7 +38,7 @@ pub struct EventModel {
     pub agents: Vec<AgentEntry>,
     /// gate 终态(后态覆盖前态)。
     pub gates: HashMap<String, GateState>,
-    /// tool 事件计数(按 `tool` 名逐行累加)。
+    /// tool 事件计数(仅 `end` 相位计数,按 `tool` 名累加)。
     pub tools: HashMap<String, u64>,
     /// 残缺行警告(格式 `line {n}: ...`,行号从 1 起计,空行不计)。
     pub warnings: Vec<String>,
@@ -51,6 +53,7 @@ struct RawEvent {
     state: Option<String>,
     detail: Option<String>,
     event: Option<String>,
+    phase: Option<String>,
     task: Option<String>,
     who: Option<String>,
     tool: Option<String>,
@@ -112,24 +115,27 @@ fn apply_gate(model: &mut EventModel, raw: RawEvent, line_no: usize) {
 }
 
 fn apply_agent(model: &mut EventModel, raw: RawEvent, line_no: usize) {
-    let (Some(who), Some(task)) = (raw.who, raw.task) else {
+    let Some(who) = raw.who else {
         model.warnings.push(format!(
-            "line {line_no}: agent event with missing `who`/`task`, line dropped"
+            "line {line_no}: agent event with missing `who`, line dropped"
         ));
         return;
     };
     match raw.event.as_deref() {
         Some("dispatched") => {
-            // 首见:已在表中则保留原 first_seen,不重复入表
-            if !model.agents.iter().any(|a| a.who == who && a.task == task) {
-                model.agents.push(AgentEntry {
+            // who 主键:已在表中则刷新 task 注记(first_seen 保留首见),否则新条目入表;
+            // task 缺省记 None(宿主 SubagentStop 载荷天然无 task)
+            match model.agents.iter_mut().find(|a| a.who == who) {
+                Some(entry) => entry.task = raw.task,
+                None => model.agents.push(AgentEntry {
                     who,
-                    task,
+                    task: raw.task,
                     first_seen: raw.ts.unwrap_or_default(),
-                });
+                }),
             }
         }
-        Some("completed") => model.agents.retain(|a| !(a.who == who && a.task == task)),
+        // 按 who 移除(与 task 注记无关);未在册的 who(幽灵)静默忽略
+        Some("completed") => model.agents.retain(|a| a.who != who),
         _ => model.warnings.push(format!(
             "line {line_no}: agent event with unknown or missing `event`, line dropped"
         )),
@@ -143,6 +149,16 @@ fn apply_tool(model: &mut EventModel, raw: RawEvent, line_no: usize) {
         ));
         return;
     };
-    let count = model.tools.entry(tool).or_default();
-    *count = count.saturating_add(1);
+    // 计数口径钉死:仅 `end` 相位计数;`start` 相位静默忽略;
+    // 缺相 / 未知相按残缺行丢弃 + 警告
+    match raw.phase.as_deref() {
+        Some("end") => {
+            let count = model.tools.entry(tool).or_default();
+            *count = count.saturating_add(1);
+        }
+        Some("start") => {}
+        _ => model.warnings.push(format!(
+            "line {line_no}: tool event with unknown or missing `phase`, line dropped"
+        )),
+    }
 }
