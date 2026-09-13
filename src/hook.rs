@@ -562,56 +562,27 @@ fn local_utc_offset(_utc: i64) -> i64 {
     }
 }
 
-#[cfg(all(unix, target_pointer_width = "64"))]
-/// 本地 UTC 偏移秒:libc `localtime_r` 的 `tm_gmtoff`(glibc/musl/macOS 的
-/// `struct tm` 布局一致:9×int 后按对齐排 long;LP64 下 `time_t` = i64)。
+#[cfg(unix)]
+/// 本地 UTC 偏移秒:libc `localtime_r` 的 `tm_gmtoff`(`struct tm` 布局由 libc
+/// crate 保证,glibc/musl/macOS 与非 LP64 全覆盖,不再手搓布局)。
 fn local_utc_offset(utc: i64) -> i64 {
-    #[repr(C)]
-    struct Tm {
-        sec: i32,
-        min: i32,
-        hour: i32,
-        mday: i32,
-        mon: i32,
-        year: i32,
-        wday: i32,
-        yday: i32,
-        isdst: i32,
-        gmtoff: i64,
-    }
-    unsafe extern "C" {
-        fn localtime_r(time: *const i64, out: *mut Tm) -> *mut Tm;
-    }
-    // SAFETY:localtime_r 线程安全(结果写入调用方缓冲,不触碰静态区);Tm 的
-    // repr(C) 布局与主流 libc struct tm 一致,仅读取 gmtoff 字段。
+    // SAFETY:`localtime_r` 线程安全(结果只写入调用方缓冲 `tm`,不触碰静态区);
+    // `t` 与 `tm` 均为本栈帧内变量,调用期间线程不被重入。仅读取 `tm_gmtoff`。
     unsafe {
-        let mut tm = Tm {
-            sec: 0,
-            min: 0,
-            hour: 0,
-            mday: 0,
-            mon: 0,
-            year: 0,
-            wday: 0,
-            yday: 0,
-            isdst: 0,
-            gmtoff: 0,
-        };
+        let mut tm: libc::tm = std::mem::zeroed();
+        // try_into 而非直接赋值:32 位 glibc 目标 `time_t` = i32,i64 直接赋值
+        // E0308;LP64 下为恒等转换,永不走 fallback(超界时间戳退化为 epoch)。
+        #[allow(clippy::useless_conversion)] // LP64 恒等转换被该 lint 误报
+        let t: libc::time_t = utc.try_into().unwrap_or(0);
         // &raw 显式化:CI stable(1.98)clippy borrow_as_ptr 拒绝隐式借用转裸指针
-        if localtime_r(&raw const utc, &raw mut tm).is_null() {
+        if libc::localtime_r(&raw const t, &raw mut tm).is_null() {
             return 0;
         }
-        if tm.gmtoff.abs() >= 86_400 {
+        if tm.tm_gmtoff.abs() >= 86_400 {
             return 0; // 离谱偏移按损坏处理,退化 UTC
         }
-        tm.gmtoff
+        tm.tm_gmtoff as i64
     }
-}
-
-#[cfg(all(unix, not(target_pointer_width = "64")))]
-/// 非 LP64:不做 `struct tm` 布局假设,退化为 UTC 偏移。
-fn local_utc_offset(_utc: i64) -> i64 {
-    0
 }
 
 #[cfg(not(any(windows, unix)))]
