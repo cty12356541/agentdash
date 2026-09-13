@@ -24,8 +24,7 @@ pub fn render_oneline(dash: &Dashboard) -> String {
         }
     }
     let rest = dash.tasks.len() - done - active;
-    // TODO(model):Dashboard 无 activity(agent)字段;agent 计数 W1 恒 0
-    let agents = 0;
+    let agents = dash.agents.len();
     let ms = match active_milestone(dash) {
         // I7:带上活跃里程碑;无则整体省略
         Some(milestone) => format!("{} ", ms_id(milestone)),

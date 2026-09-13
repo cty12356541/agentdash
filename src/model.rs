@@ -10,7 +10,6 @@
 //! `crate::sources::git`)消费兄弟模块,必须挂在 crate 根(main.rs `mod model;`
 //! 或测试 `#[path]` 根挂载),不得嵌套在子模块里。
 
-use std::collections::HashMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -72,6 +71,28 @@ impl MilestoneView {
     }
 }
 
+/// 在跑子代理视图(事件层活跃表投影;渲染层按需取字段)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentView {
+    /// agent 身份(事件 `who`)。
+    pub who: String,
+    /// 任务注记(事件未携带时为 [`None`])。
+    pub task: Option<String>,
+    /// 首次 `dispatched` 的 `ts` 原串(缺省为空串)。
+    pub since: String,
+}
+
+/// 验证门视图(后到覆盖先到折尽后的终态快照)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateView {
+    /// 门名(事件 `gate`)。
+    pub name: String,
+    /// 终态,取事件词表:`running` / `passed` / `failed`。
+    pub state: String,
+    /// 终态 detail 原样携带(`running` 恒为空串)。
+    pub detail: String,
+}
+
 /// 仪表盘完整模型(渲染层的唯一输入面)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dashboard {
@@ -83,8 +104,11 @@ pub struct Dashboard {
     pub barriers: Vec<BarrierEdges>,
     /// 三层收集的全部警告(契约降级/事件残缺行/引导文案)。
     pub warnings: Vec<String>,
-    /// 验证门终态视图(取自 [`events::EventModel`],后到覆盖先到)。
-    pub gates: HashMap<String, GateState>,
+    /// 在跑 agent 视图(事件活跃表投影;按 `who` 字典序,输出确定)。
+    pub agents: Vec<AgentView>,
+    /// 验证门终态视图(取自 [`events::EventModel`],后到覆盖先到;
+    /// 按门名字典序,输出确定)。
+    pub gates: Vec<GateView>,
     /// git 快照事实(始终采集,与契约存在与否无关)。
     pub git: GitFacts,
     /// 合并时刻的 UTC 时间(RFC 3339 串,如 `2026-09-13T08:30:00Z`)。
@@ -135,11 +159,39 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
     }
 
     // 事件层:永远照常合并(契约缺失或损坏都不影响)
-    let mut gates = HashMap::new();
+    let mut agents = Vec::new();
+    let mut gates = Vec::new();
     let events_path = repo.join(".agentdash").join("events.jsonl");
     if let Some(text) = read_source(&events_path, "events.jsonl", &mut warnings) {
         let model = events::replay(text.lines().map(str::to_owned));
-        gates = model.gates;
+        // 投影时就地排序,渲染层免排序即可拿到确定性输出
+        agents = model
+            .agents
+            .into_iter()
+            .map(|agent| AgentView {
+                who: agent.who,
+                task: agent.task,
+                since: agent.first_seen,
+            })
+            .collect();
+        agents.sort_by(|a, b| a.who.cmp(&b.who));
+        gates = model
+            .gates
+            .into_iter()
+            .map(|(name, state)| {
+                let (state, detail) = match state {
+                    GateState::Running => ("running", String::new()),
+                    GateState::Passed { detail } => ("passed", detail),
+                    GateState::Failed { detail } => ("failed", detail),
+                };
+                GateView {
+                    name,
+                    state: state.to_owned(),
+                    detail,
+                }
+            })
+            .collect();
+        gates.sort_by(|a, b| a.name.cmp(&b.name));
         warnings.extend(model.warnings);
     }
 
@@ -148,8 +200,8 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         tasks = git_tasks(&git);
     }
 
-    // 全无空态 → 引导文案(空任务 + 无 gate + 非 git 仓)
-    if tasks.is_empty() && gates.is_empty() && !git.present {
+    // 全无空态 → 引导文案(空任务 + 无 gate、无 agent + 非 git 仓)
+    if tasks.is_empty() && gates.is_empty() && agents.is_empty() && !git.present {
         warnings.push(EMPTY_GUIDANCE.to_owned());
     }
 
@@ -158,6 +210,7 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         milestones,
         barriers,
         warnings,
+        agents,
         gates,
         git,
         generated_at: now_rfc3339(),

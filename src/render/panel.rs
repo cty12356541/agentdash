@@ -1,14 +1,13 @@
 //! 终端面板:区块 A 在跑/健康 → B 轨迹 → C 车道(W1-006,移植自 claude-dash
 //! `dashlib/render_panel.py`)。ANSI 着色、按显示宽自适应,只读不落盘。
 
-use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use super::{
     C_ACTIVE, C_BOLD, C_DONE, C_END, C_PENDING, C_STALLED, C_WARN, Visual, active_milestone,
     clamp_width, display_width, milestone_state, project_label, round_half_even, visual,
 };
-use crate::events::GateState;
-use crate::model::{Dashboard, MilestoneView, TaskView};
+use crate::model::{AgentView, Dashboard, GateView, MilestoneView, TaskView};
 
 /// 面板默认宽。
 pub const DEFAULT_PANEL_WIDTH: usize = 64;
@@ -34,9 +33,8 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
             Visual::Pending | Visual::Blocked => resting += 1,
         }
     }
-    // TODO(model):Dashboard 无 activity(agent)字段,agent 计数 W1 恒 0;
-    // 无 velocity(commits_7d)字段,吞吐段暂缺。
-    let agents = 0;
+    // TODO(model):Dashboard 无 velocity(commits_7d)字段,吞吐段暂缺(W2-T2)。
+    let agents = dash.agents.len();
 
     // 页眉:项目 · 活跃里程碑
     let active_ms = active_milestone(dash);
@@ -57,20 +55,21 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     ));
     lines.push("═".repeat(width));
 
-    // 区块 A:在跑 / 健康
+    // 区块 A:在跑 / 健康(在跑 agents → 验证门终态)
     lines.push(format!("{C_BOLD}在跑 / 健康{C_END}"));
-    // TODO(model):无 activity / stalled 列表字段(在跑 agent、卡死任务名);
-    // 健康区改列验证门终态(Dashboard.gates 为现有字段中最贴近项)。
-    let gates: BTreeMap<&str, &GateState> = dash
-        .gates
-        .iter()
-        .map(|(name, state)| (name.as_str(), state))
-        .collect();
-    for (name, state) in &gates {
-        lines.push(gate_line(name, state));
-    }
-    if gates.is_empty() {
+    if dash.agents.is_empty() && dash.gates.is_empty() {
         lines.push(format!("{C_DONE}✓ 无活跃/卡死{C_END}"));
+    } else {
+        if dash.agents.is_empty() {
+            lines.push(format!("{C_PENDING}· 无活跃{C_END}"));
+        }
+        for agent in &dash.agents {
+            lines.push(agent_line(agent, width));
+        }
+        // 模型层保证 gates 按门名字典序,此处按存储序直出
+        for gate in &dash.gates {
+            lines.push(gate_line(gate, width));
+        }
     }
     for warning in &dash.warnings {
         lines.push(format!("{C_WARN}⚠ {warning}{C_END}"));
@@ -156,15 +155,54 @@ fn task_line(task: &TaskView) -> String {
     )
 }
 
-/// 验证门行:running ▶ / passed ✓ / failed ⚑,detail 非空时带尾注。
-fn gate_line(name: &str, state: &GateState) -> String {
-    match state {
-        GateState::Running => format!("{C_ACTIVE}▶ {name}{C_END}"),
-        GateState::Passed { detail } if detail.is_empty() => format!("{C_DONE}✓ {name}{C_END}"),
-        GateState::Passed { detail } => format!("{C_DONE}✓ {name} · {detail}{C_END}"),
-        GateState::Failed { detail } if detail.is_empty() => format!("{C_STALLED}⚑ {name}{C_END}"),
-        GateState::Failed { detail } => format!("{C_STALLED}⚑ {name} · {detail}{C_END}"),
+/// 在跑 agent 行:`▶ <who>[ · <task>][ · <MM-DDTHH:MM>]`,超宽整行截断。
+fn agent_line(agent: &AgentView, width: usize) -> String {
+    let mut line = format!("▶ {}", agent.who);
+    if let Some(task) = agent.task.as_deref() {
+        let _ = write!(line, " · {task}");
     }
+    if !agent.since.is_empty() {
+        let _ = write!(line, " · {}", clock_slice(&agent.since));
+    }
+    format!("{C_ACTIVE}{}{C_END}", elide(&line, width))
+}
+
+/// 验证门行:running ▶ / passed ✓ / failed ✗,detail 非空时带尾注并按宽截断。
+fn gate_line(gate: &GateView, width: usize) -> String {
+    let (mark, color) = match gate.state.as_str() {
+        "passed" => ("✓", C_DONE),
+        "failed" => ("✗", C_STALLED),
+        _ => ("▶", C_ACTIVE), // running;未知态兜底按进行中呈现
+    };
+    let mut line = format!("{mark} {}", gate.name);
+    if !gate.detail.is_empty() {
+        let _ = write!(line, " · {}", gate.detail);
+    }
+    format!("{color}{}{C_END}", elide(&line, width))
+}
+
+/// 按显示宽截断到 `budget` 列内的最长前缀(与里程碑标题同一算法)。
+fn truncate_width(text: &str, budget: usize) -> String {
+    for cut in (0..=text.chars().count()).rev() {
+        let prefix: String = text.chars().take(cut).collect();
+        if display_width(&prefix) <= budget {
+            return prefix;
+        }
+    }
+    String::new()
+}
+
+/// 截断并在发生截断时以 `…`(1 列)收尾;总宽仍不超 `budget`。
+fn elide(text: &str, budget: usize) -> String {
+    let cut = truncate_width(text, budget);
+    if cut.chars().count() == text.chars().count() {
+        return cut;
+    }
+    let mut out = truncate_width(text, budget.saturating_sub(1));
+    if display_width(&out) < budget {
+        out.push('…');
+    }
+    out
 }
 
 /// 里程碑行:`  <id> <标题按显示宽截断> <▓░ x/n> <state>`——窄侧栏下不折行错位。
@@ -185,14 +223,7 @@ fn milestone_line(milestone: &MilestoneView, width: usize) -> String {
     let id = ms_id(milestone);
     let reserve = display_width(&format!("  {id}  {bar} {state}")) + 1;
     let budget = width.saturating_sub(reserve).max(4);
-    let mut title = String::new();
-    for cut in (0..=milestone.title.chars().count()).rev() {
-        let prefix: String = milestone.title.chars().take(cut).collect();
-        if display_width(&prefix) <= budget {
-            title = prefix;
-            break;
-        }
-    }
+    let title = truncate_width(&milestone.title, budget);
     let color = if state == "done" { C_DONE } else { C_ACTIVE };
     format!("  {color}{id} {title} {bar} {state}{C_END}")
 }

@@ -20,8 +20,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use contract::TaskState;
-use events::GateState;
-use model::TaskView;
+use model::{AgentView, GateView, TaskView};
 use sources::git::GitFacts;
 
 /// 三源齐全组的合法台账:两个车道任务 + 一个未入车道任务,1/3 done。
@@ -41,6 +40,14 @@ const LEDGER: &str = r#"{
 const EVENTS: &str = r#"{"kind":"gate","gate":"test","state":"running"}
 not json at all
 {"kind":"gate","gate":"test","state":"passed","detail":"3 passed"}
+"#;
+
+/// agent/gate 投影组的事件流:bob 先派、alice 后派(断言 who 字典序重排),
+/// bob 同 who 再派刷新 task 注记(首见 ts 保留),一个 passed gate。
+const EVENTS_AGENTS: &str = r#"{"kind":"agent","event":"dispatched","who":"bob","task":"写 render","ts":"2026-09-13T09:00:00Z"}
+{"kind":"agent","event":"dispatched","who":"alice","ts":"2026-09-13T08:30:00Z"}
+{"kind":"gate","gate":"test","state":"passed","detail":"5 passed"}
+{"kind":"agent","event":"dispatched","who":"bob","task":"改写 render"}
 "#;
 
 fn run_git(repo: &Path, args: &[&str]) {
@@ -134,11 +141,15 @@ fn three_sources_merge_into_dashboard() {
 
     // 事件层照常合并:gate 后到覆盖先到;残缺行警告穿透
     assert_eq!(
-        dash.gates.get("test"),
-        Some(&GateState::Passed {
+        dash.gates,
+        vec![GateView {
+            name: "test".to_owned(),
+            state: "passed".to_owned(),
             detail: "3 passed".to_owned(),
-        })
+        }],
+        "gate 视图按名排序、state 取事件词表"
     );
+    assert!(dash.agents.is_empty(), "本组无 agent 事件,活跃表必须为空");
     assert!(
         dash.warnings
             .iter()
@@ -191,6 +202,7 @@ fn git_only_repo_builds_pseudo_task_chain() {
         dash.warnings
     );
     assert!(dash.gates.is_empty());
+    assert!(dash.agents.is_empty());
     assert!(dash.git.present);
     cleanup(&repo);
 }
@@ -206,6 +218,7 @@ fn nothing_at_all_yields_guidance() {
     assert_eq!(dash.tasks, Vec::<TaskView>::new());
     assert!(dash.milestones.is_empty());
     assert!(dash.gates.is_empty());
+    assert!(dash.agents.is_empty());
     assert_eq!(dash.git, GitFacts::absent());
     assert!(
         dash.warnings
@@ -241,10 +254,12 @@ fn corrupt_ledger_warns_and_event_layer_still_merges() {
         dash.warnings
     );
     assert_eq!(
-        dash.gates.get("review"),
-        Some(&GateState::Passed {
+        dash.gates,
+        vec![GateView {
+            name: "review".to_owned(),
+            state: "passed".to_owned(),
             detail: "ok".to_owned(),
-        }),
+        }],
         "事件层不受契约损坏影响,照常合并"
     );
     assert_eq!(dash.tasks.len(), 2, "git 伪任务兜底");
@@ -253,6 +268,54 @@ fn corrupt_ledger_warns_and_event_layer_still_merges() {
     assert!(
         !dash.warnings.iter().any(|w| w.contains("no data sources")),
         "git 在场时不得出现全无引导: {:?}",
+        dash.warnings
+    );
+    cleanup(&repo);
+}
+
+/// 第五组(W2-001):活跃 agent 表与 gate 终态投影进 Dashboard——
+/// who 字典序重排(派发序 bob 在前)、同 who 再派刷新 task 且保留首见 ts。
+#[test]
+fn agents_and_gates_project_into_dashboard_sorted() {
+    let repo = fixture_repo("agents");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER).expect("write ledger.json");
+    fs::write(dir.join("events.jsonl"), EVENTS_AGENTS).expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+
+    assert_eq!(dash.agents.len(), 2, "两活跃 agent 入模");
+    assert_eq!(
+        dash.agents[0],
+        AgentView {
+            who: "alice".to_owned(),
+            task: None,
+            since: "2026-09-13T08:30:00Z".to_owned(),
+        },
+        "who 字典序:alice 压过派发更早的 bob"
+    );
+    assert_eq!(
+        dash.agents[1],
+        AgentView {
+            who: "bob".to_owned(),
+            task: Some("改写 render".to_owned()),
+            since: "2026-09-13T09:00:00Z".to_owned(),
+        },
+        "同 who 再派刷新 task 注记,first_seen 保留首见"
+    );
+    assert_eq!(
+        dash.gates,
+        vec![GateView {
+            name: "test".to_owned(),
+            state: "passed".to_owned(),
+            detail: "5 passed".to_owned(),
+        }],
+        "gate 由重放终态映射,detail 原样携带"
+    );
+    assert!(
+        dash.warnings.is_empty(),
+        "合法事件流不得携带警告: {:?}",
         dash.warnings
     );
     cleanup(&repo);

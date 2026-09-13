@@ -23,8 +23,6 @@ mod render;
 #[path = "../src/sources/mod.rs"]
 mod sources;
 
-use std::collections::HashMap;
-
 use contract::TaskState;
 use model::{Dashboard, MilestoneView, TaskView};
 use render::display_width;
@@ -63,9 +61,10 @@ fn w25_dash() -> Dashboard {
             total: 4,
         }],
         warnings: Vec::new(),
-        gates: HashMap::new(),
         barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
         git: GitFacts::absent(),
+        agents: Vec::new(),
+        gates: Vec::new(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -245,9 +244,10 @@ fn cjk_label_fits_box() {
         tasks: vec![task("T1", "中文标签宽字符测试", "A")],
         milestones: Vec::new(),
         warnings: Vec::new(),
-        gates: HashMap::new(),
         barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
         git: GitFacts::absent(),
+        agents: Vec::new(),
+        gates: Vec::new(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let layers = layout_layers(&dash, &[]);
@@ -285,9 +285,10 @@ fn cycle_remaining_merges_into_last_layer() {
         ],
         milestones: Vec::new(),
         warnings: Vec::new(),
-        gates: HashMap::new(),
         barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
         git: GitFacts::absent(),
+        agents: Vec::new(),
+        gates: Vec::new(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let barriers = vec![BarrierEdges {
@@ -312,9 +313,10 @@ fn lane_chain_forms_layers() {
         tasks: vec![task("X2", "后手", "L"), task("X1", "先手", "L")],
         milestones: Vec::new(),
         warnings: Vec::new(),
-        gates: HashMap::new(),
         barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
         git: GitFacts::absent(),
+        agents: Vec::new(),
+        gates: Vec::new(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let layers = layout_layers(&dash, &[]);

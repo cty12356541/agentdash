@@ -22,7 +22,6 @@ mod sources;
 #[path = "../src/tui.rs"]
 mod tui;
 
-use std::collections::HashMap;
 use std::fs;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -69,7 +68,6 @@ fn w25_dash() -> Dashboard {
             total: 4,
         }],
         warnings: Vec::new(),
-        gates: HashMap::new(),
         barriers: vec![
             BarrierEdges {
                 after: vec!["T1".into()],
@@ -81,6 +79,8 @@ fn w25_dash() -> Dashboard {
             },
         ],
         git: GitFacts::absent(),
+        agents: Vec::new(),
+        gates: Vec::new(),
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -91,9 +91,10 @@ fn empty_dash() -> Dashboard {
         tasks: Vec::new(),
         milestones: Vec::new(),
         warnings: Vec::new(),
-        gates: HashMap::new(),
         barriers: Vec::new(),
         git: GitFacts::absent(),
+        agents: Vec::new(),
+        gates: Vec::new(),
         generated_at: GENERATED_AT.into(),
     }
 }

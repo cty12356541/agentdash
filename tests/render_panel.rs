@@ -18,11 +18,8 @@ mod render;
 #[path = "../src/sources/mod.rs"]
 mod sources;
 
-use std::collections::HashMap;
-
 use contract::TaskState;
-use events::GateState;
-use model::{Dashboard, MilestoneView, TaskView};
+use model::{AgentView, Dashboard, GateView, MilestoneView, TaskView};
 use render::{DEFAULT_PANEL_WIDTH, display_width, render_oneline, render_panel};
 use sources::git::GitFacts;
 
@@ -33,6 +30,14 @@ fn task(id: &str, label: &str, lane: &str) -> TaskView {
         state: TaskState::Done,
         lane: Some(lane.into()),
         note: None,
+    }
+}
+
+fn agent(who: &str, task: Option<&str>, since: &str) -> AgentView {
+    AgentView {
+        who: who.into(),
+        task: task.map(str::to_owned),
+        since: since.into(),
     }
 }
 
@@ -52,7 +57,8 @@ fn w25_dash() -> Dashboard {
             total: 4,
         }],
         warnings: Vec::new(),
-        gates: HashMap::new(),
+        agents: Vec::new(), // W2-001:模型新增 agents 字段;面板样例默认无在跑 agent
+        gates: Vec::new(),
         barriers: Vec::new(), // W1-007:模型新增 barriers 字段;面板样例不用屏障
         git: GitFacts::absent(),
         generated_at: "2026-09-13T08:30:00Z".into(),
@@ -64,8 +70,9 @@ fn dash_with(tasks: Vec<TaskView>) -> Dashboard {
         tasks,
         milestones: Vec::new(),
         warnings: Vec::new(),
-        gates: HashMap::new(),
-        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;面板样例不用屏障
+        agents: Vec::new(),
+        gates: Vec::new(),
+        barriers: Vec::new(),
         git: GitFacts::absent(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
@@ -208,33 +215,92 @@ fn rich_states_map_to_visual_marks() {
 
 #[test]
 fn gates_fill_health_section() {
-    let mut gates = HashMap::new();
-    gates.insert(
-        "test".to_owned(),
-        GateState::Passed {
-            detail: "3 passed".to_owned(),
-        },
-    );
-    gates.insert("build".to_owned(), GateState::Running);
-    gates.insert(
-        "lint".to_owned(),
-        GateState::Failed {
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    dash.gates = vec![
+        GateView {
+            name: "build".into(),
+            state: "running".into(),
             detail: String::new(),
         },
-    );
-    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
-    dash.gates = gates;
+        GateView {
+            name: "lint".into(),
+            state: "failed".into(),
+            detail: String::new(),
+        },
+        GateView {
+            name: "test".into(),
+            state: "passed".into(),
+            detail: "3 passed".into(),
+        },
+    ];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
-    assert!(plain.contains("✓ test · 3 passed"));
-    assert!(plain.contains("▶ build"));
+    assert!(plain.contains("▶ build"), "running gate 视觉 ▶");
     assert!(
-        plain.contains("⚑ lint"),
-        "失败 gate 视觉 ⚑,空 detail 不带尾注"
+        plain.contains("✗ lint"),
+        "failed gate 视觉 ✗,空 detail 不带尾注"
     );
+    assert!(plain.contains("✓ test · 3 passed"));
     assert!(
         !plain.contains("无活跃/卡死"),
         "有 gate 时健康区列 gate,不打空态"
     );
+    assert!(
+        plain.contains("· 无活跃"),
+        "无在跑 agent 时 agents 位打占位"
+    );
+}
+
+#[test]
+fn gate_detail_truncates_with_ellipsis_within_width() {
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    let long = "x".repeat(200);
+    dash.gates = vec![GateView {
+        name: "test".into(),
+        state: "failed".into(),
+        detail: long.clone(),
+    }];
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    for line in plain.lines() {
+        assert!(
+            display_width(line) <= DEFAULT_PANEL_WIDTH,
+            "零溢出: {line:?}"
+        );
+    }
+    assert!(plain.contains('✗'));
+    assert!(plain.contains('…'), "超长 detail 截断以 … 收尾");
+    assert!(!plain.contains(&long), "detail 不整串上板");
+}
+
+#[test]
+fn agents_block_lists_running_agents_with_task_and_since() {
+    let mut dash = w25_dash();
+    dash.agents = vec![
+        agent("alice", None, "2026-09-13T08:30:00Z"),
+        agent("bob", Some("写 panel 区块"), "2026-09-13T09:00:00Z"),
+    ];
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("▶ alice · 09-13T08:30"),
+        "无注记 agent 行 = who + since 切片: {plain}"
+    );
+    assert!(plain.contains("▶ bob · 写 panel 区块 · 09-13T09:00"));
+    assert!(plain.contains("· 2 agents"), "页眉 agents 计数接真值");
+    assert!(!plain.contains("无活跃"), "有在跑 agent 不打空态");
+    for line in plain.lines() {
+        assert!(
+            display_width(line) <= DEFAULT_PANEL_WIDTH,
+            "零溢出: {line:?}"
+        );
+    }
+}
+
+#[test]
+fn agents_without_since_render_who_only() {
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    dash.agents = vec![agent("carol", None, "")];
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(plain.contains("▶ carol"), "缺 task/since 只列 who: {plain}");
+    assert!(!plain.contains("· 无活跃"), "有在跑 agent 不打占位");
 }
 
 #[test]
@@ -294,5 +360,16 @@ fn oneline_carries_active_milestone_and_counts() {
     assert_eq!(
         out, "[dash] agentdash W25 ✓2▶2·0 ⚑0 ·0ag",
         "活跃里程碑带波次号"
+    );
+}
+
+#[test]
+fn oneline_counts_running_agents() {
+    let mut dash = w25_dash();
+    dash.agents = vec![agent("alice", None, ""), agent("bob", Some("任务乙"), "")];
+    assert_eq!(
+        render_oneline(&dash),
+        "[dash] agentdash ✓4▶0·0 ⚑0 ·2ag",
+        "·Nag 接 agents 真值"
     );
 }
