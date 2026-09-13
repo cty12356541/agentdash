@@ -564,7 +564,7 @@ fn local_utc_offset(_utc: i64) -> i64 {
 
 #[cfg(all(unix, target_pointer_width = "64"))]
 /// 本地 UTC 偏移秒:libc `localtime_r` 的 `tm_gmtoff`(glibc/musl/macOS 的
-/// struct tm 布局一致:9×int 后按对齐排 long;LP64 下 time_t = i64)。
+/// `struct tm` 布局一致:9×int 后按对齐排 long;LP64 下 `time_t` = i64)。
 fn local_utc_offset(utc: i64) -> i64 {
     #[repr(C)]
     struct Tm {
@@ -609,7 +609,7 @@ fn local_utc_offset(utc: i64) -> i64 {
 }
 
 #[cfg(all(unix, not(target_pointer_width = "64")))]
-/// 非 LP64:不做 struct tm 布局假设,退化为 UTC 偏移。
+/// 非 LP64:不做 `struct tm` 布局假设,退化为 UTC 偏移。
 fn local_utc_offset(_utc: i64) -> i64 {
     0
 }
