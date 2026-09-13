@@ -42,6 +42,8 @@ fn task(id: &str, label: &str, lane: &str) -> TaskView {
         state: TaskState::Done,
         lane: Some(lane.into()),
         note: None,
+        fix_round: None,
+        since: None,
     }
 }
 
@@ -276,6 +278,8 @@ fn cycle_remaining_merges_into_last_layer() {
         state: TaskState::Pending,
         lane: Some(lane.into()),
         note: None,
+        fix_round: None,
+        since: None,
     };
     let dash = Dashboard {
         tasks: vec![

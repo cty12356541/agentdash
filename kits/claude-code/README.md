@@ -24,12 +24,28 @@ agentdash --version                           # 自检
 
 ## 安装
 
+### 方式 A:安装脚本(装进目标项目 `.claude/`)
+
 ```bash
 # 类 Unix
 ./install.sh [目标项目目录]
 # Windows PowerShell
 .\install.ps1 [-Target <目标项目目录>]
 ```
+
+### 方式 B:插件市场(Claude Code)
+
+```bash
+cargo install --path <agentdash 仓库根>   # 前置:二进制已在 PATH
+claude plugin marketplace add cty12356541/agentdash
+claude plugin install agentdash@agentdash-marketplace
+```
+
+插件体即本目录(`hooks/hooks.json` 三钩子 + `skills/agentdash/`),不用安装脚本、
+不改目标项目 settings.json。**注意**:hooks.json 的 `agentdash hook <event>` 直调
+PATH 上的二进制,市场包**不内嵌二进制**——缺二进制时 hook 按降级铁律静默跳过,
+需先 `cargo install --path` 或从 Releases 下载放入 PATH(Windows release 资产
+后续手动挂;预构建分发策略见仓库 `bin/README.md`)。
 
 安装动作:检测 `agentdash` 在 PATH(缺失给安装指引并退出)→ skill 复制到
 `<目标>/.claude/skills/agentdash/` → 三钩子以固定命令 `agentdash hook <event> || true`
@@ -41,8 +57,6 @@ agentdash --version                           # 自检
 `settings.json.bak-agentdash` 再重建。`install.sh` 合并既有 settings.json 需要 `jq`
 (无 jq 时不改用户文件,打印手工合并指引;settings.json 不存在则最小重建,无需 jq);
 `install.ps1` 用 PowerShell 原生 JSON,无任何额外依赖。
-
-插件市场分发时直接用 `hooks/hooks.json`(`claude plugin marketplace add`),无需安装脚本。
 
 ## 事件映射(spec §4.2)
 

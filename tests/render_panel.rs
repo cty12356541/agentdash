@@ -30,6 +30,8 @@ fn task(id: &str, label: &str, lane: &str) -> TaskView {
         state: TaskState::Done,
         lane: Some(lane.into()),
         note: None,
+        fix_round: None,
+        since: None,
     }
 }
 
@@ -180,6 +182,8 @@ fn rich_states_map_to_visual_marks() {
             state: TaskState::FixRound,
             lane: Some("B".into()),
             note: Some("fix round 2/5".into()),
+            fix_round: Some((2, 5)),
+            since: None,
         },
         TaskView {
             id: "T3".into(),
@@ -187,6 +191,8 @@ fn rich_states_map_to_visual_marks() {
             state: TaskState::Review,
             lane: Some("B".into()),
             note: None,
+            fix_round: None,
+            since: None,
         },
         TaskView {
             id: "T4".into(),
@@ -194,16 +200,25 @@ fn rich_states_map_to_visual_marks() {
             state: TaskState::Blocked,
             lane: None,
             note: None,
+            fix_round: None,
+            since: None,
         },
     ];
     let dash = dash_with(tasks);
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
-    assert!(plain.contains("✓ T1 done 活"));
+    let lines: Vec<&str> = plain.lines().collect();
     assert!(
-        plain.contains("⚑ T2 返修轮 · fix round 2/5"),
-        "fix-round 视觉 ⚑,note 透传"
+        lines.contains(&"✓ T1 done 活"),
+        "无 note/fix_round 任务行零尾缀: {plain}"
     );
-    assert!(plain.contains("▶ T3 复核中"), "review 视觉 ▶");
+    assert!(
+        plain.contains("⚑ T2 返修轮 · fix round 2/5 R2/5"),
+        "fix-round 视觉 ⚑,note 透传 + R<N>/<M> 尾缀"
+    );
+    assert!(
+        lines.contains(&"▶ T3 复核中"),
+        "review 视觉 ▶,无 fix_round 不加尾缀"
+    );
     assert!(plain.contains("· T4 挂起"), "blocked 视觉同 pending 点");
     assert!(
         plain.contains("✓1 ▶2 ·1 ⚑1 "),
@@ -309,6 +324,128 @@ fn warnings_render_as_flagged_lines() {
     dash.warnings = vec!["corrupt ledger.json: bad".to_owned()];
     let out = render_panel(&dash, DEFAULT_PANEL_WIDTH);
     assert!(out.contains("\x1b[33m⚠ corrupt ledger.json: bad\x1b[0m"));
+}
+
+/// W2-002:每条警告独立一行、`⚠ ` 前缀;超宽警告按显示宽截断以 … 收尾,不顶穿版面。
+#[test]
+fn warnings_truncate_each_line_within_width() {
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    let long = format!("ledger: {}", "x".repeat(200));
+    dash.warnings = vec![
+        long.clone(),
+        "ledger: unknown `$schema` `v0`".to_owned(),
+        "events.jsonl line 2: invalid JSON".to_owned(),
+    ];
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    for line in plain.lines() {
+        assert!(
+            display_width(line) <= DEFAULT_PANEL_WIDTH,
+            "警告行零溢出: {line:?}"
+        );
+    }
+    assert!(
+        plain.contains("⚠ ledger: unknown `$schema` `v0`"),
+        "短警告整行上板"
+    );
+    assert!(plain.contains("⚠ ledger: xxx"), "长警告以 ⚠ 前缀起步");
+    assert!(plain.contains('…'), "截断行以 … 收尾");
+    assert!(!plain.contains(&long), "长警告不整串上板");
+}
+
+/// W2-002:契约任务 `since` 距 `generated_at` 超 2h(常量阈值,严格大于)→ 行尾 ⚑;
+/// 恰到 2h、不足、无戳、坏戳均不打。
+#[test]
+fn stale_since_flags_task_row_after_threshold() {
+    let tasks = vec![
+        {
+            let mut stale = task("T1", "停滞任务", "A");
+            stale.state = TaskState::Active; // ⚑ 收紧后仅非 done(裁定 2026-09-14)
+            stale.since = Some("2026-09-13T06:00:00Z".into()); // 2.5h 前
+            stale
+        },
+        {
+            let mut boundary = task("T2", "临界任务", "A");
+            boundary.since = Some("2026-09-13T06:30:00Z".into()); // 恰 2h
+            boundary
+        },
+        {
+            let mut fresh = task("T3", "新鲜任务", "A");
+            fresh.since = Some("2026-09-13T08:00:00Z".into()); // 30m 前
+            fresh
+        },
+        {
+            let mut cross = task("T4", "跨日任务", "A");
+            cross.state = TaskState::Active;
+            cross.since = Some("2026-09-12T20:00:00Z".into()); // 前一日 12.5h
+            cross
+        },
+        {
+            let mut broken = task("T5", "坏戳任务", "A");
+            broken.since = Some("not-a-time".into()); // 解析不了不虚报
+            broken
+        },
+        task("T6", "无戳任务", "A"), // since None
+    ];
+    let dash = dash_with(tasks); // generated_at = 2026-09-13T08:30:00Z
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    let lines: Vec<&str> = plain.lines().collect();
+    assert!(
+        lines.contains(&"▶ T1 停滞任务 ⚑"),
+        "超 2h 停滞任务行尾 ⚑: {plain}"
+    );
+    assert!(
+        lines.contains(&"✓ T2 临界任务"),
+        "恰 2h 不打 ⚑(严格大于阈值)"
+    );
+    assert!(lines.contains(&"✓ T3 新鲜任务"));
+    assert!(
+        lines.contains(&"▶ T4 跨日任务 ⚑"),
+        "跨日时刻差按历法日差计算"
+    );
+    assert!(lines.contains(&"✓ T5 坏戳任务"), "坏 since 不虚报 ⚑");
+    assert!(lines.contains(&"✓ T6 无戳任务"));
+}
+
+/// W2-002:速度线以里程碑计数近似吞吐(最近 3 波 done 均值,银行家舍入);
+/// 单里程碑信息不足不打,≥2 里程碑才出现。
+#[test]
+fn speed_line_needs_two_milestones_and_averages_last_three() {
+    // 单里程碑:无速度线
+    let dash = w25_dash();
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(!plain.contains("速度"), "单里程碑不打速度线: {plain}");
+
+    let wave = |wave: &str, done: usize| MilestoneView {
+        wave: Some(wave.into()),
+        title: "波".into(),
+        done,
+        total: 9,
+    };
+
+    // 双里程碑:均值 (4+1)/2 = 2.5 → 五成双 → 2
+    let mut dash = w25_dash();
+    dash.milestones.push(wave("W26", 1));
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("速度 2 任务/波次"),
+        "双里程碑显示最近波次均值 (4+1)/2→2: {plain}"
+    );
+
+    // 三里程碑:窗口=全部 → (4+4+1)/3 = 3
+    dash.milestones.insert(0, wave("W24", 4));
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("速度 3 任务/波次"),
+        "三里程碑均值 (4+4+1)/3=3: {plain}"
+    );
+
+    // 四里程碑:窗口只取最近 3 波 (4+4+1)/3=3;全平均 (9+4+4+1)/4=4.5 会得 4
+    dash.milestones.insert(0, wave("W23", 9));
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("速度 3 任务/波次"),
+        "窗口只取最近 3 波,陈旧波次不入均: {plain}"
+    );
 }
 
 #[test]
