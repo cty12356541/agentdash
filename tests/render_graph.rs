@@ -116,8 +116,8 @@ fn at(line: &str, col: usize) -> char {
     ' '
 }
 
-fn plain_rows(dash: &Dashboard, barriers: &[BarrierEdges]) -> Vec<String> {
-    strip_ansi(&render_graph(&dash, DEFAULT_GRAPH_WIDTH))
+fn plain_rows(dash: &Dashboard, _barriers: &[BarrierEdges]) -> Vec<String> {
+    strip_ansi(&render_graph(dash, DEFAULT_GRAPH_WIDTH))
         .lines()
         .map(str::to_owned)
         .collect()
@@ -339,7 +339,7 @@ fn lane_chain_forms_layers() {
 #[test]
 fn width_rules_and_clamp() {
     let dash = w25_dash();
-    let barriers = barriers_of(&dash);
+    let _barriers = barriers_of(&dash);
     let lines: Vec<String> = render_graph(&dash, 46).lines().map(str::to_owned).collect();
     assert_eq!(lines[0], "agentdash · DAG");
     assert_eq!(lines[1], "─".repeat(46));
@@ -393,7 +393,7 @@ fn hit_test_targets_box_region() {
 #[test]
 fn done_tasks_render_green_with_ansi() {
     let dash = w25_dash();
-    let barriers = barriers_of(&dash);
+    let _barriers = barriers_of(&dash);
     let out = render_graph(&dash, DEFAULT_GRAPH_WIDTH);
     assert!(out.contains("\x1b[32m"), "done 绿");
     assert!(out.contains('▼') && out.contains('│'), "连接符在位");
