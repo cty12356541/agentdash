@@ -31,13 +31,19 @@ Arguments:
   watch --once  Render a single frame and exit (implied when stdin is not a TTY)
 
 Options:
-  -h, --help  Print help";
+  -V, --version  Print version
+  -h, --help     Print help";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         None | Some("-h" | "--help") => {
             println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        // 自检入口:安装指引(README ×2 / kits ×1)以 `agentdash --version` 收尾
+        Some("-V" | "--version") => {
+            println!("agentdash {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         Some("hook") => {

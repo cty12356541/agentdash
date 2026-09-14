@@ -25,7 +25,7 @@ const CACHE_DIR: &str = ".agentdash";
 const CACHE_SUBDIR: &str = "cache";
 const CACHE_NAME: &str = "gh.json";
 /// 缓存新鲜度阈值:mtime 距今小于该值直接读缓存,不发起子进程。
-const CACHE_TTL: Duration = Duration::from_secs(120);
+const CACHE_TTL: Duration = Duration::from_mins(2);
 /// 单条 gh 命令的超时上限;超时按"不可用"处理,不拖住仪表盘。
 const GH_TIMEOUT: Duration = Duration::from_secs(5);
 /// 子进程退出状态的轮询间隔。
