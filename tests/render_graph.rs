@@ -404,19 +404,28 @@ fn done_tasks_render_green_with_ansi() {
     assert!(out.contains('▼') && out.contains('│'), "连接符在位");
 }
 
-// ---------- 屏障只进图视图(panel/oneline 不随 barriers 变化) ----------
+// ---------- 屏障分流:W3-002 起 panel 承载屏障行,oneline 仍不进 ----------
 
 #[test]
-fn barriers_reach_graph_views_only() {
+fn barriers_reach_panel_but_not_oneline() {
     let with_bars = w25_dash();
     let mut without = w25_dash();
     without.barriers.clear();
-    // 面板屏障行尚未渲染(见 render::panel 的 TODO):模型入模前后,
-    // panel/oneline 输出必须逐字一致——屏障面只能由 graph 视图承载
-    assert_eq!(
-        render::render_panel(&with_bars, render::DEFAULT_PANEL_WIDTH),
-        render::render_panel(&without, render::DEFAULT_PANEL_WIDTH),
-        "panel 输出不随 barriers 变化"
+    // W3-002 起面板渲染屏障行:有屏障出 ⇕ 行、无屏障零残留(精确形态
+    // 断言在 tests/render_panel.rs);oneline 仍不承载屏障——有无屏障
+    // 输出逐字一致
+    let with_panel = strip_ansi(&render::render_panel(
+        &with_bars,
+        render::DEFAULT_PANEL_WIDTH,
+    ));
+    let without_panel = strip_ansi(&render::render_panel(&without, render::DEFAULT_PANEL_WIDTH));
+    assert!(
+        with_panel.contains('⇕'),
+        "panel 输出随 barriers 出屏障行: {with_panel}"
+    );
+    assert!(
+        !without_panel.contains('⇕'),
+        "无屏障零残留: {without_panel}"
     );
     assert_eq!(
         render::render_oneline(&with_bars),

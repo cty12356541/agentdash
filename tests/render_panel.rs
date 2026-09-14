@@ -818,3 +818,77 @@ fn ledger_without_events_renders_no_missing_warning() {
     assert!(plain.contains("▶ 1 唯一任务"), "台账任务照常上板: {plain}");
     cleanup(&repo);
 }
+
+// ---------- W3-002 面板屏障行(after → unlocks 紧凑一行) ----------
+
+/// W3-002:台账屏障上面板——车道区之后按声明序每屏障一行
+/// `  ⇕ <after 逗号表> → <unlocks 逗号表>`;after/unlocks 任务 id 逐字
+/// 出现在对应行,语义与 graph 的 after→unlocks 边同向。
+#[test]
+fn barrier_lines_render_after_lane_section() {
+    const LEDGER: &str = r#"{
+      "$schema": "agentdash.tasklog.v1",
+      "wave": "W30",
+      "title": "屏障样例",
+      "tasks": {
+        "02": {"label": "先手任务甲", "state": "done"},
+        "04": {"label": "先手任务乙", "state": "done"},
+        "05": {"label": "后手任务", "state": "pending"},
+        "06": {"label": "再后手任务", "state": "pending"}
+      },
+      "barriers": [
+        {"id": "B1", "after": ["02", "04"], "unlocks": ["05"]},
+        {"id": "B2", "after": ["05"], "unlocks": ["06"]}
+      ]
+    }"#;
+    let repo = fixture_repo("panel-barriers");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER).expect("write ledger.json");
+
+    let dash = model::merge(&repo);
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    let lines: Vec<&str> = plain.lines().collect();
+
+    let b1 = lines
+        .iter()
+        .position(|line| *line == "  ⇕ 02,04 → 05")
+        .unwrap_or_else(|| panic!("屏障 B1 行(after 02,04 → unlocks 05)应上板: {plain}"));
+    let b2 = lines
+        .iter()
+        .position(|line| *line == "  ⇕ 05 → 06")
+        .unwrap_or_else(|| panic!("屏障 B2 行(after 05 → unlocks 06)应上板: {plain}"));
+    let lane_header = lines
+        .iter()
+        .position(|line| *line == "车道 / 任务")
+        .expect("车道区头在场");
+    let last_task = lines
+        .iter()
+        .rposition(|line| *line == "· 06 再后手任务")
+        .expect("台账任务行在场");
+    assert!(
+        b1 > lane_header && b1 > last_task && b2 > last_task,
+        "屏障行在车道/任务区之后: B1={b1} B2={b2} 车道头={lane_header} 末任务={last_task}"
+    );
+    assert!(b1 < b2, "屏障按台账声明序排列: {plain}");
+    for line in plain.lines() {
+        assert!(
+            display_width(line) <= DEFAULT_PANEL_WIDTH,
+            "屏障行零溢出: {line:?}"
+        );
+    }
+    cleanup(&repo);
+}
+
+/// W3-002 负断言:无屏障的面板零残留——不打 ⇕ 行、不打屏障区块标题,
+/// 也不虚占版面。
+#[test]
+fn no_barrier_residue_without_barriers() {
+    let dash = dash_with(vec![task("T1", "实现契约", "A")]); // barriers 恒空
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(!plain.contains('⇕'), "无屏障不得出 ⇕ 行: {plain}");
+    assert!(
+        !plain.lines().any(|line| line.contains(" → ")),
+        "无屏障不得出箭头行: {plain}"
+    );
+}

@@ -9,7 +9,9 @@ use super::{
     visual,
 };
 use crate::contract::TaskState;
-use crate::model::{AgentView, Dashboard, GateView, MilestoneView, TaskView, parse_fix_round};
+use crate::model::{
+    AgentView, BarrierEdges, Dashboard, GateView, MilestoneView, TaskView, parse_fix_round,
+};
 
 /// 面板默认宽。
 pub const DEFAULT_PANEL_WIDTH: usize = 64;
@@ -125,10 +127,27 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
         lines.push(format!("{C_BOLD}车道 / 任务{C_END}"));
         let lane_groups = lane_groups(&dash.tasks);
         push_lane_lines(&mut lines, &lane_groups, &dash.generated_at);
-        // TODO(render):屏障行(claude-dash `  {barrier}`)——模型已携带 barriers
-        // (T7 入模),面板侧渲染仍未做,待后续车道
     }
+    // 区块 C′:屏障行(W3-002;claude-dash `  {barrier}`)——车道区之后按
+    // 台账声明序直出,语义与 graph 的 after→unlocks 边同向
+    push_barrier_lines(&mut lines, &dash.barriers, width);
     lines.join("\n")
+}
+
+/// 屏障行(W3-002):`  ⇕ <after 逗号表> → <unlocks 逗号表>`,台账声明序;
+/// 无屏障不产出任何行(零残留,不打标题/空态)。屏障 id 未随模型入模
+/// ([`BarrierEdges`] 只承载 after/unlocks),不虚标 `B<N>`。after/unlocks
+/// 按台账声明原样直出(graph 侧对未知 id 的过滤是布局约束,面板是声明
+/// 视图,照单全收)。超宽整行截断。
+fn push_barrier_lines(lines: &mut Vec<String>, barriers: &[BarrierEdges], width: usize) {
+    for barrier in barriers {
+        let body = format!(
+            "  ⇕ {} → {}",
+            barrier.after.join(","),
+            barrier.unlocks.join(",")
+        );
+        lines.push(format!("{C_PENDING}{}{C_END}", elide(&body, width)));
+    }
 }
 
 /// PR / 远程区块(W2-007):`#<号> <标题>` + 逐 check 行;超宽整行截断。
