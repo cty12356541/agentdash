@@ -3,7 +3,7 @@
   "wave": "W3",
   "title": "W3 收口:验证清偿 + 模型扩展",
   "profile": "sdd",
-  "note": "速度线如实注:纯契约场景任务 since 同源(恒台账 mtime)跨度为 0 不显示,W3-006 测试已钉;本仓 .agentdash/events.jsonl 有 ≥2 条不同 ts 真实事件,render panel 速度行点亮(见 evidence/w3-close-panel.txt)。",
+  "note": "速度线如实注:纯契约场景任务 since 同源(恒台账 mtime)跨度为 0 不显示,W3-006 测试已钉;本仓 .agentdash/events.jsonl 有 ≥2 条不同 ts 真实事件,render panel 速度行点亮(见 docs/superpowers/reports/2026-09-14-w3-closeout-frames/w3-close-panel.txt)。",
   "lanes": [
     {"name": "批一-信息接线", "tasks": ["01", "02"]},
     {"name": "批二-交互跃迁", "tasks": ["03", "04", "05"]},
