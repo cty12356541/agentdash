@@ -63,8 +63,9 @@ fn w25_dash() -> Dashboard {
         }],
         warnings: Vec::new(),
         barriers: w25_barriers(),
-        // W3-001 fixture 钉固:图标题项目名走 `GitFacts::root`,不再隐性
-        // 依赖测试 cwd 恰名 agentdash(root 缺省时回退 cwd 目录名)
+        // W3-004 D3 起:图标题项目名走 `project` 字段(见下),不再读
+        // `GitFacts::root`;此处钉固保留为零行为夹具,防口径回摆时再度
+        // 隐性依赖测试 cwd 恰名 agentdash
         git: GitFacts {
             root: Some("agentdash".to_owned()),
             ..GitFacts::absent()
@@ -72,6 +73,7 @@ fn w25_dash() -> Dashboard {
         agents: Vec::new(),
         remote: None,
         gates: Vec::new(),
+        event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
@@ -257,6 +259,7 @@ fn cjk_label_fits_box() {
         agents: Vec::new(),
         remote: None,
         gates: Vec::new(),
+        event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
@@ -302,6 +305,7 @@ fn cycle_remaining_merges_into_last_layer() {
         agents: Vec::new(),
         remote: None,
         gates: Vec::new(),
+        event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
@@ -332,6 +336,7 @@ fn lane_chain_forms_layers() {
         agents: Vec::new(),
         remote: None,
         gates: Vec::new(),
+        event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: "2026-09-13T08:30:00Z".into(),
     };

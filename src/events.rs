@@ -10,6 +10,8 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use crate::model::rfc3339_to_secs;
+
 /// 验证门终态:同 gate 后到事件覆盖先到。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateState {
@@ -37,6 +39,11 @@ pub struct EventModel {
     pub gates: HashMap<String, GateState>,
     /// tool 事件计数(仅 `end` 相位计数,按 `tool` 名累加)。
     pub tools: HashMap<String, u64>,
+    /// 事件流活动窗 ts 极值(W3-006,纪元秒):全部已知 kind(gate/agent/
+    /// tool)事件的可解析 `ts` 最小/最大值;合格窗判定(max > min)收口在
+    /// model 侧,这里只存极值事实。
+    pub ts_min: Option<u64>,
+    pub ts_max: Option<u64>,
     /// 残缺行警告(格式 `line {n}: ...`,行号从 1 起计,空行不计)。
     pub warnings: Vec<String>,
 }
@@ -73,6 +80,16 @@ pub fn replay(lines: impl Iterator<Item = String>) -> EventModel {
                 .push(format!("line {line_no}: invalid JSON, line dropped"));
             continue;
         };
+        // W3-006:活动窗极值折叠——全部已知 kind(gate/agent/tool)事件的
+        // `ts` 都是会话活动证据,即便该行因缺关键字段被按残缺丢弃;ts 缺失
+        // 或不可解析、未知 kind 与残缺 JSON 行不参与。这里只存极值事实,
+        // 「≥2 条不同 ts」的合格窗判定(max > min)收口在 model 侧。
+        if matches!(raw.kind.as_str(), "gate" | "agent" | "tool")
+            && let Some(secs) = raw.ts.as_deref().and_then(rfc3339_to_secs)
+        {
+            model.ts_min = Some(model.ts_min.map_or(secs, |min| min.min(secs)));
+            model.ts_max = Some(model.ts_max.map_or(secs, |max| max.max(secs)));
+        }
         match raw.kind.as_str() {
             "gate" => apply_gate(&mut model, raw, line_no),
             "agent" => apply_agent(&mut model, raw, line_no),

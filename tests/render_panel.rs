@@ -70,7 +70,8 @@ fn w25_dash() -> Dashboard {
         // W3-001 fixture 钉固:项目名走 `GitFacts::root`,不再隐性依赖测试
         // cwd 恰名 agentdash(root 缺省时 project_label 回退 cwd 目录名)
         git: pinned_git(),
-        remote: None, // W2-007:模型新增 remote 字段;面板样例默认无远程探测
+        remote: None,          // W2-007:模型新增 remote 字段;面板样例默认无远程探测
+        event_span_secs: None, // W3-006:速度线事件活动窗;样例默认无
         // W3-004 D3:项目名上模型,渲染层只读不猜
         project: "agentdash".into(),
         generated_at: "2026-09-13T08:30:00Z".into(),
@@ -88,6 +89,7 @@ fn dash_with(tasks: Vec<TaskView>) -> Dashboard {
         // 同 w25_dash:钉固 root 去 cwd 依赖(W3-001)
         git: pinned_git(),
         remote: None,
+        event_span_secs: None, // W3-006:速度线事件活动窗;样例默认无
         project: "agentdash".into(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
@@ -428,10 +430,11 @@ fn stale_since_flags_task_row_after_threshold() {
     assert!(lines.contains(&"✓ T6 无戳任务"));
 }
 
-/// W3-004:速度线改真实吞吐口径——done 任务数 / 任务 `since` 跨度小时数,
-/// ≥2 里程碑**且**跨度 > 0 才打(`速度 N.N tasks/h`);轨迹区多里程碑逐行。
-/// fixture 事件流(两条 dispatched,`first_seen` 相距 5h)回放出任务时间戳,
-/// 21 done / 5h = 4.2 钉死数值。
+/// W3-004:速度线真实吞吐口径——done 任务数 / 跨度小时数,≥2 里程碑**且**
+/// 跨度 > 0 才打(`速度 N.N tasks/h`);轨迹区多里程碑逐行。W3-006 起
+/// 事件窗优先,本例 `event_span_secs` 缺省(`None`)正好钉死任务 `since`
+/// 跨度的回退半边:fixture 事件流(两条 dispatched,`first_seen` 相距 5h)
+/// 回放出任务时间戳,21 done / 5h = 4.2 钉死数值。
 #[test]
 fn speed_line_is_tasks_per_hour_over_since_span() {
     const EVENTS: &str = concat!(
@@ -490,6 +493,7 @@ fn speed_line_is_tasks_per_hour_over_since_span() {
 
 /// W3-004 负断言:速度线生效条件不满足一律不打(不虚报)——单里程碑、
 /// 双里程碑但任务 since 全同戳(跨度 0)、双里程碑但无可解析时间戳。
+/// 事件窗实参为缺省 `None`,同钉 W3-006 回退半边的负路径。
 #[test]
 fn speed_line_hidden_unless_two_milestones_and_positive_span() {
     let ms = |wave: &str| MilestoneView {
@@ -527,6 +531,64 @@ fn speed_line_hidden_unless_two_milestones_and_positive_span() {
     dash.tasks = vec![stamped(None), stamped(None)];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
     assert!(!plain.contains("速度"), "无时间戳不打速度线: {plain}");
+}
+
+/// W3-006:速度行点亮自事件活动窗——任务无 `since`(真实契约形态:恒同
+/// 台账 mtime),事件窗 1h、21 done → `  速度 21.0 tasks/h`。W2-002 的
+/// 「多里程碑面板含速度线」承诺就此真实可达。
+#[test]
+fn speed_line_renders_from_event_activity_window() {
+    let ms = |wave: &str, done: usize, total: usize| MilestoneView {
+        wave: Some(wave.into()),
+        title: "波".into(),
+        done,
+        total,
+    };
+    let mut dash = dash_with(vec![task("T1", "任务甲", "A"), task("T2", "任务乙", "A")]);
+    dash.milestones = vec![ms("W1", 10, 10), ms("W2", 11, 11)];
+    dash.event_span_secs = Some(3_600); // 活动窗 1h
+
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("  速度 21.0 tasks/h"),
+        "21 done / 1h 活动窗 = 21.0 tasks/h: {plain}"
+    );
+    for line in plain.lines() {
+        assert!(
+            display_width(line) <= DEFAULT_PANEL_WIDTH,
+            "零溢出: {line:?}"
+        );
+    }
+}
+
+/// W3-006 负断言(事件窗半边):活动窗缺失(`None`)或退化(全同刻
+/// `Some(0)`)且任务无 `since` → 不打;单里程碑即便活动窗在场也不打。
+#[test]
+fn speed_line_hidden_without_event_window_or_gate() {
+    let ms = |wave: &str| MilestoneView {
+        wave: Some(wave.into()),
+        title: "波".into(),
+        done: 1,
+        total: 2,
+    };
+    let unstamped = || task("T1", "任务", "A"); // since 恒 None
+
+    // 双里程碑 + 无活动窗 + 任务无戳
+    let mut dash = dash_with(vec![unstamped(), unstamped()]);
+    dash.milestones = vec![ms("W1"), ms("W2")];
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(!plain.contains("速度"), "无活动窗无戳不打: {plain}");
+
+    // 双里程碑 + 全同刻窗(Some(0))→ 退化窗不虚报
+    dash.event_span_secs = Some(0);
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(!plain.contains("速度"), "全同刻窗不打: {plain}");
+
+    // 单里程碑 + 合格活动窗 → 门槛不过仍不打
+    dash.milestones = vec![ms("W1")];
+    dash.event_span_secs = Some(3_600);
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(!plain.contains("速度"), "单里程碑不打: {plain}");
 }
 
 #[test]

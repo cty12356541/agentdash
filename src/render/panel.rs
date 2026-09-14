@@ -45,7 +45,8 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
             }
         }
     }
-    // 吞吐暂无逐时刻数据,以里程碑计数近似(见区块 B 速度线)
+    // 页眉 agent 计数即在跑表行数;吞吐口径已入模型,见区块 B 速度线
+    // (W3-006 起为事件活动窗真实吞吐,不再是里程碑计数近似)
     let agents = dash.agents.len();
 
     // 页眉:项目 · 活跃里程碑(D3:project 读模型字段;整行过 elide 钳宽)
@@ -215,11 +216,12 @@ fn clock_slice(rfc3339: &str) -> String {
     }
 }
 
-/// 速度线(W3-004 真实吞吐口径):`速度 <done/跨度小时> tasks/h`——
-/// 生效条件与数值全部出自 [`velocity`] 模型纯函数(≥2 里程碑且任务
-/// `since` 跨度 > 0),不满足则不打(负断言钉死,不虚报)。
+/// 速度线(W3-006 会话活动窗吞吐):`速度 <done/活动窗小时> tasks/h`——
+/// 生效条件与数值全部出自 [`velocity`] 模型纯函数(≥2 里程碑,span 首选
+/// 事件活动窗、缺失回退任务 `since` 跨度,须严格大于 0),不满足则不打
+/// (负断言钉死,不虚报)。
 fn speed_line(dash: &Dashboard) -> Option<String> {
-    let rate = velocity(&dash.tasks, &dash.milestones)?;
+    let rate = velocity(&dash.tasks, &dash.milestones, dash.event_span_secs)?;
     Some(format!("  速度 {rate:.1} tasks/h"))
 }
 

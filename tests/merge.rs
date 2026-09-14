@@ -703,8 +703,10 @@ fn malformed_milestones_fall_back_to_single_synthesis() {
     cleanup(&repo);
 }
 
-/// W3-004 速度线模型口径(纯函数):≥2 里程碑**且**任务 since 跨度 > 0 →
-/// done 总数 / 跨度小时(跨度 = max(since) − min(since));其余一律 `None`。
+/// W3-004 速度线模型口径(纯函数,W3-006 起为事件窗缺失时的回退半边):
+/// ≥2 里程碑**且**任务 since 跨度 > 0 → done 总数 / 跨度小时(跨度 =
+/// max(since) − min(since));其余一律 `None`。事件窗实参传 `None` =
+/// 无合格活动窗,正好钉死回退口径。
 #[test]
 fn velocity_needs_two_milestones_and_positive_span() {
     let tv = |since: Option<&str>| TaskView {
@@ -729,11 +731,11 @@ fn velocity_needs_two_milestones_and_positive_span() {
         tv(Some("2026-09-13T07:00:00Z")),
     ];
     let milestones = vec![ms(2, 4), ms(1, 3)];
-    let rate = model::velocity(&tasks, &milestones).expect("双里程碑 + 正跨度必有速度");
+    let rate = model::velocity(&tasks, &milestones, None).expect("双里程碑 + 正跨度必有速度");
     assert!((rate - 1.5).abs() < 1e-9, "3 done / 2h = 1.5, got {rate}");
 
     assert!(
-        model::velocity(&tasks, &milestones[..1]).is_none(),
+        model::velocity(&tasks, &milestones[..1], None).is_none(),
         "单里程碑不打速度线"
     );
     let same = vec![
@@ -741,15 +743,15 @@ fn velocity_needs_two_milestones_and_positive_span() {
         tv(Some("2026-09-13T08:00:00Z")),
     ];
     assert!(
-        model::velocity(&same, &milestones).is_none(),
+        model::velocity(&same, &milestones, None).is_none(),
         "任务 since 全同戳 → 跨度 0,不虚报速度"
     );
     assert!(
-        model::velocity(&[tv(None)], &milestones).is_none(),
+        model::velocity(&[tv(None)], &milestones, None).is_none(),
         "无任何可解析时间戳 → 不打"
     );
     assert!(
-        model::velocity(&[tv(Some("not-a-time"))], &milestones).is_none(),
+        model::velocity(&[tv(Some("not-a-time"))], &milestones, None).is_none(),
         "坏戳不参与跨度,全坏则不打"
     );
     // 偏移格式与 `Z` 混排按绝对时刻折算(发现 9 后两种形态并存)
@@ -758,8 +760,156 @@ fn velocity_needs_two_milestones_and_positive_span() {
         tv(Some("2026-09-13T08:00:00Z")),
         tv(Some("2026-09-13T06:30:00-02:00")), // = 08:30Z
     ];
-    let rate = model::velocity(&mixed, &milestones).expect("混排跨度 2.5h");
+    let rate = model::velocity(&mixed, &milestones, None).expect("混排跨度 2.5h");
     assert!((rate - 1.2).abs() < 1e-9, "3 done / 2.5h = 1.2, got {rate}");
+}
+
+/// W3-006 事件窗速度线(纯函数半边):合格事件活动窗(`Some` 且 > 0)优先
+/// 于任务 since 跨度——即便后者更大也不采信;`Some(0)`(全同刻窗)不合格,
+/// 回退任务 since 跨度。分子与 ≥2 里程碑门槛不变。
+#[test]
+fn velocity_prefers_qualifying_event_window() {
+    let tv = |since: Option<&str>| TaskView {
+        id: String::new(),
+        label: String::new(),
+        state: TaskState::Done,
+        lane: None,
+        note: None,
+        fix_round: None,
+        since: since.map(str::to_owned),
+    };
+    let ms = |done: usize, total: usize| MilestoneView {
+        wave: None,
+        title: String::new(),
+        done,
+        total,
+    };
+    // 任务 since 跨度 10h:若误用会得 3/10 = 0.3 而非事件窗口径
+    let tasks = vec![
+        tv(Some("2026-09-13T06:00:00Z")),
+        tv(Some("2026-09-13T16:00:00Z")),
+    ];
+    let milestones = vec![ms(2, 4), ms(1, 3)];
+    let rate = model::velocity(&tasks, &milestones, Some(3_600)).expect("合格活动窗(1h)必有速度");
+    assert!(
+        (rate - 3.0).abs() < 1e-9,
+        "3 done / 1h 事件窗 = 3.0, got {rate}"
+    );
+
+    // 全同刻窗 `Some(0)` 不合格 → 回退任务 since 跨度 10h → 0.3
+    let rate = model::velocity(&tasks, &milestones, Some(0)).expect("退化窗回退 since 跨度");
+    assert!((rate - 0.3).abs() < 1e-9, "3 done / 10h = 0.3, got {rate}");
+
+    // 事件窗在场也过不了单里程碑门槛
+    assert!(
+        model::velocity(&tasks, &milestones[..1], Some(3_600)).is_none(),
+        "单里程碑不打速度线(事件窗不豁免门槛)"
+    );
+}
+
+/// W3-006 事件窗速度线 fixture:双里程碑台账(3 任务 2 done,完成 2 个入
+/// M1、进行中 1 个入 M2)。契约任务 since 恒取台账 mtime,天然零跨度——
+/// 与真实 dogfood 同形,活动窗是唯一可用时间基。
+const LEDGER_MS2: &str = r#"{
+  "$schema": "agentdash.tasklog.v1",
+  "wave": "W3",
+  "title": "事件窗速度线",
+  "milestones": [
+    {"id": "M1", "title": "第一批", "tasks": ["1", "2"]},
+    {"id": "M2", "title": "第二批", "tasks": ["3"]}
+  ],
+  "lanes": [{"name": "A-impl", "tasks": ["1", "2", "3"]}],
+  "tasks": {
+    "1": {"label": "implement contract", "state": "done"},
+    "2": {"label": "implement events", "state": "done"},
+    "3": {"label": "implement git snapshot", "state": "pending"}
+  }
+}"#;
+
+/// 本仓 dogfood `events.jsonl` 同款:两条 gate 事件,ts 相隔 6 秒。
+const EVENTS_WINDOW: &str = concat!(
+    r#"{"gate":"cargo-fmt","kind":"gate","state":"running","ts":"2026-09-14T13:13:32+08:00"}"#,
+    "\n",
+    r#"{"detail":"rustfmt 1.9.0-stable (8bab26f4f6 2026-07-14)","exit":0,"gate":"cargo-fmt","kind":"gate","state":"passed","ts":"2026-09-14T13:13:38+08:00"}"#,
+    "\n",
+);
+
+/// W3-006(合并层正断言):双里程碑台账 + dogfood 同款 6 秒事件窗 →
+/// `event_span_secs = Some(6)`,velocity 据此点亮;任务 since 跨度恒 0,
+/// 活动窗是唯一可用时间基。
+#[test]
+fn event_window_feeds_velocity_in_merge() {
+    let repo = fixture_repo("ms-window");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER_MS2).expect("write ledger.json");
+    fs::write(dir.join("events.jsonl"), EVENTS_WINDOW).expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+
+    assert_eq!(
+        dash.event_span_secs,
+        Some(6),
+        "两条事件 ts 相隔 6 秒 → 活动窗 6s: {:?}",
+        dash.event_span_secs
+    );
+    assert_eq!(dash.milestones.len(), 2, "双里程碑在场");
+    let rate = model::velocity(&dash.tasks, &dash.milestones, dash.event_span_secs)
+        .expect("双里程碑 + 合格活动窗必有速度");
+    assert!(
+        (rate - 1_200.0).abs() < 1e-9,
+        "2 done / (6s = 1/600 h) = 1200 tasks/h, got {rate}"
+    );
+    cleanup(&repo);
+}
+
+/// W3-006(合并层负断言):无 events / 单条 event / 全同刻三态,活动窗
+/// 均不合格(`event_span_secs` 为 `None`);契约任务共享台账 mtime,回退
+/// 的 since 跨度同为 0 → velocity 一律 `None`,速度行不虚报。
+#[test]
+fn velocity_hidden_without_qualifying_event_window() {
+    const SINGLE: &str = concat!(
+        r#"{"gate":"cargo-fmt","kind":"gate","state":"passed","ts":"2026-09-14T13:13:32+08:00"}"#,
+        "\n",
+    );
+    const SAME_TS: &str = concat!(
+        r#"{"gate":"cargo-fmt","kind":"gate","state":"running","ts":"2026-09-14T13:13:32+08:00"}"#,
+        "\n",
+        r#"{"gate":"cargo-fmt","kind":"gate","state":"passed","ts":"2026-09-14T13:13:32+08:00"}"#,
+        "\n",
+    );
+    let cases: [(&str, Option<&str>); 3] = [
+        ("no-events", None),
+        ("single-event", Some(SINGLE)),
+        ("same-ts", Some(SAME_TS)),
+    ];
+    for (name, events) in cases {
+        let repo = fixture_repo(name);
+        let dir = repo.join(".agentdash");
+        fs::create_dir_all(&dir).expect("create .agentdash");
+        fs::write(dir.join("ledger.json"), LEDGER_MS2).expect("write ledger.json");
+        if let Some(text) = events {
+            fs::write(dir.join("events.jsonl"), text).expect("write events.jsonl");
+        }
+
+        let dash = model::merge(&repo);
+
+        assert_eq!(
+            dash.milestones.len(),
+            2,
+            "{name}: 双里程碑在场(负断言只针对事件窗)"
+        );
+        assert!(
+            dash.event_span_secs.is_none(),
+            "{name}: 活动窗必须不合格: {:?}",
+            dash.event_span_secs
+        );
+        assert!(
+            model::velocity(&dash.tasks, &dash.milestones, dash.event_span_secs).is_none(),
+            "{name}: 无合格活动窗且任务同 mtime → 不打速度"
+        );
+        cleanup(&repo);
+    }
 }
 
 /// W3-004 发现 9:`generated_at` 与事件 ts 同用本地时区偏移格式(`±HH:MM`,

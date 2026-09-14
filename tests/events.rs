@@ -1,9 +1,21 @@
 //! `events.jsonl` 重放的集成测试(W1-003)。
 //!
 //! crate 是纯二进制(无 lib 目标),集成测试用 `#[path]` 直接引入被测模块。
+//! W3-006 起事件流折出活动窗极值,解析器取自 model(与 `tests/merge.rs`
+//! 同约定挂载模块树,使 events.rs 内的 `crate::model` 路径照常解析);
+//! 本组用例只触达重放/极值,挂载树的其余 pub 项属死代码,按文件级 allow
+//! 放行(同 `tests/render_panel.rs` 约定)。
 
+#![allow(dead_code)]
+
+#[path = "../src/contract.rs"]
+mod contract;
 #[path = "../src/events.rs"]
 mod events;
+#[path = "../src/model.rs"]
+mod model;
+#[path = "../src/sources/mod.rs"]
+mod sources;
 
 use std::collections::HashMap;
 
@@ -211,4 +223,48 @@ fn malformed_middle_line_dropped_stream_continues() {
             "line 5: unknown event kind `mystery`, line dropped".to_string(),
         ]
     );
+}
+
+/// W3-006:活动窗 ts 极值跨全部已知 kind(gate/agent/tool)折叠,按绝对
+/// 时刻折算(偏移形态并存);已知 kind 但行残缺(如 gate 无名)ts 仍是
+/// 真实活动证据,参与极值;ts 缺失/不可解析、未知 kind 与残缺 JSON 行
+/// 不参与;单条事件两端同值(合格与否由 model 侧 max>min 判定)。
+#[test]
+fn ts_window_folds_min_max_over_known_kinds() {
+    let model = replay_strs(&[
+        // max 端:09:00:00Z(纪元 1_789_290_000)
+        r#"{"ts":"2026-09-13T09:00:00Z","kind":"agent","event":"dispatched","who":"a"}"#,
+        r#"{"ts":"2026-09-13T08:00:00Z","kind":"gate","gate":"cargo-fmt","state":"running"}"#,
+        // 偏移形态折算:= 08:30Z,夹在中间不沾极值(误当 UTC 读会顶掉 max)
+        r#"{"ts":"2026-09-13T10:30:00+02:00","kind":"tool","tool":"bash","phase":"end"}"#,
+        // 已知 kind 但行残缺(gate 无名):min 端 07:30:00Z 必须参与
+        r#"{"ts":"2026-09-13T07:30:00Z","kind":"gate","state":"passed"}"#,
+        // 以下三类不参与:无 ts / 坏 ts / 未知 kind
+        r#"{"kind":"gate","gate":"g2","state":"passed"}"#,
+        r#"{"ts":"not-a-time","kind":"tool","tool":"bash","phase":"end"}"#,
+        r#"{"ts":"2026-09-13T23:59:59Z","kind":"mystery","x":1}"#,
+    ]);
+    assert_eq!(
+        model.ts_min,
+        Some(1_789_284_600),
+        "min = 2026-09-13T07:30:00Z(残缺 gate 行的 ts 也算活动)"
+    );
+    assert_eq!(
+        model.ts_max,
+        Some(1_789_290_000),
+        "max = 2026-09-13T09:00:00Z(±HH:MM 偏移按绝对时刻折算)"
+    );
+    assert_eq!(model.ts_max.unwrap() - model.ts_min.unwrap(), 5_400);
+
+    // 单条事件:两端同值(零宽窗,由 model 侧判不合格)
+    let single = replay_strs(&[
+        r#"{"ts":"2026-09-13T09:00:00Z","kind":"gate","gate":"g","state":"passed"}"#,
+    ]);
+    assert_eq!(single.ts_min, single.ts_max);
+    assert_eq!(single.ts_min, Some(1_789_290_000));
+
+    // 无事件:无窗
+    let empty = replay_strs(&[]);
+    assert_eq!(empty.ts_min, None);
+    assert_eq!(empty.ts_max, None);
 }

@@ -120,6 +120,12 @@ pub struct Dashboard {
     /// 验证门终态视图(取自 [`events::EventModel`],后到覆盖先到;
     /// 按门名字典序,输出确定)。
     pub gates: Vec<GateView>,
+    /// 事件流活动窗跨度(秒,W3-006):events.jsonl ≥2 条不同 `ts` 时取
+    /// `max(ts) − min(ts)`(全部 gate/agent/tool 事件按绝对时刻折算);
+    /// 无事件 / 单条 / 全同刻为 [`None`]。速度线 span 首选数据源——
+    /// [`velocity`] 据此优先,不合格回退任务 `since` 跨度(契约任务恒同
+    /// 台账 mtime,跨度恒 0,故真实数据全靠本字段点亮,W2-002 承诺兑现)。
+    pub event_span_secs: Option<u64>,
     /// git 快照事实(始终采集,与契约存在与否无关)。
     pub git: GitFacts,
     /// 远程 PR 事实(W2-007;增强非依赖):gh 探测成功且有 PR 时有值,
@@ -198,10 +204,13 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
     // 事件层:永远照常合并(契约缺失或损坏都不影响)
     let mut agents = Vec::new();
     let mut gates = Vec::new();
+    // 事件活动窗(W3-006):速度线 span 首选数据源
+    let mut event_span_secs = None;
     let events_path = repo.join(".agentdash").join("events.jsonl");
     let (events_text, events_present) = read_source(&events_path, "events.jsonl", &mut warnings);
     if let Some(text) = events_text {
         let model = events::replay(text.lines().map(str::to_owned));
+        event_span_secs = event_span_of(&model);
         // 投影时就地排序,渲染层免排序即可拿到确定性输出
         agents = model
             .agents
@@ -262,6 +271,7 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         warnings,
         agents,
         gates,
+        event_span_secs,
         git,
         // 远程层(120s 档):失败静默为 None——远程是增强不是依赖,
         // 绝不因 gh 缺失/断网拖垮合并
@@ -269,6 +279,17 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         project,
         // 发现 9(W3-004):与事件 ts 同用本地时区偏移格式,页眉不再 UTC/本地并存
         generated_at: ts_now(),
+    }
+}
+
+/// 事件流活动窗(W3-006):重放模型 → 合格活动窗跨度(秒)。极值折叠在
+/// [`events::replay`](<`crate::events`> 侧只存事实),此处只做合格判定:
+/// ≥2 个可解析 ts 且极差严格大于 0;零宽窗(单条/全同刻)与无事件同为
+/// [`None`],交由 [`velocity`] 回退任务 `since` 跨度。
+fn event_span_of(model: &events::EventModel) -> Option<u64> {
+    match (model.ts_min, model.ts_max) {
+        (Some(min), Some(max)) if max > min => Some(max - min),
+        _ => None,
     }
 }
 
@@ -471,23 +492,37 @@ fn milestone_of(ledger: &contract::Ledger) -> MilestoneView {
     }
 }
 
-/// 速度线吞吐(W3-004,纯函数):done 任务数 / 任务 `since` 跨度小时数。
-/// 生效条件:≥2 里程碑在场**且**可解析 `since` 的时间跨度严格大于 0
-/// (跨度 = max − min;不可解析/缺失的时间戳不参与,全不可解析则无跨度)。
-/// 不满足条件返回 [`None`]——渲染层据此隐藏速度行(不虚报)。
+/// 速度线吞吐(W3-004 入模,W3-006 改 span 数据源):done 任务数 /
+/// 活动窗小时数。span 取值:事件活动窗优先(`event_span_secs` 为 `Some`
+/// 且 > 0,即 events.jsonl ≥2 条不同 ts 的 max − min,含 gate/agent/tool
+/// 全部事件);否则回退任务 `since` 跨度(max − min,不可解析/缺失的
+/// 时间戳不参与,全不可解析则无跨度)。生效条件:≥2 里程碑在场**且**
+/// 所选跨度严格大于 0;不满足返回 [`None`]——渲染层据此隐藏速度行
+/// (不虚报)。分子恒为里程碑 done 合计(含未分组尾)。
 #[must_use]
-pub fn velocity(tasks: &[TaskView], milestones: &[MilestoneView]) -> Option<f64> {
+pub fn velocity(
+    tasks: &[TaskView],
+    milestones: &[MilestoneView],
+    event_span_secs: Option<u64>,
+) -> Option<f64> {
     if milestones.len() < 2 {
         return None;
     }
-    let stamps: Vec<u64> = tasks
-        .iter()
-        .filter_map(|task| task.since.as_deref())
-        .filter_map(rfc3339_to_secs)
-        .collect();
-    let min = stamps.iter().copied().min()?;
-    let max = stamps.iter().copied().max()?;
-    let span_secs = max.saturating_sub(min);
+    // W3-006:span 数据源选择——合格事件活动窗优先;缺失/零宽(单条、
+    // 全同刻)回退任务 `since` 跨度(原口径,`None` 语义不变)
+    let span_secs = match event_span_secs {
+        Some(secs) if secs > 0 => secs,
+        _ => {
+            let stamps: Vec<u64> = tasks
+                .iter()
+                .filter_map(|task| task.since.as_deref())
+                .filter_map(rfc3339_to_secs)
+                .collect();
+            let min = stamps.iter().copied().min()?;
+            let max = stamps.iter().copied().max()?;
+            max.saturating_sub(min)
+        }
+    };
     if span_secs == 0 {
         return None;
     }
