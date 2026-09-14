@@ -1,34 +1,33 @@
 {
   "$schema": "agentdash.tasklog.v1",
-  "wave": "W1",
-  "title": "一期:Rust 内核 + claude-code-kit",
+  "wave": "W2",
+  "title": "W2 收口:交互跃迁 + 推广验证 + 帧验证修复",
+  "profile": "sdd",
   "lanes": [
-    {"name": "T1-scaffold", "tasks": ["T1"]},
-    {"name": "T2-contract", "tasks": ["T2"]},
-    {"name": "T3-events", "tasks": ["T3"]},
-    {"name": "T4-git-source", "tasks": ["T4"]},
-    {"name": "T8b-claude-code-kit", "tasks": ["T8b"]},
-    {"name": "T5-model-merge", "tasks": ["T5"]},
-    {"name": "T6-render", "tasks": ["T6"]},
-    {"name": "T7-tui-watch", "tasks": ["T7"]},
-    {"name": "T9-release", "tasks": ["T9"]}
+    {"name": "批一-信息接线", "tasks": ["01", "02"]},
+    {"name": "批二-交互跃迁", "tasks": ["03", "04", "05"]},
+    {"name": "批三-边界扩展", "tasks": ["06", "07", "08"]},
+    {"name": "推广-验证", "tasks": ["09", "10", "11", "12"]},
+    {"name": "W3-候选", "tasks": ["13", "14", "15"]}
   ],
   "tasks": {
-    "T1": {"label": "脚手架与 CI", "state": "done"},
-    "T2": {"label": "契约层 ledger.json", "state": "done"},
-    "T3": {"label": "事件层 events.jsonl", "state": "done"},
-    "T4": {"label": "git 观察者源", "state": "done"},
-    "T5": {"label": "模型合并", "state": "done"},
-    "T6": {"label": "渲染移植(oneline + panel + graph)", "state": "done"},
-    "T7": {"label": "TUI watch", "state": "done"},
-    "T8b": {"label": "claude-code-kit(hook 直调二进制)", "state": "done"},
-    "T9": {"label": "集成验收与发布件", "state": "done"}
+    "01": {"label": "agents+gates 上板", "state": "done"},
+    "02": {"label": "fix-round/⚑/warnings/速度线", "state": "done"},
+    "03": {"label": "任务详情面板", "state": "done"},
+    "04": {"label": "多波次滚动+help", "state": "done"},
+    "05": {"label": "过滤与车道折叠", "state": "done"},
+    "06": {"label": "台账写回 d/b/m", "state": "done"},
+    "07": {"label": "gh 远程源(缓存120s)", "state": "done"},
+    "08": {"label": "债收尾:轮转/多槽位/收敛", "state": "done"},
+    "09": {"label": "本机级安装+fixture验证", "state": "done"},
+    "10": {"label": "插件市场全生态链路", "state": "done"},
+    "11": {"label": "双场景帧验证+对账报告", "state": "done"},
+    "12": {"label": "验证发现修复批 F1/F3/F6", "state": "done"},
+    "13": {"label": "多里程碑模型+速度线", "state": "pending", "note": "单台账恒1里程碑,W2-002 速度线依赖此"},
+    "14": {"label": "面板屏障行", "state": "pending", "note": "panel.rs TODO,graph 已可验"},
+    "15": {"label": "hook dispatched 入口", "state": "blocked", "note": "CC 无 SubagentStart 钩子,待上游"}
   },
   "barriers": [
-    {"id": "B1", "after": ["T1"], "unlocks": ["T2", "T3", "T4", "T8b"]},
-    {"id": "B2", "after": ["T2", "T3", "T4"], "unlocks": ["T5"]},
-    {"id": "B3", "after": ["T5"], "unlocks": ["T6"]},
-    {"id": "B4", "after": ["T6"], "unlocks": ["T7"]},
-    {"id": "B5", "after": ["T7", "T8b"], "unlocks": ["T9"]}
+    {"id": "B1", "after": ["12"], "unlocks": ["13", "14", "15"]}
   ]
 }
