@@ -56,7 +56,7 @@ use crate::sources::git::{self, GitFacts};
 // 其根下没有 writeback 模块,`crate::writeback` 路径会破坏该测试编译;
 // 相对挂载让二进制(经 `crate::tui::writeback`)与测试挂载两处皆安。
 #[path = "writeback.rs"]
-mod writeback;
+pub(crate) mod writeback;
 
 /// 模型重建节奏默认档(秒;`agentdash watch` 的 interval)。
 pub const MODEL_INTERVAL: u64 = 5;

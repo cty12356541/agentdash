@@ -21,8 +21,6 @@ mod render;
 mod sources;
 #[path = "../src/tui.rs"]
 mod tui;
-#[path = "../src/writeback.rs"]
-mod writeback;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,7 +30,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 
 use tui::{Action as KeyAction, InputMode};
-use writeback::Action as WriteAction;
+use tui::writeback::Action as WriteAction;
 
 // ---------------------------------------------------------------- helpers
 
@@ -101,7 +99,7 @@ fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
 #[test]
 fn mark_done_writes_state_and_preserves_rest() {
     let t = repo_with_ledger("done");
-    let msg = writeback::apply(t.path(), "T2", WriteAction::MarkDone).expect("apply ok");
+    let msg = tui::writeback::apply(t.path(), "T2", WriteAction::MarkDone).expect("apply ok");
     assert_eq!(msg, "已写回 T2:done");
     let ledger = ledger_value(&t);
     assert_eq!(ledger["tasks"]["T2"]["state"], "done");
@@ -121,7 +119,7 @@ fn mark_done_writes_state_and_preserves_rest() {
 #[test]
 fn mark_blocked_writes_state() {
     let t = repo_with_ledger("blocked");
-    let msg = writeback::apply(t.path(), "T2", WriteAction::MarkBlocked).expect("apply ok");
+    let msg = tui::writeback::apply(t.path(), "T2", WriteAction::MarkBlocked).expect("apply ok");
     assert_eq!(msg, "已写回 T2:blocked");
     assert_eq!(ledger_value(&t)["tasks"]["T2"]["state"], "blocked");
 }
@@ -129,7 +127,7 @@ fn mark_blocked_writes_state() {
 #[test]
 fn set_note_writes_note_including_cjk() {
     let t = repo_with_ledger("note");
-    let msg = writeback::apply(
+    let msg = tui::writeback::apply(
         t.path(),
         "T2",
         WriteAction::SetNote(String::from("等 gate 放行")),
@@ -147,7 +145,7 @@ fn set_note_writes_note_including_cjk() {
 #[test]
 fn set_note_empty_clears_note() {
     let t = repo_with_ledger("clear");
-    writeback::apply(t.path(), "T2", WriteAction::SetNote(String::new())).expect("apply ok");
+    tui::writeback::apply(t.path(), "T2", WriteAction::SetNote(String::new())).expect("apply ok");
     assert!(
         ledger_value(&t)["tasks"]["T2"].get("note").is_none(),
         "空备注 = 清除 note 键"
@@ -157,7 +155,7 @@ fn set_note_empty_clears_note() {
 #[test]
 fn apply_without_ledger_is_err() {
     let t = TempDir::new("nol");
-    let err = writeback::apply(t.path(), "T2", WriteAction::MarkDone).unwrap_err();
+    let err = tui::writeback::apply(t.path(), "T2", WriteAction::MarkDone).unwrap_err();
     assert!(err.contains("无台账"), "err={err}");
 }
 
@@ -165,7 +163,7 @@ fn apply_without_ledger_is_err() {
 fn apply_unknown_task_is_err_and_file_untouched() {
     let t = repo_with_ledger("notask");
     let before = fs::read_to_string(t.path().join(".agentdash").join("ledger.json")).unwrap();
-    let err = writeback::apply(t.path(), "T9", WriteAction::MarkDone).unwrap_err();
+    let err = tui::writeback::apply(t.path(), "T9", WriteAction::MarkDone).unwrap_err();
     assert!(err.contains("T9"), "错误消息可显示任务 id:err={err}");
     let after = fs::read_to_string(t.path().join(".agentdash").join("ledger.json")).unwrap();
     assert_eq!(before, after, "失败写回不得动文件");
@@ -175,7 +173,7 @@ fn apply_unknown_task_is_err_and_file_untouched() {
 fn apply_idempotent_done_is_err_and_file_untouched() {
     let t = repo_with_ledger("idem");
     let before = fs::read_to_string(t.path().join(".agentdash").join("ledger.json")).unwrap();
-    let err = writeback::apply(t.path(), "T1", WriteAction::MarkDone).unwrap_err();
+    let err = tui::writeback::apply(t.path(), "T1", WriteAction::MarkDone).unwrap_err();
     assert!(err.contains("已是 done"), "幂等命中给原因:err={err}");
     let after = fs::read_to_string(t.path().join(".agentdash").join("ledger.json")).unwrap();
     assert_eq!(before, after, "幂等命中不得重写文件");
@@ -184,7 +182,7 @@ fn apply_idempotent_done_is_err_and_file_untouched() {
 #[test]
 fn set_note_unchanged_is_err() {
     let t = repo_with_ledger("noteidem");
-    let err = writeback::apply(
+    let err = tui::writeback::apply(
         t.path(),
         "T2",
         WriteAction::SetNote(String::from("fix round 1/3")),
@@ -199,7 +197,7 @@ fn apply_corrupt_ledger_is_err() {
     let dir = t.path().join(".agentdash");
     fs::create_dir_all(&dir).expect("create .agentdash");
     fs::write(dir.join("ledger.json"), "NOT JSON {").expect("write corrupt");
-    let err = writeback::apply(t.path(), "T2", WriteAction::MarkDone).unwrap_err();
+    let err = tui::writeback::apply(t.path(), "T2", WriteAction::MarkDone).unwrap_err();
     assert!(err.contains("损坏"), "err={err}");
 }
 
@@ -208,7 +206,7 @@ fn apply_corrupt_ledger_is_err() {
 #[test]
 fn apply_is_atomic_no_tmp_residue_and_valid_json() {
     let t = repo_with_ledger("atomic");
-    writeback::apply(t.path(), "T2", WriteAction::MarkDone).expect("apply ok");
+    tui::writeback::apply(t.path(), "T2", WriteAction::MarkDone).expect("apply ok");
     let entries: Vec<String> = fs::read_dir(t.path().join(".agentdash"))
         .expect("read dir")
         .map(|entry| {
@@ -221,7 +219,7 @@ fn apply_is_atomic_no_tmp_residue_and_valid_json() {
         .collect();
     let residue: Vec<&String> = entries
         .iter()
-        .filter(|name| name.ends_with(".tmp"))
+        .filter(|name| std::path::Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("tmp")))
         .collect();
     assert!(residue.is_empty(), "tmp 残留:{residue:?}");
     // ledger_value 内部断言 JSON 合法;此处再验落位
@@ -233,9 +231,9 @@ fn concurrent_writes_both_survive() {
     let t = repo_with_ledger("lock");
     let repo_a = t.path().to_path_buf();
     let repo_b = t.path().to_path_buf();
-    let a = std::thread::spawn(move || writeback::apply(&repo_a, "T2", WriteAction::MarkDone));
+    let a = std::thread::spawn(move || tui::writeback::apply(&repo_a, "T2", WriteAction::MarkDone));
     let b = std::thread::spawn(move || {
-        writeback::apply(
+        tui::writeback::apply(
             &repo_b,
             "T1",
             WriteAction::SetNote(String::from("并发备注")),
