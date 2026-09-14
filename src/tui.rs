@@ -7,8 +7,10 @@
 //!   同步过滤,纯函数 [`filter_tasks`])、tab 循环切换车道折叠态(全部展开
 //!   ⇄ 折叠完成车道,纯函数 [`collapse_view`])、`c` 发送聚焦提示(环境变量
 //!   `DASH_TMUX_TARGET` 存在且 tmux 可用 → `tmux send-keys`,否则写
-//!   `<repo>/.agentdash/prompt.txt` Windows 送对话通道)、`d`/⏎ 进任务详情
-//!   右栏(40%,Esc/`d` 返回)、`↑`/`↓` 在波次间滚动(渲染视图按选中波次
+//!   `<repo>/.agentdash/prompt.txt` Windows 送对话通道)、⏎ 进任务详情右栏
+//!   (40%,Esc 返回;W2-006 裁定详情归 ⏎/Esc 独占)、`d`/`b`/`m` 写回聚焦
+//!   任务 done/blocked/note(经子模块 [`self::writeback`] 原子落盘,m 为行
+//!   编辑 ⏎ 提交 / Esc 取消)、`↑`/`↓` 在波次间滚动(渲染视图按选中波次
 //!   折算任务集,纯函数 [`select_wave`])、`?` 全键位帮助覆盖层(任意键
 //!   关闭)、`q`/Ctrl-C 退出;
 //! - 鼠标:SGR 左键点击 → [`handle_click`] 复用 `render::graph` 的布局几何
@@ -48,6 +50,13 @@ use crate::contract::TaskState;
 use crate::model::{self, Dashboard, GateView, TaskView};
 use crate::render::{self, C_ACTIVE, C_DONE, C_END, C_STALLED, elide, graph::Cell};
 use crate::sources::git::{self, GitFacts};
+
+// W2-006 写回核心以相对 `#[path]` 挂为本模块子模块,而非 main.rs 顶层
+// `mod writeback;`:`tests/tui.rs` 按 `#[path]` 把本文件挂进测试 crate 根,
+// 其根下没有 writeback 模块,`crate::writeback` 路径会破坏该测试编译;
+// 相对挂载让二进制(经 `crate::tui::writeback`)与测试挂载两处皆安。
+#[path = "writeback.rs"]
+mod writeback;
 
 /// 模型重建节奏默认档(秒;`agentdash watch` 的 interval)。
 pub const MODEL_INTERVAL: u64 = 5;
@@ -140,6 +149,8 @@ pub enum InputMode {
     Editing,
     /// 输入:行编辑过滤子串(W2-005;行编辑语义与 [`Self::Editing`] 同表)。
     Filter,
+    /// 输入:行编辑备注(W2-006;行编辑语义同表,⏎ 提交即 `SetNote` 写回)。
+    Note,
     /// 帮助覆盖层:任意键关闭。关闭吞键做在 `on_key` 入口(模态),不走
     /// [`key_action`] 映射表——该态落到常规表仅保持函数全定义。
     Help,
@@ -166,7 +177,18 @@ pub enum Action {
     FocusHint,
     /// 面板 ⇄ 图(常规 `g`)。
     ToggleView,
-    /// 详情态开/关(常规 `d`:有聚焦进详情,已开则返回)。
+    /// 写回:聚焦任务标记 done(常规 `d`,W2-006;直接执行不二次确认)。
+    MarkDone,
+    /// 写回:聚焦任务标记 blocked(常规 `b`,W2-006;直接执行不二次确认)。
+    MarkBlocked,
+    /// 进入备注行编辑态(常规 `m`,⏎ 提交即 `SetNote` 写回,W2-006)。
+    StartNote,
+    /// 详情态开/关(原常规 `d`)。
+    ///
+    /// W2-006 裁定后已让位写回:`d` 归 [`Action::MarkDone`],详情改 ⏎/Esc
+    /// 独占。无键再映射到本成员,保留枚举成员只为不破坏按 `#[path]` 挂载
+    /// `tui.rs` 的既有测试(`tests/tui.rs`)的编译;其断言由所属车道收编。
+    #[allow(dead_code)]
     ToggleDetail,
     /// ⏎ 打开聚焦任务详情(无聚焦/任务不在模时运行层回落聚焦提示)。
     EnterDetail,
@@ -188,8 +210,11 @@ pub enum Action {
 #[must_use]
 pub fn key_action(mode: InputMode, key: KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    // 两个输入态共用同一套行编辑语义(⏎/Esc 的用途由 on_key 按态分派)
-    if matches!(mode, InputMode::Editing | InputMode::Filter) {
+    // 三个输入态共用同一套行编辑语义(⏎/Esc 的用途由 on_key 按态分派)
+    if matches!(
+        mode,
+        InputMode::Editing | InputMode::Filter | InputMode::Note
+    ) {
         return match key.code {
             KeyCode::Char('c') if ctrl => Action::Quit,
             KeyCode::Char(ch) => Action::Input(ch),
@@ -208,7 +233,11 @@ pub fn key_action(mode: InputMode, key: KeyEvent) -> Action {
         (_, KeyCode::Tab) if !ctrl => Action::ToggleCollapse,
         (_, KeyCode::Char('c')) if !ctrl => Action::FocusHint,
         (_, KeyCode::Enter) if !ctrl => Action::EnterDetail,
-        (_, KeyCode::Char('d')) if !ctrl => Action::ToggleDetail,
+        // W2-006 裁定:d/b/m 写回聚焦任务(done/blocked/note),详情归
+        // ⏎/Esc 独占——d 直接改义,不做二次确认(m 的文本即确认)
+        (_, KeyCode::Char('d')) if !ctrl => Action::MarkDone,
+        (_, KeyCode::Char('b')) if !ctrl => Action::MarkBlocked,
+        (_, KeyCode::Char('m')) if !ctrl => Action::StartNote,
         (_, KeyCode::Char('?')) if !ctrl => Action::Help,
         (_, KeyCode::Up) if !ctrl => Action::PrevWave,
         (_, KeyCode::Down) if !ctrl => Action::NextWave,
@@ -642,8 +671,10 @@ pub fn help_lines() -> Vec<String> {
         "/      过滤子串(lane/state/label;⏎ 应用 · Esc 取消)".to_owned(),
         "tab    折叠/展开完成车道".to_owned(),
         "c      发送聚焦提示(tmux send-keys 或写 prompt.txt)".to_owned(),
-        "⏎      打开聚焦任务详情(无聚焦回落提示)".to_owned(),
-        "d      任务详情开/关(Esc 或 d 返回)".to_owned(),
+        "⏎      打开聚焦任务详情(Esc 返回;无聚焦回落提示)".to_owned(),
+        "d      聚焦任务标记 done(写回 ledger.json)".to_owned(),
+        "b      聚焦任务标记 blocked(写回 ledger.json)".to_owned(),
+        "m      聚焦任务写备注(⏎ 提交 · Esc 取消)".to_owned(),
         "Esc    返回列表(详情态)".to_owned(),
         "↑/↓    切换选中波次(↑ 上一波,↓ 下一波)".to_owned(),
         "?      本帮助(任意键关闭)".to_owned(),
@@ -843,7 +874,7 @@ impl Watch {
             mode: InputMode::Normal,
             input: String::new(),
             focused: None,
-            message: "就绪:g 换视图 f 聚焦 / 过滤 tab 折叠 ⏎/d 详情 ↑↓ 波次 ? 帮助 q 退出"
+            message: "就绪:g 换视图 f 聚焦 / 过滤 tab 折叠 ⏎ 详情 d/b/m 写回 ↑↓ 波次 ? 帮助 q 退出"
                 .to_owned(),
             quit: false,
             clock: Instant::now(),
@@ -915,6 +946,14 @@ impl Watch {
                         self.filter.clone_from(&query);
                         self.message = format!("过滤 \"{query}\":{matched} 任务匹配");
                     }
+                } else if applied == InputMode::Note {
+                    // m 的文本即确认:提交即写回,无二次确认(轻交互定位)
+                    let note = self.input.trim().to_owned();
+                    if note.is_empty() {
+                        self.message = String::from("空备注:未改动");
+                    } else {
+                        self.run_writeback(writeback::Action::SetNote(note));
+                    }
                 } else {
                     let id = self.input.trim().to_owned();
                     if id.is_empty() {
@@ -935,11 +974,18 @@ impl Watch {
                 self.input = edit_line(&self.input, &action);
             }
             Action::FocusHint => self.focus_hint(),
-            Action::ToggleDetail => {
-                if self.detail {
-                    self.close_detail();
+            // W2-006 后无键映射到 ToggleDetail(详情归 ⏎/Esc 独占);此臂
+            // 仅保 match 全定义,成员存留见枚举文档(与 Ignore 同为空操作)。
+            Action::ToggleDetail | Action::Ignore => {}
+            Action::MarkDone => self.run_writeback(writeback::Action::MarkDone),
+            Action::MarkBlocked => self.run_writeback(writeback::Action::MarkBlocked),
+            Action::StartNote => {
+                if let Some(id) = self.focused.clone() {
+                    self.mode = InputMode::Note;
+                    self.input.clear();
+                    self.message = format!("备注 {id}(⏎ 写回 · Esc 取消)");
                 } else {
-                    self.open_detail();
+                    self.message = String::from("未聚焦:m 需先聚焦(f 输入 id,或图视图点击节点)");
                 }
             }
             Action::EnterDetail => {
@@ -966,7 +1012,6 @@ impl Watch {
                     View::Graph => "图视图:点击节点可聚焦".to_owned(),
                 };
             }
-            Action::Ignore => {}
         }
     }
 
@@ -996,6 +1041,24 @@ impl Watch {
         }
     }
 
+    /// 写回执行(W2-006):聚焦任务在位才落盘,`d`/`b` 直接执行、`m` 的
+    /// 文本即确认,不做二次确认(轻交互定位)。结果原样上状态行(成功
+    /// `已写回 T2:done` / 失败给原因);成功后把模型置为立即到期,下一帧
+    /// 即见新状态,不等 interval 档。
+    fn run_writeback(&mut self, action: writeback::Action) {
+        let Some(id) = self.focused.clone() else {
+            self.message = String::from("未聚焦:d/b/m 需先聚焦(f 输入 id,或图视图点击节点)");
+            return;
+        };
+        match writeback::apply(&self.repo, &id, action) {
+            Ok(msg) => {
+                self.message = msg;
+                self.last_model = 0; // 立即重建模型,写回结果当帧可见
+            }
+            Err(reason) => self.message = reason,
+        }
+    }
+
     /// 尝试打开详情(W2-003):聚焦 id 命中当前模型任务才开;未聚焦或任务
     /// 已被模型刷新洗掉时不开,给反馈行。
     fn open_detail(&mut self) -> bool {
@@ -1005,7 +1068,7 @@ impl Watch {
         };
         if self.dash.tasks.iter().any(|task| task.id == id) {
             self.detail = true;
-            self.message = format!("详情:{id}(Esc/d 返回)");
+            self.message = format!("详情:{id}(Esc 返回)");
             true
         } else {
             self.message = format!("详情未开:任务 {id} 不在当前模型(刷新后重试)");
@@ -1057,6 +1120,10 @@ impl Watch {
             let input = &self.input;
             return format!(" 过滤: {input}▏(⏎ 应用 · Backspace 删除 · Esc 取消)");
         }
+        if self.mode == InputMode::Note {
+            let input = &self.input;
+            return format!(" 备注: {input}▏(⏎ 写回 · Backspace 删除 · Esc 取消)");
+        }
         if self.mode == InputMode::Editing {
             let input = &self.input;
             return format!(" 聚焦 id: {input}▏(⏎ 确认 · Backspace 删除 · Esc 取消)");
@@ -1080,7 +1147,7 @@ impl Watch {
         let branch = git.branch.as_deref().unwrap_or("-");
         let head = git.head_short.as_deref().unwrap_or("-");
         format!(
-            " [{}] f 聚焦 / 过滤 tab 折叠 c 提示 ⏎/d 详情 g 切换 ↑↓ 波次 ? 帮助 q 退出 │ 聚焦:{focus}{wave} │ {branch}@{head} ↑{} ↓{} ●{} │ {}",
+            " [{}] f 聚焦 / 过滤 tab 折叠 c 提示 ⏎ 详情 d/b/m 写回 g 切换 ↑↓ 波次 ? 帮助 q 退出 │ 聚焦:{focus}{wave} │ {branch}@{head} ↑{} ↓{} ●{} │ {}",
             view_label, git.ahead, git.behind, git.dirty, self.message
         )
     }
@@ -1174,7 +1241,7 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &Watch) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!("详情 {} · Esc/d 返回", task.id));
+        .title(format!("详情 {} · Esc 返回", task.id));
     let inner_width = usize::from(area.width).saturating_sub(2).max(1);
     let lines: Vec<_> = detail_lines(task, &app.dash, inner_width)
         .into_iter()

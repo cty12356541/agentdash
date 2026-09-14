@@ -619,7 +619,7 @@ fn detail_help_wave_key_map() {
     let none = KeyModifiers::NONE;
     assert_eq!(
         tui::key_action(InputMode::Normal, key(KeyCode::Char('d'), none)),
-        Action::ToggleDetail
+        Action::MarkDone
     );
     assert_eq!(
         tui::key_action(InputMode::Normal, key(KeyCode::Char('?'), none)),
