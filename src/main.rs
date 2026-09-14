@@ -41,7 +41,8 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        // 自检入口:安装指引(README ×2 / kits ×1)以 `agentdash --version` 收尾
+        // 自检入口:安装指引(README ×2 / kits README ×1 / bin README ×1)
+        // 以 `agentdash --version` 收尾
         Some("-V" | "--version") => {
             println!("agentdash {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

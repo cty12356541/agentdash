@@ -6,7 +6,7 @@
 //!   影响,照常合并。
 //! - 契约合法 → 台账警告加 `ledger:` 源前缀透传;lane 未声明的任务尾接
 //!   (按 id 字典序,保证确定性)。
-//! - 三源全无 → 空态 + 引导文案进 [`Dashboard::warnings`]。
+//! - 三源全无(文件级,D2)→ 空态 + 引导文案进 [`Dashboard::warnings`]。
 //!
 //! 挂载约定:本模块经顶层路径(`crate::contract` / `crate::events` /
 //! `crate::sources::git`)消费兄弟模块,必须挂在 crate 根(main.rs `mod model;`
@@ -230,8 +230,10 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         tasks = git_tasks(&git);
     }
 
-    // 全无空态 → 引导文案(空任务 + 无 gate、无 agent + 非 git 仓)
-    if tasks.is_empty() && gates.is_empty() && agents.is_empty() && !git.present {
+    // 全无空态 → 引导文案。D2 收紧(W3-001):仅当三源**文件级**皆无——
+    // events 文件存在(哪怕空文件)即源在场,由上方缺失警告行接管,不再
+    // 叠加"无数据源"引导(消两行文案互扰)
+    if !ledger_present && !events_present && !git.present {
         warnings.push(EMPTY_GUIDANCE.to_owned());
     }
 
@@ -283,7 +285,11 @@ fn contract_tasks(ledger: &contract::Ledger, since: Option<&str>) -> Vec<TaskVie
                     state: spec.state,
                     lane: Some(lane.name.clone()),
                     note: spec.note.clone(),
-                    fix_round: spec.note.as_deref().and_then(parse_fix_round),
+                    fix_round: spec
+                        .note
+                        .as_deref()
+                        .and_then(parse_fix_round)
+                        .map(|(round, _)| round),
                     since: since.map(str::to_owned),
                 });
             }
@@ -303,33 +309,61 @@ fn contract_tasks(ledger: &contract::Ledger, since: Option<&str>) -> Vec<TaskVie
             state: spec.state,
             lane: None,
             note: spec.note.clone(),
-            fix_round: spec.note.as_deref().and_then(parse_fix_round),
+            fix_round: spec
+                .note
+                .as_deref()
+                .and_then(parse_fix_round)
+                .map(|(round, _)| round),
             since: since.map(str::to_owned),
         });
     }
     tasks
 }
 
-/// 从 note 解析修复轮次 `fix round N/M`:全/半角空格(含连续混排)与
-/// 大小写容忍;N/M 须为非负整数且 M>0,其余形态(缺词、非数字、零分母)
-/// 一概 [`None`]——解析不了不臆造。
-fn parse_fix_round(note: &str) -> Option<(u32, u32)> {
-    // 全角空格(U+3000)归一为半角,交给 split_whitespace 吃掉任意空白
-    let normalized: String = note
+/// 从 note 解析修复轮次前缀 `fix round N/M`:返回 `(轮次, 匹配前缀之后的
+/// 残余 note)`(残余去首尾空白,空残余为空串)。全/半角空格(含连续混排)
+/// 与大小写容忍;N/M 须为非负整数且 M>0,其余形态(缺词、非数字、零分母)
+/// 一概 [`None`]——解析不了不臆造。W3-001 起携带匹配区间信息(第 3 词词尾
+/// 即前缀止点):面板只抑匹配前缀,残余 note 照常上板,渲染层复用本解析。
+pub(crate) fn parse_fix_round(note: &str) -> Option<((u32, u32), String)> {
+    // 全角空格(U+3000)归一为半角再切词;归一化逐字符 1:1,字符下标在
+    // 原文中不变,残余可按字符位安全回切
+    let normalized: Vec<char> = note
         .chars()
         .map(|ch| if ch == '\u{3000}' { ' ' } else { ch })
         .collect();
-    let mut words = normalized.split_whitespace();
-    let fix = words.next()?;
-    let round = words.next()?;
-    let fraction = words.next()?;
-    if !fix.eq_ignore_ascii_case("fix") || !round.eq_ignore_ascii_case("round") {
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(3);
+    let mut idx = 0;
+    while idx < normalized.len() {
+        if normalized[idx] == ' ' {
+            idx += 1;
+            continue;
+        }
+        let start = idx;
+        while idx < normalized.len() && normalized[idx] != ' ' {
+            idx += 1;
+        }
+        spans.push((start, idx));
+    }
+    if spans.len() < 3 {
         return None;
     }
+    let word = |span: (usize, usize)| normalized[span.0..span.1].iter().collect::<String>();
+    if !word(spans[0]).eq_ignore_ascii_case("fix") || !word(spans[1]).eq_ignore_ascii_case("round")
+    {
+        return None;
+    }
+    let fraction = word(spans[2]);
     let (done, total) = fraction.split_once('/')?;
     let done = done.parse::<u32>().ok()?;
     let total = total.parse::<u32>().ok()?;
-    (total > 0).then_some((done, total))
+    if total == 0 {
+        return None;
+    }
+    // 匹配前缀止于第 3 词词尾;其后残余按字符位回切(保留词间空白,全角
+    // 空格已归一为半角)再去首尾空白
+    let residual: String = normalized[spans[2].1..].iter().collect();
+    Some(((done, total), residual.trim().to_owned()))
 }
 
 /// 文件 mtime → RFC 3339 UTC 串;不可读、mtime 早于纪元等失败路径一律

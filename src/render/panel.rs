@@ -9,7 +9,7 @@ use super::{
     visual,
 };
 use crate::contract::TaskState;
-use crate::model::{AgentView, Dashboard, GateView, MilestoneView, TaskView};
+use crate::model::{AgentView, Dashboard, GateView, MilestoneView, TaskView, parse_fix_round};
 
 /// 面板默认宽。
 pub const DEFAULT_PANEL_WIDTH: usize = 64;
@@ -26,7 +26,8 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     let mut done = 0;
     let mut running = 0; // active + stalled(▶ 计数承 Python口径)
     let mut stalled = 0;
-    let mut resting = 0; // pending + blocked(· 计数)
+    let mut resting = 0; // pending + blocked(· 计数,口径不变)
+    let mut blocked = 0; // 仅 blocked(⊘ 槽,W3-001;与 · 双计)
     for task in &dash.tasks {
         match visual(task.state) {
             Visual::Done => done += 1,
@@ -35,7 +36,11 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
                 running += 1;
                 stalled += 1;
             }
-            Visual::Pending | Visual::Blocked => resting += 1,
+            Visual::Pending => resting += 1,
+            Visual::Blocked => {
+                resting += 1;
+                blocked += 1;
+            }
         }
     }
     // 吞吐暂无逐时刻数据,以里程碑计数近似(见区块 B 速度线)
@@ -56,6 +61,7 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     lines.push(format!(
         "{C_DONE}✓{done}{C_END} {C_ACTIVE}▶{running}{C_END} \
          {C_PENDING}·{resting}{C_END} {C_STALLED}⚑{stalled}{C_END} \
+         {C_PENDING}⊘{blocked}{C_END} \
          · {agents} agents · {clock}"
     ));
     lines.push("═".repeat(width));
@@ -206,14 +212,22 @@ fn speed_line(milestones: &[MilestoneView]) -> Option<String> {
     Some(format!("  速度 {per_wave} 任务/波次"))
 }
 
-/// 任务行:`<mark> <id> <label>[ · <note>][ R<N>/<M>][ ⚑]`——R 尾缀出自
-/// `fix_round`(W2-002);note 已解析出 `fix_round` 时不再重复输出原文(W2-3b);
-/// since 距 `generated_at` 超过 2 小时([`STALE_THRESHOLD_SECS`])打停滞 ⚑,
-/// 无戳/坏戳/时刻在未来一律不打(不虚报)。
+/// 任务行:`<mark> <id> <label>[ R<N>/<M>[ <残余 note>]][ · <note>][ ⚑]`——
+/// R 尾缀出自 `fix_round`(W2-002);W3-001 起仅抑**匹配前缀**:note 为
+/// `fix round N/M <残余>` 时残余折到尾缀之后(`R2/5 auth bug`),解析不出
+/// 残余(纯 `fix round N/M`)只出尾缀,解析不了 `fix_round` 才回退整段
+/// note 原文;since 距 `generated_at` 超过 2 小时([`STALE_THRESHOLD_SECS`])
+/// 打停滞 ⚑,无戳/坏戳/时刻在未来一律不打(不虚报)。
 fn task_line(task: &TaskView, generated_at: &str) -> String {
     let state = visual(task.state);
+    let residual = task
+        .note
+        .as_deref()
+        .and_then(parse_fix_round)
+        .map(|(_, rest)| rest)
+        .filter(|rest| !rest.is_empty());
     let note = if task.fix_round.is_some() {
-        String::new()
+        residual.map_or(String::new(), |rest| format!(" {rest}"))
     } else {
         task.note
             .as_deref()
@@ -236,8 +250,8 @@ fn task_line(task: &TaskView, generated_at: &str) -> String {
         state.mark(),
         task.id,
         task.label,
-        note,
         fix_round,
+        note,
         stale_flag,
         C_END
     )

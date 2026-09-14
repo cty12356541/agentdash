@@ -63,7 +63,12 @@ fn w25_dash() -> Dashboard {
         }],
         warnings: Vec::new(),
         barriers: w25_barriers(),
-        git: GitFacts::absent(),
+        // W3-001 fixture 钉固:图标题项目名走 `GitFacts::root`,不再隐性
+        // 依赖测试 cwd 恰名 agentdash(root 缺省时回退 cwd 目录名)
+        git: GitFacts {
+            root: Some("agentdash".to_owned()),
+            ..GitFacts::absent()
+        },
         agents: Vec::new(),
         remote: None,
         gates: Vec::new(),

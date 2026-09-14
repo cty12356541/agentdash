@@ -70,7 +70,8 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 | `events.jsonl` | `agentdash hook` | 会话事件流:`gate`(running→passed/failed,验证门自动登记)、`tool`、`agent`;多进程并发追加经文件锁保证零丢失 |
 
 三源全无时输出空态引导文案;仅 git 仓无契约时降级为最近提交伪任务单链
-(恒 `pending`),oneline 照常可用。
+(恒 `pending`),oneline 照常可用——降级同时出一条 `⚠ missing ledger.json`
+警告行(其余源在场而台账缺失,同理告警)。
 
 ## 路线
 

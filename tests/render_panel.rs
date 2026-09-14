@@ -67,7 +67,9 @@ fn w25_dash() -> Dashboard {
         agents: Vec::new(), // W2-001:模型新增 agents 字段;面板样例默认无在跑 agent
         gates: Vec::new(),
         barriers: Vec::new(), // W1-007:模型新增 barriers 字段;面板样例不用屏障
-        git: GitFacts::absent(),
+        // W3-001 fixture 钉固:项目名走 `GitFacts::root`,不再隐性依赖测试
+        // cwd 恰名 agentdash(root 缺省时 project_label 回退 cwd 目录名)
+        git: pinned_git(),
         remote: None, // W2-007:模型新增 remote 字段;面板样例默认无远程探测
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
@@ -81,9 +83,19 @@ fn dash_with(tasks: Vec<TaskView>) -> Dashboard {
         agents: Vec::new(),
         gates: Vec::new(),
         barriers: Vec::new(),
-        git: GitFacts::absent(),
+        // 同 w25_dash:钉固 root 去 cwd 依赖(W3-001)
+        git: pinned_git(),
         remote: None,
         generated_at: "2026-09-13T08:30:00Z".into(),
+    }
+}
+
+/// 钉固 git 事实:仅带 `root`(渲染层项目名来源),其余字段全空——手工
+/// 构造的 `Dashboard` 不走 git 源,项目名断言因此与测试 cwd 名解耦。
+fn pinned_git() -> GitFacts {
+    GitFacts {
+        root: Some("agentdash".to_owned()),
+        ..GitFacts::absent()
     }
 }
 
@@ -115,8 +127,8 @@ fn golden_w25_panel() {
         "页眉:4/4 全完成非活跃里程碑,仅项目名"
     );
     assert_eq!(
-        lines[1], "✓4 ▶0 ·0 ⚑0 · 0 agents · 09-13T08:30",
-        "统计行:计数 + agents(模型缺字段恒 0)+ 生成时刻"
+        lines[1], "✓4 ▶0 ·0 ⚑0 ⊘0 · 0 agents · 09-13T08:30",
+        "统计行:计数 + ⊘ 槽(W3-001)+ agents(模型缺字段恒 0)+ 生成时刻"
     );
     assert_eq!(lines[2], "═".repeat(DEFAULT_PANEL_WIDTH), "区块分隔");
     assert!(plain.contains("在跑 / 健康"));
@@ -736,4 +748,73 @@ fn fix_round_note_not_duplicated_on_task_row() {
         !plain.contains("fix round 2/5"),
         "已解析出尾缀,note 原文不得重复上板: {plain}"
     );
+}
+
+// ---------- W3-001 终审微修批(图例 ⊘ 槽 / fix_round 残余 note / F1 负路径) ----------
+
+/// 图例 ⊘ 槽(W3-001):统计行在 ⚑ 后新增 `⊘{blocked}` 槽,blocked 计数
+/// 独立可读;`·{resting}` 口径不变(仍为 pending + blocked 双计)。
+#[test]
+fn legend_gains_blocked_slot_and_resting_unchanged() {
+    let mut blocked = task("B1", "阻塞任务", "A");
+    blocked.state = TaskState::Blocked;
+    let mut pending = task("P1", "待办任务", "A");
+    pending.state = TaskState::Pending;
+    let dash = dash_with(vec![blocked, pending]);
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    let lines: Vec<&str> = plain.lines().collect();
+    assert_eq!(
+        lines[1], "✓0 ▶0 ·2 ⚑0 ⊘1 · 0 agents · 09-13T08:30",
+        "统计行:⊘ 只计 blocked,· 仍计 pending+blocked(口径不变): {plain}"
+    );
+}
+
+/// `fix_round` 仅抑匹配前缀(W3-001):note 为 `fix round N/M <残余>` 时,
+/// 行内出 `R<N>/<M> <残余>`——匹配前缀折叠为轮次尾缀,残余 note 照常上板。
+#[test]
+fn fix_round_suppresses_only_matched_prefix_and_keeps_residual() {
+    let tasks = vec![TaskView {
+        id: "T1".into(),
+        label: "返修轮".into(),
+        state: TaskState::FixRound,
+        lane: Some("A".into()),
+        note: Some("fix round 2/5 auth bug".into()),
+        fix_round: Some((2, 5)),
+        since: None,
+    }];
+    let plain = strip_ansi(&render_panel(&dash_with(tasks), DEFAULT_PANEL_WIDTH));
+
+    assert!(
+        plain.contains("⚑ T1 返修轮 R2/5 auth bug"),
+        "匹配前缀折叠为 R 尾缀,残余 note 保留上板: {plain}"
+    );
+    assert!(
+        !plain.contains("fix round"),
+        "匹配前缀本身不得重复上板: {plain}"
+    );
+}
+
+/// F1 负路径(W3-001):有台账、无 events → 不出 `missing ledger.json`
+/// 警告(缺失警告只针对台账缺失;events 缺失不告警),面板照常渲染台账任务。
+#[test]
+fn ledger_without_events_renders_no_missing_warning() {
+    const LEDGER: &str = r#"{
+      "$schema": "agentdash.tasklog.v1",
+      "title": "ledger only",
+      "tasks": {"1": {"label": "唯一任务", "state": "active"}}
+    }"#;
+    let repo = fixture_repo("ledger-no-events");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER).expect("write ledger.json");
+
+    let dash = model::merge(&repo);
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+
+    assert!(
+        !plain.contains("missing ledger.json"),
+        "台账在场不出缺失警告(events 缺失不告警): {plain}"
+    );
+    assert!(plain.contains("▶ 1 唯一任务"), "台账任务照常上板: {plain}");
+    cleanup(&repo);
 }

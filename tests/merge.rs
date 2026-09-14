@@ -453,6 +453,32 @@ fn contract_warnings_carry_ledger_source_prefix() {
     cleanup(&repo);
 }
 
+/// 第九组(W3-001 D2 空态收紧):空 events 文件 = 源在场(文件级)→ 出
+/// 缺失台账警告,不再叠加"无数据源"全无引导(消两行文案互扰)。
+#[test]
+fn empty_events_file_counts_as_present_source() {
+    let dir = next_dir("empty-events");
+    let dot = dir.join(".agentdash");
+    fs::create_dir_all(&dot).expect("create .agentdash");
+    fs::write(dot.join("events.jsonl"), "").expect("write empty events.jsonl");
+
+    let dash = model::merge(&dir);
+
+    assert!(
+        dash.warnings
+            .iter()
+            .any(|w| w.starts_with("missing ledger.json")),
+        "events 文件在场而台账缺失必须出缺失警告: {:?}",
+        dash.warnings
+    );
+    assert!(
+        !dash.warnings.iter().any(|w| w.contains("no data sources")),
+        "events 文件在场(哪怕空文件)不得再出全无引导(D2 收紧): {:?}",
+        dash.warnings
+    );
+    cleanup(&dir);
+}
+
 /// 第八组(W2-3b F1,AD-ERR-001):契约**缺失**(有 events 无 ledger.json)
 /// 同样降级为警告行——与损坏路径同风格(`missing ledger.json: …`),事件层
 /// 照常合并、git 伪任务兜底不受影响。
@@ -491,5 +517,71 @@ fn missing_ledger_warns_and_other_sources_still_merge() {
         "其余源在场不得出现全无引导: {:?}",
         dash.warnings
     );
+    cleanup(&repo);
+}
+
+/// F1 负路径①(W3-001):有台账、无 events → 台账在场,不出
+/// `missing ledger.json` 警告(缺失警告只针对台账;events 缺失不告警)。
+#[test]
+fn ledger_without_events_does_not_warn_missing() {
+    const LEDGER_ONLY: &str = r#"{
+      "$schema": "agentdash.tasklog.v1",
+      "title": "ledger without events",
+      "tasks": {"1": {"label": "only task", "state": "active"}}
+    }"#;
+    let repo = fixture_repo("ledger-no-events");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER_ONLY).expect("write ledger.json");
+
+    let dash = model::merge(&repo);
+
+    assert!(
+        !dash
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("missing ledger.json")),
+        "台账在场不得出缺失警告: {:?}",
+        dash.warnings
+    );
+    assert!(
+        dash.warnings.is_empty(),
+        "合法台账 + 无 events 不产任何警告: {:?}",
+        dash.warnings
+    );
+    assert_eq!(dash.tasks.len(), 1, "台账任务照常合并");
+    cleanup(&repo);
+}
+
+/// F1 负路径②(W3-001):台账存在但不可读 → 恰一条 `unreadable` 警告,
+/// 无 `missing`(文件在场 ≠ 缺失)。用同名目录顶替文件制造"存在但读不了"
+/// (目录 `read_to_string` 必报非 `NotFound` 错),git 伪任务兜底照常。
+#[test]
+fn unreadable_ledger_warns_only_unreadable() {
+    let repo = fixture_repo("unreadable-ledger");
+    fs::create_dir_all(repo.join(".agentdash").join("ledger.json"))
+        .expect("mkdir ledger.json(同名目录)");
+
+    let dash = model::merge(&repo);
+
+    let unreadable = dash
+        .warnings
+        .iter()
+        .filter(|w| w.contains("ledger.json unreadable"))
+        .count();
+    assert_eq!(
+        unreadable, 1,
+        "不可读台账恰一条 unreadable 警告: {:?}",
+        dash.warnings
+    );
+    assert!(
+        !dash
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("missing ledger.json")),
+        "文件在场(哪怕读不了)不算缺失: {:?}",
+        dash.warnings
+    );
+    assert_eq!(dash.tasks.len(), 2, "git 伪任务兜底照常");
     cleanup(&repo);
 }
