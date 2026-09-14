@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::contract::{self, TaskState};
 use crate::events::{self, GateState};
 use crate::sources::git::{self, GitFacts};
+use crate::sources::remote::{self, RemoteFacts};
 
 /// 全无空态的引导文案(指向三个约定数据源,不猜路径、不报错)。
 const EMPTY_GUIDANCE: &str = concat!(
@@ -118,6 +119,10 @@ pub struct Dashboard {
     pub gates: Vec<GateView>,
     /// git 快照事实(始终采集,与契约存在与否无关)。
     pub git: GitFacts,
+    /// 远程 PR 事实(W2-007;增强非依赖):gh 探测成功且有 PR 时有值,
+    /// gh 缺失/非 git 仓/无 PR/超时/断网一律为 `None`——渲染层以此隐藏
+    /// PR 区块(降级矩阵"无远程 → 隐藏区块")。
+    pub remote: Option<RemoteFacts>,
     /// 合并时刻的 UTC 时间(RFC 3339 串,如 `2026-09-13T08:30:00Z`)。
     pub generated_at: String,
 }
@@ -228,6 +233,9 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         agents,
         gates,
         git,
+        // 远程层(120s 档):失败静默为 None——远程是增强不是依赖,
+        // 绝不因 gh 缺失/断网拖垮合并
+        remote: remote::fetch(repo),
         generated_at: now_rfc3339(),
     }
 }

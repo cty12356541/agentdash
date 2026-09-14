@@ -733,3 +733,156 @@ fn fresh_lock_still_waits_then_degrades_in_place() {
     );
     assert!(lock_path(t.path()).exists(), "未持有锁不得删除他人锁文件");
 }
+
+// ------------------------------------------------------------ 多槽位暂存(W2-008)
+
+#[test]
+fn multi_slot_gates_fold_each_terminal() {
+    let t = TempDir::new("multislot");
+    let go_failed = json!({
+        "session_id": "s",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "go test ./..."},
+        "tool_response": {
+            "stdout": "",
+            "stderr": "FAIL\t./pkg [build failed]\n",
+            "interrupted": false,
+            "status": 1
+        }
+    });
+    // 同刻两个在途 gate:cargo-test(passed)+ go-test(failed),各占一槽
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "gate 1 running",
+    );
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&go_failed, t.path()), t.path()),
+        "gate 2 running",
+    );
+
+    // 暂存中间态:数组两槽,各自的 exit/detail 配对
+    let pending: Value =
+        serde_json::from_str(&fs::read_to_string(pending_path(t.path())).expect("pending"))
+            .expect("暂存应为合法 JSON");
+    let slots = pending.as_array().expect("多槽位格式:顶层数组");
+    assert_eq!(slots.len(), 2, "两个在途 gate 各占一槽");
+    assert_eq!(slots[0]["gate"], "cargo-test");
+    assert_eq!(slots[0]["exit"], 0);
+    assert_eq!(slots[1]["gate"], "go-test");
+    assert_eq!(slots[1]["exit"], 1);
+
+    // Stop:全部折叠,各槽落各自终态(互不串档)
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "stop fold all",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 4, "恰两 running + 两终态");
+    assert_eq!(evs[0]["gate"], "cargo-test");
+    assert_eq!(evs[0]["state"], "running");
+    assert_eq!(evs[1]["gate"], "go-test");
+    assert_eq!(evs[1]["state"], "running");
+    assert_eq!(evs[2]["gate"], "cargo-test");
+    assert_eq!(evs[2]["state"], "passed", "槽 1 折叠自身终态");
+    assert_eq!(evs[2]["exit"], 0);
+    assert_eq!(evs[3]["gate"], "go-test");
+    assert_eq!(evs[3]["state"], "failed", "槽 2 折叠自身终态");
+    assert_eq!(evs[3]["exit"], 1);
+    assert_eq!(evs[3]["detail"], "FAIL\t./pkg [build failed]");
+    assert!(!pending_path(t.path()).exists(), "暂存应被消费删除");
+}
+
+#[test]
+fn legacy_single_object_pending_still_folds() {
+    let t = TempDir::new("legacy");
+    // 旧单对象格式(多槽位改造前落盘的暂存):读入兼容,折一槽
+    let pending = pending_path(t.path());
+    fs::create_dir_all(pending.parent().unwrap()).expect("mkdir .agentdash");
+    fs::write(
+        &pending,
+        r#"{"gate":"cargo-clippy","exit":3,"detail":"warning: unused import"}"#,
+    )
+    .expect("write legacy pending");
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "legacy fold",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1, "旧格式恰折一槽");
+    assert_eq!(evs[0]["gate"], "cargo-clippy");
+    assert_eq!(evs[0]["state"], "failed");
+    assert_eq!(evs[0]["exit"], 3);
+    assert_eq!(evs[0]["detail"], "warning: unused import");
+    assert!(!pending.exists(), "旧格式暂存同样消费删除");
+}
+
+// ------------------------------------------------------------ events 轮转(W2-008)
+
+/// 预置 `.agentdash/events.jsonl` 为 `size` 字节的填充内容,并可选给旧
+/// `events.jsonl.1` 写入哨兵内容(验证轮转覆盖)。
+fn seed_events(cwd: &Path, size: usize, sentinel_dot1: bool) {
+    let dir = cwd.join(".agentdash");
+    fs::create_dir_all(&dir).expect("mkdir .agentdash");
+    let mut blob = vec![b'x'; size];
+    blob[size - 1] = b'\n';
+    fs::write(dir.join("events.jsonl"), &blob).expect("seed events");
+    if sentinel_dot1 {
+        fs::write(dir.join("events.jsonl.1"), b"OLD-ROTATED-SENTINEL").expect("seed dot1");
+    }
+}
+
+#[test]
+fn oversized_events_rotate_to_dot1() {
+    let t = TempDir::new("rotate");
+    seed_events(t.path(), 6 * 1024 * 1024, true); // 6MB > 5MB 阈值
+    assert_silent_success(
+        &feed_payload(
+            "subagentstop",
+            &subagentstop_payload(t.path(), "after-rotate"),
+            t.path(),
+        ),
+        "rotation replay",
+    );
+    let rotated = t.path().join(".agentdash").join("events.jsonl.1");
+    let rotated_meta = fs::metadata(&rotated).expect("events.jsonl.1 应存在");
+    assert_eq!(
+        rotated_meta.len(),
+        6 * 1024 * 1024,
+        "轮转落点应承接收缩前的完整旧文件"
+    );
+    let rotated_text = fs::read_to_string(&rotated).expect("rotated readable");
+    assert!(
+        !rotated_text.contains("OLD-ROTATED-SENTINEL"),
+        "新轮转应覆盖旧 .1"
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1, "轮转后新建 events.jsonl 只含本次新行");
+    assert_eq!(evs[0]["who"], "after-rotate");
+}
+
+#[test]
+fn under_threshold_events_not_rotated() {
+    let t = TempDir::new("norotate");
+    seed_events(t.path(), 1024 * 1024, false); // 1MB < 5MB 阈值
+    assert_silent_success(
+        &feed_payload(
+            "subagentstop",
+            &subagentstop_payload(t.path(), "in-place"),
+            t.path(),
+        ),
+        "no rotation replay",
+    );
+    assert!(
+        !t.path().join(".agentdash").join("events.jsonl.1").exists(),
+        "阈值内不得轮转"
+    );
+    // 1MB 填充非 JSON,不整文件反解:原文件保留且新行就地追加
+    let raw = fs::read_to_string(events_path(t.path())).expect("events readable");
+    assert!(raw.starts_with('x'), "阈值内原文件原样保留");
+    assert!(raw.contains("\"who\":\"in-place\""), "新行同文件追加");
+}

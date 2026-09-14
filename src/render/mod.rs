@@ -1,8 +1,8 @@
 //! 渲染层(W1-006):把 [`Dashboard`](crate::model::Dashboard) 折叠为三个终端视图。
 //!
 //! - [`oneline::render_oneline`]:无 ANSI 单行(statusline);
-//! - [`panel::render_panel`]:面板——页眉统计 → 健康 → 轨迹 → 车道;
-//! - [`graph::render_graph_with`]:框化节点 DAG(┌─┐ 框、┬ 出线桩、▼ 入线箭头)。
+//! - [`panel::render_panel`]:面板——页眉统计 → 健康 → PR → 轨迹 → 车道;
+//! - [`graph::render_graph`]:框化节点 DAG(┌─┐ 框、┬ 出线桩、▼ 入线箭头)。
 //!
 //! 算法移植自 claude-dash `dashlib/render_oneline.py` / `render_panel.py` /
 //! `render_graph.py`,以其实测黄金断言语义为准;输入面收敛为
@@ -21,7 +21,7 @@ pub use oneline::render_oneline;
 pub use panel::{DEFAULT_PANEL_WIDTH, render_panel};
 
 use crate::contract::TaskState;
-use crate::model::{Dashboard, MilestoneView};
+use crate::model::{Dashboard, MilestoneView, TaskView};
 
 // ANSI 调色(承 Python `C` 表;oneline 视图不用)。
 pub(crate) const C_DONE: &str = "\x1b[32m";
@@ -53,6 +53,13 @@ pub(crate) const fn clamp_width(width: usize) -> usize {
 /// 后续扩字段后改取仓库名)。
 pub(crate) fn project_label(_dash: &Dashboard) -> &'static str {
     "agentdash"
+}
+
+/// 折叠车道伪任务判别(W2-005):tui 折叠视图把完成车道折叠成单条伪任务,
+/// 以**空 id** 为哨兵——合法台账 id 与 git 短 SHA 均非空,空 id 唯一标识
+/// 折叠行;panel/graph 据此出 `▸ 车道名 (N done)` 单行而非逐任务铺开。
+pub(crate) fn is_lane_marker(task: &TaskView) -> bool {
+    task.id.is_empty()
 }
 
 /// 任务五态视觉映射(承 claude-dash 五态):done ✓ 绿 / active ▶ 蓝 /

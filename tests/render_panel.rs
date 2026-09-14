@@ -22,6 +22,7 @@ use contract::TaskState;
 use model::{AgentView, Dashboard, GateView, MilestoneView, TaskView};
 use render::{DEFAULT_PANEL_WIDTH, display_width, render_oneline, render_panel};
 use sources::git::GitFacts;
+use sources::remote::RemoteFacts;
 
 fn task(id: &str, label: &str, lane: &str) -> TaskView {
     TaskView {
@@ -63,6 +64,7 @@ fn w25_dash() -> Dashboard {
         gates: Vec::new(),
         barriers: Vec::new(), // W1-007:模型新增 barriers 字段;面板样例不用屏障
         git: GitFacts::absent(),
+        remote: None, // W2-007:模型新增 remote 字段;面板样例默认无远程探测
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -76,6 +78,7 @@ fn dash_with(tasks: Vec<TaskView>) -> Dashboard {
         gates: Vec::new(),
         barriers: Vec::new(),
         git: GitFacts::absent(),
+        remote: None,
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -508,5 +511,81 @@ fn oneline_counts_running_agents() {
         render_oneline(&dash),
         "[dash] agentdash ✓4▶0·0 ⚑0 ·2ag",
         "·Nag 接 agents 真值"
+    );
+}
+
+// ---------- W2-005 车道折叠行(panel 消费折叠视图的伪任务) ----------
+
+/// 折叠伪任务面板契约:单任务空 id 车道组 → `▸ 车道名 (N done)` 单行,
+/// 车道头与逐任务行不再出现。
+#[test]
+fn collapsed_lane_renders_single_marker_line() {
+    let tasks = vec![
+        TaskView {
+            id: String::new(), // 折叠哨兵(tui 折叠视图发出)
+            label: "(2 done)".into(),
+            state: TaskState::Done,
+            lane: Some("alpha".into()),
+            note: None,
+            fix_round: None,
+            since: None,
+        },
+        task("T9", "进行中任务", "beta"),
+    ];
+    let plain = strip_ansi(&render_panel(&dash_with(tasks), DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("▸ alpha (2 done)"),
+        "折叠车道单行:▸ 名 (N done): {plain}"
+    );
+    assert!(
+        !plain.lines().any(|line| line == "alpha"),
+        "被折叠车道不再有独立车道头行"
+    );
+    assert!(plain.contains("✓ T9 进行中任务"), "未折叠车道照常逐行");
+}
+
+// ---------- W2-007 面板 PR 区块(消费 Dashboard.remote) ----------
+
+#[test]
+fn pr_block_renders_remote_facts() {
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    dash.remote = Some(RemoteFacts {
+        pr_number: 12,
+        pr_title: "feat: 过滤与折叠".into(),
+        checks: vec![
+            ("lint".into(), "SUCCESS".into()),
+            ("test".into(), "FAILURE".into()),
+            ("build".into(), "PENDING".into()),
+        ],
+    });
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(plain.contains("PR / 远程"), "独立区块标题: {plain}");
+    assert!(plain.contains("#12 feat: 过滤与折叠"), "PR 号 + 标题");
+    assert!(plain.contains("✓ lint SUCCESS"), "SUCCESS → ✓");
+    assert!(plain.contains("✗ test FAILURE"), "FAILURE → ✗");
+    assert!(plain.contains("▶ build PENDING"), "PENDING → ▶");
+    for line in plain.lines() {
+        assert!(
+            display_width(line) <= DEFAULT_PANEL_WIDTH,
+            "PR 区块零溢出: {line:?}"
+        );
+    }
+}
+
+#[test]
+fn pr_block_absent_without_remote_and_placeholder_without_pr() {
+    let dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        !plain.contains("PR / 远程"),
+        "remote 缺省(探测降级 None)不打区块: {plain}"
+    );
+
+    let mut empty_facts = dash_with(vec![task("T1", "实现契约", "A")]);
+    empty_facts.remote = Some(RemoteFacts::default());
+    let plain = strip_ansi(&render_panel(&empty_facts, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("PR / 远程") && plain.contains("· 无关联 PR"),
+        "探测成功但无 PR:占位不白板"
     );
 }
