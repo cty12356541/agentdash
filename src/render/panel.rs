@@ -50,7 +50,7 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
             ms_id(milestone),
             milestone.title
         )),
-        None => lines.push(project_label(dash).to_owned()),
+        None => lines.push(project_label(dash)),
     }
     let clock = clock_slice(&dash.generated_at);
     lines.push(format!(
@@ -207,14 +207,18 @@ fn speed_line(milestones: &[MilestoneView]) -> Option<String> {
 }
 
 /// 任务行:`<mark> <id> <label>[ · <note>][ R<N>/<M>][ ⚑]`——R 尾缀出自
-/// `fix_round`(W2-002);since 距 `generated_at` 超过 2 小时([`STALE_THRESHOLD_SECS`])
-/// 打停滞 ⚑,无戳/坏戳/时刻在未来一律不打(不虚报)。
+/// `fix_round`(W2-002);note 已解析出 `fix_round` 时不再重复输出原文(W2-3b);
+/// since 距 `generated_at` 超过 2 小时([`STALE_THRESHOLD_SECS`])打停滞 ⚑,
+/// 无戳/坏戳/时刻在未来一律不打(不虚报)。
 fn task_line(task: &TaskView, generated_at: &str) -> String {
     let state = visual(task.state);
-    let note = task
-        .note
-        .as_deref()
-        .map_or(String::new(), |note| format!(" · {note}"));
+    let note = if task.fix_round.is_some() {
+        String::new()
+    } else {
+        task.note
+            .as_deref()
+            .map_or(String::new(), |note| format!(" · {note}"))
+    };
     let fix_round = task
         .fix_round
         .map_or(String::new(), |(done, total)| format!(" R{done}/{total}"));

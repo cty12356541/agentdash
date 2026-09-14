@@ -33,6 +33,9 @@ pub struct GitFacts {
     pub behind: u32,
     /// `log --oneline -5` 的行,新提交在前。
     pub recent: Vec<String>,
+    /// 仓库根目录路径(`rev-parse --show-toplevel`;渲染层项目名的来源,
+    /// W2-3b);裸仓等不可用时为 `None`。
+    pub root: Option<String>,
 }
 
 impl GitFacts {
@@ -59,6 +62,7 @@ pub fn snapshot(repo: &Path) -> GitFacts {
     let behind = rev_count(repo, "HEAD..@{u}");
     let recent = run_git(repo, &["log", "--oneline", "-5"])
         .map_or_else(Vec::new, |out| out.lines().map(str::to_owned).collect());
+    let root = run_git(repo, &["rev-parse", "--show-toplevel"]).and_then(|out| non_empty(&out));
     GitFacts {
         present: true,
         branch,
@@ -67,6 +71,7 @@ pub fn snapshot(repo: &Path) -> GitFacts {
         ahead,
         behind,
         recent,
+        root,
     }
 }
 

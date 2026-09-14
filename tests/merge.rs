@@ -196,7 +196,9 @@ fn three_sources_merge_into_dashboard() {
     cleanup(&repo);
 }
 
-/// 第二组:仅 git(无契约)→ 最近提交伪任务单链。
+/// 第二组:仅 git(无契约、无事件)→ git 伪任务单链兜底 + 契约缺失警告行
+/// (W2-3b/AD-ERR-001:git 属"其余在场源",契约缺失不再静默;W1 的
+/// "仅 git 不告警"断言随本批收紧,空态引导仅限三源全无)。
 #[test]
 fn git_only_repo_builds_pseudo_task_chain() {
     let repo = fixture_repo("git-only");
@@ -224,8 +226,10 @@ fn git_only_repo_builds_pseudo_task_chain() {
         assert_eq!(task.since, None, "git 伪任务不设 since(无逐任务时刻)");
     }
     assert!(
-        dash.warnings.is_empty(),
-        "仅 git 是正常降级路径,不得告警: {:?}",
+        dash.warnings
+            .iter()
+            .any(|w| w.starts_with("missing ledger.json")),
+        "git 在场而契约缺失必须出警告行(AD-ERR-001): {:?}",
         dash.warnings
     );
     assert!(dash.gates.is_empty());
@@ -252,6 +256,14 @@ fn nothing_at_all_yields_guidance() {
             .iter()
             .any(|w| w.contains(".agentdash/ledger.json") && w.contains("events.jsonl")),
         "全无空态必须携带引导文案: {:?}",
+        dash.warnings
+    );
+    assert!(
+        !dash
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("missing ledger.json")),
+        "三源全无只出空态引导,不叠加契约缺失警告: {:?}",
         dash.warnings
     );
     assert!(!dash.generated_at.is_empty());
@@ -438,5 +450,46 @@ fn contract_warnings_carry_ledger_source_prefix() {
         dash.warnings
     );
     assert_eq!(dash.tasks.len(), 1, "警告不降级任务本身");
+    cleanup(&repo);
+}
+
+/// 第八组(W2-3b F1,AD-ERR-001):契约**缺失**(有 events 无 ledger.json)
+/// 同样降级为警告行——与损坏路径同风格(`missing ledger.json: …`),事件层
+/// 照常合并、git 伪任务兜底不受影响。
+#[test]
+fn missing_ledger_warns_and_other_sources_still_merge() {
+    let repo = fixture_repo("missing-ledger");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(
+        dir.join("events.jsonl"),
+        r#"{"kind":"gate","gate":"review","state":"passed","detail":"ok"}"#,
+    )
+    .expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+
+    assert!(
+        dash.warnings
+            .iter()
+            .any(|w| w.starts_with("missing ledger.json")),
+        "契约缺失必须降级为警告行(AD-ERR-001): {:?}",
+        dash.warnings
+    );
+    assert_eq!(
+        dash.gates,
+        vec![GateView {
+            name: "review".to_owned(),
+            state: "passed".to_owned(),
+            detail: "ok".to_owned(),
+        }],
+        "事件层不受契约缺失影响,照常合并"
+    );
+    assert_eq!(dash.tasks.len(), 2, "git 伪任务兜底照常");
+    assert!(
+        !dash.warnings.iter().any(|w| w.contains("no data sources")),
+        "其余源在场不得出现全无引导: {:?}",
+        dash.warnings
+    );
     cleanup(&repo);
 }

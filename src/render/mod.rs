@@ -20,6 +20,8 @@ mod panel;
 pub use oneline::render_oneline;
 pub use panel::{DEFAULT_PANEL_WIDTH, render_panel};
 
+use std::path::Path;
+
 use crate::contract::TaskState;
 use crate::model::{Dashboard, MilestoneView, TaskView};
 
@@ -49,10 +51,23 @@ pub(crate) const fn clamp_width(width: usize) -> usize {
     }
 }
 
-/// 项目名占位(TODO(model):`Dashboard` 无 project 字段;W1 以 crate 名代之,
-/// 后续扩字段后改取仓库名)。
-pub(crate) fn project_label(_dash: &Dashboard) -> &'static str {
-    "agentdash"
+/// 项目名(W2-3b 落地原 TODO(model) 去硬编码):取 git 仓根目录名(git 源
+/// 已探测 `GitFacts::root`);无 git 仓回退 cwd 目录名;两者皆不可得(根
+/// 路径等无末段)再兜底 crate 名。
+pub(crate) fn project_label(dash: &Dashboard) -> String {
+    dash.git
+        .root
+        .as_deref()
+        .and_then(dir_name)
+        .or_else(|| std::env::current_dir().ok().and_then(|cwd| dir_name(&cwd)))
+        .unwrap_or_else(|| "agentdash".to_owned())
+}
+
+/// 路径末段目录名;无末段(根路径等)为 [`None`],非 UTF-8 lossy 降级。
+fn dir_name(path: impl AsRef<Path>) -> Option<String> {
+    path.as_ref()
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
 }
 
 /// 折叠车道伪任务判别(W2-005):tui 折叠视图把完成车道折叠成单条伪任务,
@@ -63,8 +78,9 @@ pub(crate) fn is_lane_marker(task: &TaskView) -> bool {
 }
 
 /// 任务五态视觉映射(承 claude-dash 五态):done ✓ 绿 / active ▶ 蓝 /
-/// stalled ⚑ 黄 / pending·blocked · 灰。agentdash 富态归并:
-/// `Review` 归 active(复核进行中),`FixRound` 归 stalled(返修待办)。
+/// stalled ⚑ 黄 / pending · 灰 / blocked ⊘ 灰(W2-3b 起 blocked 独立符号,
+/// 不再与 pending 同点)。agentdash 富态归并:`Review` 归 active(复核
+/// 进行中),`FixRound` 归 stalled(返修待办)。
 pub(crate) fn visual(state: TaskState) -> Visual {
     match state {
         TaskState::Done => Visual::Done,
@@ -91,13 +107,15 @@ pub(crate) enum Visual {
 }
 
 impl Visual {
-    /// 单字符标记(`✓▶·⚑` 经 Python `unicodedata` 核对均为窄字符,占 1 列)。
+    /// 单字符标记:`✓▶·⚑` 经 Python `unicodedata` 核对均为窄字符(1 列);
+    /// `⊘`(blocked,U+2298)EAW=A,与 `⚑` 同策略按 1 列计。
     pub(crate) fn mark(self) -> &'static str {
         match self {
             Self::Done => "✓",
             Self::Active => "▶",
             Self::Stalled => "⚑",
-            Self::Pending | Self::Blocked => "·",
+            Self::Pending => "·",
+            Self::Blocked => "⊘",
         }
     }
 

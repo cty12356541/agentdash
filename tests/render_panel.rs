@@ -23,6 +23,10 @@ use model::{AgentView, Dashboard, GateView, MilestoneView, TaskView};
 use render::{DEFAULT_PANEL_WIDTH, display_width, render_oneline, render_panel};
 use sources::git::GitFacts;
 use sources::remote::RemoteFacts;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 fn task(id: &str, label: &str, lane: &str) -> TaskView {
     TaskView {
@@ -215,14 +219,14 @@ fn rich_states_map_to_visual_marks() {
         "无 note/fix_round 任务行零尾缀: {plain}"
     );
     assert!(
-        plain.contains("⚑ T2 返修轮 · fix round 2/5 R2/5"),
-        "fix-round 视觉 ⚑,note 透传 + R<N>/<M> 尾缀"
+        plain.contains("⚑ T2 返修轮 R2/5"),
+        "fix-round 视觉 ⚑,R<N>/<M> 尾缀;note 原文已解析不重复(W2-3b)"
     );
     assert!(
         lines.contains(&"▶ T3 复核中"),
         "review 视觉 ▶,无 fix_round 不加尾缀"
     );
-    assert!(plain.contains("· T4 挂起"), "blocked 视觉同 pending 点");
+    assert!(plain.contains("⊘ T4 挂起"), "blocked 视觉独立符号 ⊘(W2-3b)");
     assert!(
         plain.contains("✓1 ▶2 ·1 ⚑1 "),
         "统计:▶ 含 review+fix-round、⚑ = fix-round、· 含 blocked"
@@ -587,5 +591,149 @@ fn pr_block_absent_without_remote_and_placeholder_without_pr() {
     assert!(
         plain.contains("PR / 远程") && plain.contains("· 无关联 PR"),
         "探测成功但无 PR:占位不白板"
+    );
+}
+
+// ---------- W2-3b 验证发现修复批(F1 缺失源警告 / F3 项目名 / F6 blocked+note) ----------
+//
+// 本组走真实 merge 链路(挂载的 model + sources 合并),需要受控 fixture 仓:
+// 目录名即项目名断言的期望值,helper 与 tests/merge.rs 同约定(各测试二进制
+// 独立编译,无命名冲突)。
+
+fn run_git(repo: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .status()
+        .expect("git should be on PATH for tests");
+    assert!(
+        status.success(),
+        "git {args:?} failed in {}",
+        repo.display()
+    );
+}
+
+fn next_dir(name: &str) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let serial = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "agentdash-w2-3b-{name}-{}-{serial}",
+        std::process::id()
+    ))
+}
+
+fn cleanup(path: &Path) {
+    let _ = fs::remove_dir_all(path);
+}
+
+/// 受控 fixture 仓:git init + 本地身份 + main 分支 + 1 次提交(目录名可断言)。
+fn fixture_repo(name: &str) -> PathBuf {
+    let repo = next_dir(name);
+    fs::create_dir_all(&repo).expect("create fixture dir");
+    run_git(&repo, &["init"]);
+    run_git(&repo, &["config", "user.name", "agentdash-test"]);
+    run_git(
+        &repo,
+        &["config", "user.email", "agentdash-test@example.com"],
+    );
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    run_git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    fs::write(repo.join("a.txt"), "one\n").expect("write a.txt");
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "one"]);
+    repo
+}
+
+/// W2-3b F1(AD-ERR-001):契约**缺失**(有 events 无 ledger.json)→
+/// 面板出 `⚠ missing ledger.json: …` 警告行,措辞对齐损坏路径风格。
+#[test]
+fn missing_ledger_renders_warning_line_in_panel() {
+    let repo = fixture_repo("missing-ledger");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(
+        dir.join("events.jsonl"),
+        r#"{"kind":"gate","gate":"review","state":"passed","detail":"ok"}"#,
+    )
+    .expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+
+    assert!(
+        plain.contains("⚠ missing ledger.json"),
+        "面板必须携带契约缺失警告行: {plain}"
+    );
+    assert!(
+        !plain.contains("no data sources"),
+        "其余源在场不打全无引导: {plain}"
+    );
+    cleanup(&repo);
+}
+
+/// W2-3b F3:项目名 = git 仓根目录名(去硬编码);panel 页眉与 oneline 同源。
+#[test]
+fn project_label_derives_git_repo_root_name() {
+    let repo = fixture_repo("proj-repo");
+    let expected = repo
+        .file_name()
+        .expect("fixture dir name")
+        .to_string_lossy()
+        .into_owned();
+
+    let dash = model::merge(&repo);
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    let lines: Vec<&str> = plain.lines().collect();
+
+    assert_eq!(lines[0], expected, "panel 页眉项目名 = 仓根目录名: {plain}");
+    assert_eq!(
+        render_oneline(&dash),
+        format!("[dash] {expected} ✓0▶0·1 ⚑0 ·0ag"),
+        "oneline 项目名 = 仓根目录名"
+    );
+    cleanup(&repo);
+}
+
+/// W2-3b F6①:blocked 任务行用独立符号 ⊘,与 pending 的 · 可区分。
+#[test]
+fn blocked_renders_with_distinct_glyph() {
+    let mut blocked = task("B1", "阻塞任务", "A");
+    blocked.state = TaskState::Blocked;
+    let mut pending = task("P1", "待办任务", "A");
+    pending.state = TaskState::Pending;
+    let tasks = vec![blocked, pending];
+    let plain = strip_ansi(&render_panel(&dash_with(tasks), DEFAULT_PANEL_WIDTH));
+    let lines: Vec<&str> = plain.lines().collect();
+
+    assert!(
+        lines.contains(&"⊘ B1 阻塞任务"),
+        "blocked 行携带独立符号 ⊘: {plain}"
+    );
+    assert!(lines.contains(&"· P1 待办任务"), "pending 行仍为 ·");
+    assert!(
+        !plain.contains("· B1"),
+        "blocked 不得再与 pending 同点: {plain}"
+    );
+}
+
+/// W2-3b F6②:note 解析出 `fix_round` 后行内只出 R<N>/<M> 尾缀,
+/// 不再重复渲染 note 原文。
+#[test]
+fn fix_round_note_not_duplicated_on_task_row() {
+    let tasks = vec![TaskView {
+        id: "T1".into(),
+        label: "返修轮".into(),
+        state: TaskState::FixRound,
+        lane: Some("A".into()),
+        note: Some("fix round 2/5".into()),
+        fix_round: Some((2, 5)),
+        since: None,
+    }];
+    let plain = strip_ansi(&render_panel(&dash_with(tasks), DEFAULT_PANEL_WIDTH));
+
+    assert!(plain.contains("R2/5"), "R 尾缀照常渲染: {plain}");
+    assert!(
+        !plain.contains("fix round 2/5"),
+        "已解析出尾缀,note 原文不得重复上板: {plain}"
     );
 }

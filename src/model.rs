@@ -1,8 +1,9 @@
 //! 多源模型合并(W1-005):契约台账 > 事件流 > git 快照,按可信序折叠成渲染层模型。
 //!
 //! 降级矩阵(承 AD-ERR-001:降级不失败):
-//! - 契约缺失或损坏 → 警告行 + git 伪任务兜底(`recent` 每条提交一个
-//!   [`TaskView`] 单链,恒 `pending`);事件层不受影响,照常合并。
+//! - 契约缺失或损坏 → 警告行(缺失仅当其余源在场才告警)+ git 伪任务兜底
+//!   (`recent` 每条提交一个 [`TaskView`] 单链,恒 `pending`);事件层不受
+//!   影响,照常合并。
 //! - 契约合法 → 台账警告加 `ledger:` 源前缀透传;lane 未声明的任务尾接
 //!   (按 id 字典序,保证确定性)。
 //! - 三源全无 → 空态 + 引导文案进 [`Dashboard::warnings`]。
@@ -149,7 +150,8 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
     let mut milestones = Vec::new();
     let mut barriers = Vec::new();
     let ledger_path = repo.join(".agentdash").join("ledger.json");
-    if let Some(text) = read_source(&ledger_path, "ledger.json", &mut warnings) {
+    let (ledger_text, ledger_present) = read_source(&ledger_path, "ledger.json", &mut warnings);
+    if let Some(text) = ledger_text {
         match contract::parse_ledger(&text) {
             Ok(ledger) => {
                 contract_ok = true;
@@ -182,7 +184,8 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
     let mut agents = Vec::new();
     let mut gates = Vec::new();
     let events_path = repo.join(".agentdash").join("events.jsonl");
-    if let Some(text) = read_source(&events_path, "events.jsonl", &mut warnings) {
+    let (events_text, events_present) = read_source(&events_path, "events.jsonl", &mut warnings);
+    if let Some(text) = events_text {
         let model = events::replay(text.lines().map(str::to_owned));
         // 投影时就地排序,渲染层免排序即可拿到确定性输出
         agents = model
@@ -215,6 +218,13 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         warnings.extend(model.warnings);
     }
 
+    // AD-ERR-001:契约**缺失**(文件不存在,非损坏)同样降级为警告行,措辞
+    // 对齐损坏路径;但仅当其余源(事件文件 / git 仓)在场——三源全无走下方
+    // 空态引导,不叠加缺失告警(README 空态行为,W2-3b)
+    if !ledger_present && (events_present || git.present) {
+        warnings.push("missing ledger.json: expected .agentdash/ledger.json".to_owned());
+    }
+
     // git 兜底:无契约时用最近提交伪任务单链(recent 每条一个,恒 pending)
     if !contract_ok && git.present {
         tasks = git_tasks(&git);
@@ -240,14 +250,16 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
     }
 }
 
-/// 读一个源文件;不存在静默返回 [`None`],其他 IO 错误降级为警告行。
-fn read_source(path: &Path, label: &str, warnings: &mut Vec<String>) -> Option<String> {
+/// 读一个源文件,返回 `(内容, 文件是否存在)`:不存在(NotFound)静默返回
+/// `(None, false)`——存在与否是 AD-ERR-001 缺失警告行的判定输入,不与
+/// 其他 IO 错误混同(存在但读不了降级为警告行,返回 `(None, true)`)。
+fn read_source(path: &Path, label: &str, warnings: &mut Vec<String>) -> (Option<String>, bool) {
     match fs::read_to_string(path) {
-        Ok(text) => Some(text),
-        Err(err) if err.kind() == ErrorKind::NotFound => None,
+        Ok(text) => (Some(text), true),
+        Err(err) if err.kind() == ErrorKind::NotFound => (None, false),
         Err(err) => {
             warnings.push(format!("{label} unreadable: {err}"));
-            None
+            (None, true)
         }
     }
 }

@@ -77,6 +77,18 @@ fn snapshot_reports_branch_head_dirty_and_recent() {
     assert!(facts.recent[0].ends_with("two"));
     assert!(facts.recent[1].ends_with("one"));
     assert!(facts.recent[0].starts_with(head));
+    // W2-3b F3:仓根目录随快照记录(渲染层项目名的来源),末段即目录名
+    let root = facts.root.as_deref().expect("toplevel recorded");
+    assert_eq!(
+        Path::new(root)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .as_deref(),
+        repo.file_name()
+            .map(|name| name.to_string_lossy())
+            .as_deref(),
+        "root 取 git rev-parse --show-toplevel"
+    );
 
     // 未提交改动:1 个已跟踪文件修改 + 1 个未跟踪文件 => dirty == 2
     fs::write(repo.join("a.txt"), "changed\n").expect("modify a.txt");
@@ -96,6 +108,7 @@ fn absent_for_non_git_directory() {
     assert_eq!(facts.branch, None);
     assert_eq!(facts.head_short, None);
     assert_eq!(facts.recent, Vec::<String>::new());
+    assert_eq!(facts.root, None, "非 git 仓无仓根可记");
     cleanup(&dir);
 }
 

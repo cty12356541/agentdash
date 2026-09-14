@@ -290,7 +290,7 @@ pub fn render_graph(dash: &Dashboard, width: usize) -> String {
             .is_some_and(|ranges| ranges.iter().any(|(x0, x1)| *x0 <= col && col < *x1))
     };
     route_child_edges(&mut canvas, &edges, &cell_of, &in_box);
-    assemble_output(&canvas, overlays, project_label(dash), width)
+    assemble_output(&canvas, overlays, &project_label(dash), width)
 }
 
 /// 步骤 1:画节点框(顶/底横线 + 四角 + 文字行侧框),有出边的框底打 ┬ 出线桩;
