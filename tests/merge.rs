@@ -20,7 +20,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use contract::TaskState;
-use model::{AgentView, GateView, TaskView};
+use model::{AgentView, GateView, MilestoneView, TaskView};
 use sources::git::GitFacts;
 
 /// 三源齐全组的合法台账:两个车道任务 + 一个未入车道任务,1/3 done。
@@ -188,11 +188,17 @@ fn three_sources_merge_into_dashboard() {
         dash.warnings
     );
 
-    // git 层始终采集快照;generated_at 为 RFC 3339 UTC 串
+    // git 层始终采集快照;generated_at 与事件 ts 同用本地时区偏移格式
+    // (`±HH:MM` 收尾,发现 9;W2 时代的 UTC `Z` 断言随本批退役)
     assert!(dash.git.present);
     assert_eq!(dash.git.recent.len(), 2);
     assert!(!dash.generated_at.is_empty());
-    assert!(dash.generated_at.ends_with('Z'));
+    let tz = dash.generated_at.as_bytes();
+    assert!(
+        dash.generated_at.len() == 25 && (tz[19] == b'+' || tz[19] == b'-') && tz[22] == b':',
+        "generated_at 须为本地偏移 RFC 3339(YYYY-MM-DDTHH:MM:SS±HH:MM): {}",
+        dash.generated_at
+    );
     cleanup(&repo);
 }
 
@@ -584,4 +590,240 @@ fn unreadable_ledger_warns_only_unreadable() {
     );
     assert_eq!(dash.tasks.len(), 2, "git 伪任务兜底照常");
     cleanup(&repo);
+}
+
+// ---------- W3-004 多里程碑分组 + 速度线 + project 上模型 + 时区统一 ----------
+
+/// W3-004 D1:声明式里程碑分组——被引用任务入组;重复引用以首见为准并记
+/// 警告;未被引用的任务进「未分组」尾组;未知 id 沿车道先例静默跳过。
+#[test]
+fn declared_milestones_group_tasks_first_wins_with_ungrouped_tail() {
+    const LEDGER_MS: &str = r#"{
+      "$schema": "agentdash.tasklog.v1",
+      "wave": "W3",
+      "title": "波标题(声明式时不再上里程碑)",
+      "milestones": [
+        {"id": "M1", "title": "契约扩展", "tasks": ["01", "02", "99"]},
+        {"id": "M2", "title": "渲染接线", "tasks": ["02", "03"]}
+      ],
+      "tasks": {
+        "01": {"label": "任务一", "state": "done"},
+        "02": {"label": "任务二", "state": "done"},
+        "03": {"label": "任务三", "state": "pending"},
+        "04": {"label": "任务四", "state": "done"}
+      }
+    }"#;
+    let repo = fixture_repo("ms-group");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER_MS).expect("write ledger.json");
+
+    let dash = model::merge(&repo);
+
+    assert_eq!(
+        dash.milestones,
+        vec![
+            MilestoneView {
+                wave: Some("M1".to_owned()),
+                title: "契约扩展".to_owned(),
+                done: 2,
+                total: 2,
+            },
+            MilestoneView {
+                wave: Some("M2".to_owned()),
+                title: "渲染接线".to_owned(),
+                done: 0,
+                total: 1,
+            },
+            MilestoneView {
+                wave: None,
+                title: "未分组".to_owned(),
+                done: 1,
+                total: 1,
+            },
+        ],
+        "M1(01,02;未知 99 静默跳过)→ M2(02 重复以首见为准,只收 03)→ 未分组尾组(04)"
+    );
+    assert!(
+        dash.warnings.iter().any(|w| w.contains("ledger:")
+            && w.contains("M2")
+            && w.contains("02")
+            && w.contains("M1")),
+        "重复引用必须带 `ledger:` 前缀警告并点名 M2/02/M1: {:?}",
+        dash.warnings
+    );
+    assert_eq!(dash.tasks.len(), 4, "分组不改任务视图本身");
+    cleanup(&repo);
+}
+
+/// W3-004 降级铁律(模型侧):milestones 结构损坏 → 台账警告(带 `ledger:`
+/// 前缀)+ **单里程碑合成兜底**(wave + 全任务),任务/屏障照常合并。
+#[test]
+fn malformed_milestones_fall_back_to_single_synthesis() {
+    const LEDGER_BROKEN_MS: &str = r#"{
+      "$schema": "agentdash.tasklog.v1",
+      "wave": "W3",
+      "title": "坏里程碑兜底",
+      "milestones": "not-a-list",
+      "tasks": {
+        "01": {"label": "任务一", "state": "done"},
+        "02": {"label": "任务二", "state": "pending"}
+      }
+    }"#;
+    let repo = fixture_repo("ms-broken");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER_BROKEN_MS).expect("write ledger.json");
+
+    let dash = model::merge(&repo);
+
+    assert_eq!(
+        dash.milestones.len(),
+        1,
+        "损坏 milestones 必须退到单里程碑合成: {:?}",
+        dash.milestones
+    );
+    let synthesis = &dash.milestones[0];
+    assert_eq!(synthesis.wave.as_deref(), Some("W3"), "合成取台账 wave");
+    assert_eq!(synthesis.title, "坏里程碑兜底", "合成取台账 title");
+    assert_eq!((synthesis.done, synthesis.total), (1, 2), "全任务口径");
+    assert!(
+        dash.warnings
+            .iter()
+            .any(|w| w.contains("ledger:") && w.contains("milestones") && w.contains("synthesis")),
+        "损坏 milestones 必须出点名警告: {:?}",
+        dash.warnings
+    );
+    assert!(
+        !dash.warnings.iter().any(|w| w.contains("corrupt")),
+        "降级不是损坏,不得混入 corrupt 行: {:?}",
+        dash.warnings
+    );
+    assert_eq!(dash.tasks.len(), 2, "任务视图不受影响");
+    cleanup(&repo);
+}
+
+/// W3-004 速度线模型口径(纯函数):≥2 里程碑**且**任务 since 跨度 > 0 →
+/// done 总数 / 跨度小时(跨度 = max(since) − min(since));其余一律 `None`。
+#[test]
+fn velocity_needs_two_milestones_and_positive_span() {
+    let tv = |since: Option<&str>| TaskView {
+        id: String::new(),
+        label: String::new(),
+        state: TaskState::Done,
+        lane: None,
+        note: None,
+        fix_round: None,
+        since: since.map(str::to_owned),
+    };
+    let ms = |done: usize, total: usize| MilestoneView {
+        wave: None,
+        title: String::new(),
+        done,
+        total,
+    };
+    // 双里程碑 + 2h 跨度 + 3 done → 1.5 tasks/h(中间戳不影响 max/min)
+    let tasks = vec![
+        tv(Some("2026-09-13T06:00:00Z")),
+        tv(Some("2026-09-13T08:00:00Z")),
+        tv(Some("2026-09-13T07:00:00Z")),
+    ];
+    let milestones = vec![ms(2, 4), ms(1, 3)];
+    let rate = model::velocity(&tasks, &milestones).expect("双里程碑 + 正跨度必有速度");
+    assert!((rate - 1.5).abs() < 1e-9, "3 done / 2h = 1.5, got {rate}");
+
+    assert!(
+        model::velocity(&tasks, &milestones[..1]).is_none(),
+        "单里程碑不打速度线"
+    );
+    let same = vec![
+        tv(Some("2026-09-13T08:00:00Z")),
+        tv(Some("2026-09-13T08:00:00Z")),
+    ];
+    assert!(
+        model::velocity(&same, &milestones).is_none(),
+        "任务 since 全同戳 → 跨度 0,不虚报速度"
+    );
+    assert!(
+        model::velocity(&[tv(None)], &milestones).is_none(),
+        "无任何可解析时间戳 → 不打"
+    );
+    assert!(
+        model::velocity(&[tv(Some("not-a-time"))], &milestones).is_none(),
+        "坏戳不参与跨度,全坏则不打"
+    );
+    // 偏移格式与 `Z` 混排按绝对时刻折算(发现 9 后两种形态并存)
+    let mixed = vec![
+        tv(Some("2026-09-13T14:00:00+08:00")), // = 06:00Z
+        tv(Some("2026-09-13T08:00:00Z")),
+        tv(Some("2026-09-13T06:30:00-02:00")), // = 08:30Z
+    ];
+    let rate = model::velocity(&mixed, &milestones).expect("混排跨度 2.5h");
+    assert!((rate - 1.2).abs() < 1e-9, "3 done / 2.5h = 1.2, got {rate}");
+}
+
+/// W3-004 发现 9:`generated_at` 与事件 ts 同用本地时区偏移格式(`±HH:MM`,
+/// hook `ts_now` 同款),不再是 UTC `Z`;且模型 RFC 3339 解析兼容两种形态。
+#[test]
+fn generated_at_uses_local_offset_format() {
+    let repo = fixture_repo("tz-format");
+    let dash = model::merge(&repo);
+    let text = dash.generated_at.clone();
+    let bytes = text.as_bytes();
+    assert!(
+        text.len() == 25
+            && bytes[4] == b'-'
+            && bytes[10] == b'T'
+            && bytes[13] == b':'
+            && (bytes[19] == b'+' || bytes[19] == b'-')
+            && bytes[22] == b':',
+        "generated_at 须为 YYYY-MM-DDTHH:MM:SS±HH:MM: {text}"
+    );
+    assert!(
+        model::rfc3339_to_secs(&text).is_some(),
+        "模型解析器必须吃自己产出的格式: {text}"
+    );
+    cleanup(&repo);
+
+    // 偏移语义纯函数钉死:同一瞬时两种写法解析相等
+    assert_eq!(
+        model::rfc3339_to_secs("2026-09-13T14:00:00+08:00"),
+        model::rfc3339_to_secs("2026-09-13T06:00:00Z"),
+        "+08:00 偏移按绝对时刻折算"
+    );
+    assert_eq!(
+        model::rfc3339_to_secs("2026-09-13T06:00:00-03:00"),
+        model::rfc3339_to_secs("2026-09-13T09:00:00Z"),
+        "负偏移同样折算"
+    );
+    assert_eq!(
+        model::rfc3339_to_secs("2026-09-13T06:00:00+99:00"),
+        None,
+        "越界偏移拒解析"
+    );
+}
+
+/// W3-004 D3:project 上模型——git 仓根目录名优先;非 git 目录回退 cwd
+/// 目录名(cargo test 的 cwd = crate 根,名 `agentdash`);渲染层不再自带
+/// 回退链,页眉/图题/oneline 一律读本字段。
+#[test]
+fn project_follows_git_root_then_cwd_fallback() {
+    let repo = fixture_repo("proj-model");
+    let expected = repo
+        .file_name()
+        .expect("fixture dir name")
+        .to_string_lossy()
+        .into_owned();
+    let dash = model::merge(&repo);
+    assert_eq!(dash.project, expected, "D3:git 仓根目录名上模型");
+    cleanup(&repo);
+
+    let plain = next_dir("plain-proj");
+    fs::create_dir_all(&plain).expect("create plain dir");
+    let dash = model::merge(&plain);
+    assert_eq!(
+        dash.project, "agentdash",
+        "非 git 仓回退 cwd 目录名(测试进程 cwd = crate 根)"
+    );
+    cleanup(&plain);
 }

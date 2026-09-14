@@ -23,7 +23,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Map, Value, json};
 
@@ -562,125 +562,7 @@ fn clip(s: &str) -> String {
 }
 
 /// 本地 ISO8601 秒级 ts(带时区偏移,如 `2026-09-13T21:00:00+08:00`;spec §4.2)。
+/// W3-004 起 impl 上收 `model::ts_now`(与 `generated_at` 同源同格式,发现 9)。
 fn ts_now() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
-    let offset = local_utc_offset(now);
-    format_ts(now + offset, offset)
-}
-
-/// (本地纪元秒, 偏移秒) → `YYYY-MM-DDTHH:MM:SS±HH:MM`。偏移 0 输出 `+00:00`
-/// (承 Python `isoformat` 语义)。
-fn format_ts(local_secs: i64, offset_secs: i64) -> String {
-    let days = local_secs.div_euclid(86_400);
-    let day_secs = local_secs.rem_euclid(86_400);
-    let (year, month, day) = civil_from_days(days);
-    let (sign, off) = if offset_secs < 0 {
-        ("-", -offset_secs)
-    } else {
-        ("+", offset_secs)
-    };
-    format!(
-        "{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}{sign}{oh:02}:{om:02}",
-        h = day_secs / 3_600,
-        m = (day_secs % 3_600) / 60,
-        s = day_secs % 60,
-        oh = off / 3_600,
-        om = (off % 3_600) / 60,
-    )
-}
-
-/// 天序数(1970-01-01 = 0)→ (年, 月, 日)。Hinnant 算法,常规日期域内无溢出。
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let day = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let month = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    (if month <= 2 { year + 1 } else { year }, month, day)
-}
-
-#[cfg(windows)]
-/// (年, 月, 日) → 天序数。仅 Windows 偏移差分(GetLocalTime/GetSystemTime)使用。
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400; // [0, 399]
-    let mp = if month > 2 { month - 3 } else { month + 9 }; // [0, 11]
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-#[cfg(windows)]
-/// 本地 UTC 偏移秒:kernel32 `GetLocalTime` 与 `GetSystemTime` 同瞬时差分
-/// (自动含 DST;按分钟取整吸收两次取时之间的秒级间隙)。
-fn local_utc_offset(_utc: i64) -> i64 {
-    #[repr(C)]
-    #[derive(Default)]
-    struct SysTime {
-        year: u16,
-        month: u16,
-        day_of_week: u16,
-        day: u16,
-        hour: u16,
-        minute: u16,
-        second: u16,
-        millis: u16,
-    }
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetLocalTime(out: *mut SysTime);
-        fn GetSystemTime(out: *mut SysTime);
-    }
-    let pseudo = |st: &SysTime| {
-        days_from_civil(i64::from(st.year), i64::from(st.month), i64::from(st.day)) * 86_400
-            + i64::from(st.hour) * 3_600
-            + i64::from(st.minute) * 60
-            + i64::from(st.second)
-    };
-    // SAFETY:两 API 均只向调用方提供的单个 SYSTEMTIME(8×u16)写入,无失败路径;
-    // 指针指向本栈帧内变量,调用期间线程不被重入。
-    unsafe {
-        let mut local = SysTime::default();
-        let mut system = SysTime::default();
-        GetLocalTime(std::ptr::addr_of_mut!(local));
-        GetSystemTime(std::ptr::addr_of_mut!(system));
-        let drift = pseudo(&local) - pseudo(&system);
-        (drift + 30).div_euclid(60) * 60
-    }
-}
-
-#[cfg(unix)]
-/// 本地 UTC 偏移秒:libc `localtime_r` 的 `tm_gmtoff`(`struct tm` 布局由 libc
-/// crate 保证,glibc/musl/macOS 与非 LP64 全覆盖,不再手搓布局)。
-fn local_utc_offset(utc: i64) -> i64 {
-    // SAFETY:`localtime_r` 线程安全(结果只写入调用方缓冲 `tm`,不触碰静态区);
-    // `t` 与 `tm` 均为本栈帧内变量,调用期间线程不被重入。仅读取 `tm_gmtoff`。
-    unsafe {
-        let mut tm: libc::tm = std::mem::zeroed();
-        // try_into 而非直接赋值:32 位 glibc 目标 `time_t` = i32,i64 直接赋值
-        // E0308;LP64 下为恒等转换,永不走 fallback(超界时间戳退化为 epoch)。
-        #[allow(clippy::useless_conversion)] // LP64 恒等转换被该 lint 误报
-        let t: libc::time_t = utc.try_into().unwrap_or(0);
-        // &raw 显式化:CI stable(1.98)clippy borrow_as_ptr 拒绝隐式借用转裸指针
-        if libc::localtime_r(&raw const t, &raw mut tm).is_null() {
-            return 0;
-        }
-        if tm.tm_gmtoff.abs() >= 86_400 {
-            return 0; // 离谱偏移按损坏处理,退化 UTC
-        }
-        tm.tm_gmtoff as i64
-    }
-}
-
-#[cfg(not(any(windows, unix)))]
-/// 未知平台:退化为 UTC 偏移。
-fn local_utc_offset(_utc: i64) -> i64 {
-    0
+    crate::model::ts_now()
 }

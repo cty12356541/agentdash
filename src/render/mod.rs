@@ -6,9 +6,9 @@
 //!
 //! 算法移植自 claude-dash `dashlib/render_oneline.py` / `render_panel.py` /
 //! `render_graph.py`,以其实测黄金断言语义为准;输入面收敛为
-//! `model::Dashboard`。模型暂缺的展示字段(activity / velocity)
-//! 以 0 / 空呈现并留 TODO,不扩 model(扩字段属后续车道;barriers 已随
-//! W1-007 入模)。
+//! `model::Dashboard`。模型暂缺的展示字段(activity)以空呈现并留 TODO;
+//! velocity(速度线)已随 W3-004 入模(`model::velocity`),barriers 随
+//! W1-007、project 随 W3-004(D3)入模。
 
 pub mod graph;
 mod oneline;
@@ -19,8 +19,6 @@ mod panel;
 // import;消费方一律走 `graph::` 路径。panel/oneline 各目标全消费,保持平铺。
 pub use oneline::render_oneline;
 pub use panel::{DEFAULT_PANEL_WIDTH, render_panel};
-
-use std::path::Path;
 
 use crate::contract::TaskState;
 use crate::model::{Dashboard, MilestoneView, TaskView};
@@ -51,24 +49,10 @@ pub(crate) const fn clamp_width(width: usize) -> usize {
     }
 }
 
-/// 项目名(W2-3b 落地原 TODO(model) 去硬编码):取 git 仓根目录名(git 源
-/// 已探测 `GitFacts::root`);无 git 仓回退 cwd 目录名;两者皆不可得(根
-/// 路径等无末段)再兜底 crate 名。
-pub(crate) fn project_label(dash: &Dashboard) -> String {
-    dash.git
-        .root
-        .as_deref()
-        .and_then(dir_name)
-        .or_else(|| std::env::current_dir().ok().and_then(|cwd| dir_name(&cwd)))
-        .unwrap_or_else(|| "agentdash".to_owned())
-}
-
-/// 路径末段目录名;无末段(根路径等)为 [`None`],非 UTF-8 lossy 降级。
-fn dir_name(path: impl AsRef<Path>) -> Option<String> {
-    path.as_ref()
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-}
+// 项目名(W2-3b 落地原 TODO(model) 去硬编码;W3-004 D3 起退役):回退链
+// 上收 `model`(git 仓根名 → cwd 目录名 → `"agentdash"`),合并时算好进
+// `Dashboard::project`,渲染层只读字段不再自猜。原 `project_label` /
+// `dir_name` 已删,消费方一律读 `dash.project`。
 
 /// 折叠车道伪任务判别(W2-005):tui 折叠视图把完成车道折叠成单条伪任务,
 /// 以**空 id** 为哨兵——合法台账 id 与 git 短 SHA 均非空,空 id 唯一标识

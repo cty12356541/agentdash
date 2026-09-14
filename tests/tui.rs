@@ -95,6 +95,7 @@ fn w25_dash() -> Dashboard {
         agents: Vec::new(),
         gates: Vec::new(),
         remote: None,
+        project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -110,6 +111,7 @@ fn empty_dash() -> Dashboard {
         agents: Vec::new(),
         gates: Vec::new(),
         remote: None,
+        project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -550,6 +552,7 @@ fn detail_dash() -> Dashboard {
             },
         ],
         remote: None,
+        project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -673,6 +676,7 @@ fn wave_dash() -> Dashboard {
         agents: Vec::new(),
         gates: Vec::new(),
         remote: None,
+        project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -791,6 +795,7 @@ fn filter_dash() -> Dashboard {
         agents: Vec::new(),
         gates: Vec::new(),
         remote: None,
+        project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: GENERATED_AT.into(),
     }
 }

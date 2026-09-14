@@ -1,7 +1,7 @@
 //! statusline 单行:无 ANSI、零副作用(W1-006,移植自 claude-dash
 //! `dashlib/render_oneline.py`)。
 
-use super::{Visual, active_milestone, project_label, visual};
+use super::{Visual, active_milestone, visual};
 use crate::model::Dashboard;
 
 /// 无 ANSI 单行:`[dash] <project> <活跃里程碑>✓done▶active·rest ⚑stalled ·<n>ag`。
@@ -32,7 +32,7 @@ pub fn render_oneline(dash: &Dashboard) -> String {
     };
     format!(
         "[dash] {} {ms}✓{done}▶{active}·{rest} ⚑{stalled} ·{agents}ag",
-        project_label(dash)
+        dash.project
     )
 }
 

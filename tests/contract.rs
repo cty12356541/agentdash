@@ -168,6 +168,81 @@ fn task_state_as_str_matches_serde_roundtrip() {
     }
 }
 
+// ---------- W3-004 可选 `milestones`(声明式里程碑,加法扩展) ----------
+
+/// W3-004:`milestones` 合法形态逐字段解析(id/title/tasks;整数引用统一收
+/// 字符串);字段缺省时为空(v1 合成兜底在模型层,契约层只管形状)。
+#[test]
+fn milestones_field_parses_and_defaults_to_empty() {
+    let text = r#"{
+        "title": "声明式里程碑",
+        "milestones": [
+            {"id": "M1", "title": "契约扩展", "tasks": ["01", 2]},
+            {"id": "M2", "title": "渲染接线"}
+        ]
+    }"#;
+    let ledger = parse_ledger(text).expect("milestones 是加法字段,合法");
+    assert_eq!(ledger.milestones.len(), 2);
+    assert_eq!(ledger.milestones[0].id, "M1");
+    assert_eq!(ledger.milestones[0].title, "契约扩展");
+    assert_eq!(
+        ledger.milestones[0].tasks,
+        vec!["01", "2"],
+        "任务引用沿用 lanes 先例:整数统一收字符串"
+    );
+    assert_eq!(ledger.milestones[1].id, "M2", "tasks 缺省为空组,不要求非空");
+    assert!(ledger.milestones[1].tasks.is_empty());
+    assert!(
+        ledger.warnings.is_empty(),
+        "合法 milestones 不得告警: {:?}",
+        ledger.warnings
+    );
+
+    let bare = parse_ledger(r#"{"title": "无声明"}"#).expect("缺省 milestones 合法");
+    assert!(
+        bare.milestones.is_empty(),
+        "缺省 = 空表(模型层据此走 v1 合成)"
+    );
+    assert!(bare.warnings.is_empty());
+}
+
+/// W3-004 降级铁律(契约侧):`milestones` 结构损坏(非数组 / 缺必填 /
+/// 引用类型非法)→ 整账**不 corrupt**,降级为空表 + 恰一条点名警告,其余
+/// 字段照常解析——模型层据此走单里程碑合成兜底(与 lanes/tasks 损坏即
+/// `Corrupt` 的口径不同:milestones 是可选增强,坏了自己退,不拖垮台账)。
+#[test]
+fn malformed_milestones_degrade_to_warning_not_corrupt() {
+    let cases = [
+        r#"{"title":"x","milestones":"nope"}"#,              // 非数组
+        r#"{"title":"x","milestones":[{"title":"缺 id"}]}"#, // 缺必填 id
+        r#"{"title":"x","milestones":[{"id":"M1","tasks":"01"}]}"#, // tasks 非数组
+        r#"{"title":"x","milestones":[{"id":"M1","tasks":[true]}]}"#, // 引用类型非法
+    ];
+    for text in cases {
+        let ledger = parse_ledger(text).expect("milestones 损坏降级,不判 corrupt");
+        assert!(
+            ledger.milestones.is_empty(),
+            "损坏 milestones 降级为空表: {text}"
+        );
+        assert_eq!(
+            ledger.warnings.len(),
+            1,
+            "恰一条警告: {text} → {:?}",
+            ledger.warnings
+        );
+        assert!(
+            ledger.warnings[0].contains("milestones"),
+            "警告点名 milestones 字段: {:?}",
+            ledger.warnings
+        );
+        assert_eq!(ledger.title, "x", "降级只折损 milestones,其余字段照常");
+    }
+
+    // `null` 视同缺省(宽容口径),不告警
+    let null = parse_ledger(r#"{"title":"x","milestones":null}"#).expect("null = 缺省");
+    assert!(null.milestones.is_empty() && null.warnings.is_empty());
+}
+
 fn schema_text() -> String {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -249,6 +324,28 @@ fn schema_file_agrees_with_parser() {
         assert_eq!(ledger.tasks["1"].state.as_str(), state.as_str());
         assert!(ledger.warnings.is_empty());
     }
+
+    // W3-004:schema 与解析器同步携带可选 `milestones`(id/title 必填,tasks
+    // 沿用 taskIds 引用形态),且 `milestones` 不得进入 required(旧文件照验通过)
+    let milestones_def = resolve(&schema, &schema["properties"]["milestones"]);
+    let required: Vec<String> = milestones_def["items"]["required"]
+        .as_array()
+        .expect("milestone required list")
+        .iter()
+        .map(|v| v.as_str().expect("string key").to_string())
+        .collect();
+    assert!(
+        required.contains(&"id".to_owned()) && required.contains(&"title".to_owned()),
+        "milestone 条目必填 id/title: {required:?}"
+    );
+    assert!(
+        !schema["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .any(|v| v == "milestones"),
+        "milestones 是可选字段,不得入 required"
+    );
 }
 
 #[test]

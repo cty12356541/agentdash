@@ -71,6 +71,8 @@ fn w25_dash() -> Dashboard {
         // cwd 恰名 agentdash(root 缺省时 project_label 回退 cwd 目录名)
         git: pinned_git(),
         remote: None, // W2-007:模型新增 remote 字段;面板样例默认无远程探测
+        // W3-004 D3:项目名上模型,渲染层只读不猜
+        project: "agentdash".into(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -86,6 +88,7 @@ fn dash_with(tasks: Vec<TaskView>) -> Dashboard {
         // 同 w25_dash:钉固 root 去 cwd 依赖(W3-001)
         git: pinned_git(),
         remote: None,
+        project: "agentdash".into(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -425,46 +428,105 @@ fn stale_since_flags_task_row_after_threshold() {
     assert!(lines.contains(&"✓ T6 无戳任务"));
 }
 
-/// W2-002:速度线以里程碑计数近似吞吐(最近 3 波 done 均值,银行家舍入);
-/// 单里程碑信息不足不打,≥2 里程碑才出现。
+/// W3-004:速度线改真实吞吐口径——done 任务数 / 任务 `since` 跨度小时数,
+/// ≥2 里程碑**且**跨度 > 0 才打(`速度 N.N tasks/h`);轨迹区多里程碑逐行。
+/// fixture 事件流(两条 dispatched,`first_seen` 相距 5h)回放出任务时间戳,
+/// 21 done / 5h = 4.2 钉死数值。
 #[test]
-fn speed_line_needs_two_milestones_and_averages_last_three() {
-    // 单里程碑:无速度线
-    let dash = w25_dash();
+fn speed_line_is_tasks_per_hour_over_since_span() {
+    const EVENTS: &str = concat!(
+        r#"{"kind":"agent","event":"dispatched","who":"alice","ts":"2026-09-13T08:00:00Z"}"#,
+        "\n",
+        r#"{"kind":"agent","event":"dispatched","who":"bob","ts":"2026-09-13T13:00:00Z"}"#,
+        "\n",
+    );
+    let model = events::replay(EVENTS.lines().map(str::to_owned));
+    let stamps: Vec<String> = model
+        .agents
+        .iter()
+        .map(|agent| agent.first_seen.clone())
+        .collect();
+    assert_eq!(stamps.len(), 2, "fixture 事件各携 first_seen(08:00/13:00Z)");
+
+    // 21 个 done 任务,since 在两端戳间取值 → 跨度恰 5h
+    let tasks: Vec<TaskView> = (0..21)
+        .map(|i| {
+            let mut item = task(&format!("T{i:02}"), "冲刺任务", "A");
+            item.state = TaskState::Done;
+            item.since = Some(stamps[i % stamps.len()].clone());
+            item
+        })
+        .collect();
+    let ms = |wave: &str, title: &str, done: usize, total: usize| MilestoneView {
+        wave: Some(wave.into()),
+        title: title.into(),
+        done,
+        total,
+    };
+    let mut dash = dash_with(tasks);
+    dash.milestones = vec![ms("W1", "里程碑甲", 10, 10), ms("W2", "里程碑乙", 11, 11)];
+
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("  速度 4.2 tasks/h"),
+        "21 done / 5h = 4.2 tasks/h: {plain}"
+    );
+    assert!(
+        plain.contains("  W1 里程碑甲 ▓▓▓▓▓▓▓▓▓▓ 10/10 done"),
+        "多里程碑逐行(第 1 块): {plain}"
+    );
+    assert!(
+        plain.contains("  W2 里程碑乙 ▓▓▓▓▓▓▓▓▓▓ 11/11 done"),
+        "多里程碑逐行(第 2 块): {plain}"
+    );
+    assert!(plain.contains("轨迹 · 2 里程碑"), "完成里程碑计数入区块头");
+    for line in plain.lines() {
+        assert!(
+            display_width(line) <= DEFAULT_PANEL_WIDTH,
+            "零溢出: {line:?}"
+        );
+    }
+}
+
+/// W3-004 负断言:速度线生效条件不满足一律不打(不虚报)——单里程碑、
+/// 双里程碑但任务 since 全同戳(跨度 0)、双里程碑但无可解析时间戳。
+#[test]
+fn speed_line_hidden_unless_two_milestones_and_positive_span() {
+    let ms = |wave: &str| MilestoneView {
+        wave: Some(wave.into()),
+        title: "波".into(),
+        done: 1,
+        total: 2,
+    };
+    let stamped = |since: Option<&str>| {
+        let mut item = task("T1", "任务", "A");
+        item.state = TaskState::Done;
+        item.since = since.map(str::to_owned);
+        item
+    };
+
+    // 单里程碑(即便跨度 > 0 也不打)
+    let mut dash = dash_with(vec![
+        stamped(Some("2026-09-13T08:00:00Z")),
+        stamped(Some("2026-09-13T13:00:00Z")),
+    ]);
+    dash.milestones = vec![ms("W1")];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
     assert!(!plain.contains("速度"), "单里程碑不打速度线: {plain}");
 
-    let wave = |wave: &str, done: usize| MilestoneView {
-        wave: Some(wave.into()),
-        title: "波".into(),
-        done,
-        total: 9,
-    };
-
-    // 双里程碑:均值 (4+1)/2 = 2.5 → 五成双 → 2
-    let mut dash = w25_dash();
-    dash.milestones.push(wave("W26", 1));
+    // 双里程碑但任务 since 全同戳 → 跨度 0
+    dash.milestones = vec![ms("W1"), ms("W2")];
+    dash.tasks = vec![
+        stamped(Some("2026-09-13T13:00:00Z")),
+        stamped(Some("2026-09-13T13:00:00Z")),
+    ];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
-    assert!(
-        plain.contains("速度 2 任务/波次"),
-        "双里程碑显示最近波次均值 (4+1)/2→2: {plain}"
-    );
+    assert!(!plain.contains("速度"), "零跨度不打速度线: {plain}");
 
-    // 三里程碑:窗口=全部 → (4+4+1)/3 = 3
-    dash.milestones.insert(0, wave("W24", 4));
+    // 双里程碑但任务无时间戳
+    dash.tasks = vec![stamped(None), stamped(None)];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
-    assert!(
-        plain.contains("速度 3 任务/波次"),
-        "三里程碑均值 (4+4+1)/3=3: {plain}"
-    );
-
-    // 四里程碑:窗口只取最近 3 波 (4+4+1)/3=3;全平均 (9+4+4+1)/4=4.5 会得 4
-    dash.milestones.insert(0, wave("W23", 9));
-    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
-    assert!(
-        plain.contains("速度 3 任务/波次"),
-        "窗口只取最近 3 波,陈旧波次不入均: {plain}"
-    );
+    assert!(!plain.contains("速度"), "无时间戳不打速度线: {plain}");
 }
 
 #[test]
@@ -891,4 +953,167 @@ fn no_barrier_residue_without_barriers() {
         !plain.lines().any(|line| line.contains(" → ")),
         "无屏障不得出箭头行: {plain}"
     );
+}
+
+// ---------- W3-004 project 上模型(D3)+ 页眉/图题 elide + 黄金不变量 ----------
+
+/// W3-004 D3:页眉项目名读 [`Dashboard::project`](模型字段),渲染层
+/// cwd 回退退役——模型给什么页眉打什么,不再自猜。
+#[test]
+fn header_project_reads_model_field() {
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    dash.project = "myrepo".into();
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    let lines: Vec<&str> = plain.lines().collect();
+    assert_eq!(lines[0], "myrepo", "页眉首行 = 模型 project 字段: {plain}");
+    assert_eq!(
+        render_oneline(&dash),
+        "[dash] myrepo ✓1▶0·0 ⚑0 ·0ag",
+        "oneline 项目名同源"
+    );
+}
+
+/// W3-004 D3:超长仓名按现有截断策略钳制——panel 页眉与 graph 标题都以
+/// `…` 收尾且不破宽度(oneline 为 statusline,无宽度概念,不钳)。
+#[test]
+fn oversized_project_elides_in_header_and_graph_title() {
+    let long = format!("超宽仓{}", "x".repeat(200));
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    dash.project = long.clone();
+
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    for line in plain.lines() {
+        assert!(
+            display_width(line) <= DEFAULT_PANEL_WIDTH,
+            "panel 零溢出: {line:?}"
+        );
+    }
+    assert!(plain.contains('…'), "超宽项目名以 … 收尾: {plain}");
+    assert!(!plain.contains(&long), "超宽项目名不整串上板");
+
+    let graph = strip_ansi(&render::graph::render_graph(&dash, 72));
+    for (idx, line) in graph.lines().enumerate() {
+        assert!(
+            display_width(line) <= 72,
+            "graph 标题零溢出: {idx} {line:?}"
+        );
+    }
+    let title = graph.lines().next().unwrap_or_default();
+    assert!(title.contains('…'), "graph 标题超宽以 … 收尾: {title}");
+    // 整行 elide(现有截断策略):项目名独宽超限时尾缀随截断丢失;
+    // 正常宽度下 `project · DAG` 完整形态由 v1 黄金测试钉死
+}
+
+/// W3-004 黄金不变量:v1 台账(无 `milestones`)的 panel / oneline / graph
+/// 输出与扩展前**逐字节一致**(黄金串由扩展前二进制捕获;panel 仅把行尾
+/// 运行时刻钟归一为 `MM-DDTHH:MM`,它本就随刷新时刻漂移,不属行为面)。
+#[test]
+fn v1_ledger_without_milestones_renders_byte_identical() {
+    const GOLDEN_LEDGER: &str = r#"{
+  "$schema": "agentdash.tasklog.v1",
+  "wave": "W9",
+  "title": "v1 黄金对照样例",
+  "profile": "sdd",
+  "lanes": [
+    {"name": "甲-实现", "tasks": ["01", "02"]},
+    {"name": "乙-验证", "tasks": ["03"]}
+  ],
+  "tasks": {
+    "01": {"label": "契约解析", "state": "done"},
+    "02": {"label": "模型合并", "state": "active", "note": "fix round 2/5 边界样例"},
+    "03": {"label": "渲染对照", "state": "pending"}
+  },
+  "barriers": [
+    {"id": "B1", "after": ["01"], "unlocks": ["03"]}
+  ]
+}"#;
+
+    // 固定名 fixture 仓(目录名 = project 名,进黄金串);先清残再建
+    let repo = std::env::temp_dir().join("ad-golden-v1");
+    let _ = fs::remove_dir_all(&repo);
+    fs::create_dir_all(repo.join(".agentdash")).expect("create golden fixture");
+    run_git(&repo, &["init"]);
+    run_git(&repo, &["config", "user.name", "agentdash-test"]);
+    run_git(
+        &repo,
+        &["config", "user.email", "agentdash-test@example.com"],
+    );
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    run_git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    fs::write(repo.join("seed.txt"), "seed\n").expect("write seed");
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "one"]);
+    fs::write(repo.join(".agentdash").join("ledger.json"), GOLDEN_LEDGER)
+        .expect("write golden ledger");
+
+    let dash = model::merge(&repo);
+    let sep = |ch: char, width: usize| std::iter::repeat_n(ch, width).collect::<String>();
+    let sep64 = sep('═', 64);
+    let dash64 = sep('─', 64);
+    let sep72 = sep('─', 72);
+
+    // panel:黄金逐行(行 1 时钟归一);逐字节对比,零 diff
+    let panel = strip_ansi(&render_panel(&dash, 64));
+    let mut lines: Vec<String> = panel.lines().map(str::to_owned).collect();
+    assert!(lines.len() >= 3, "panel 至少三行: {panel}");
+    let clock_row = &mut lines[1];
+    let cut = clock_row
+        .char_indices()
+        .rev()
+        .nth(10)
+        .map_or(0, |(idx, _)| idx);
+    clock_row.truncate(cut);
+    clock_row.push_str("MM-DDTHH:MM");
+    let expected_panel = format!(
+        "ad-golden-v1 · W9 v1 黄金对照样例\n\
+         ✓1 ▶1 ·1 ⚑0 ⊘0 · 0 agents · MM-DDTHH:MM\n\
+         {sep64}\n\
+         在跑 / 健康\n\
+         ✓ 无活跃/卡死\n\
+         {dash64}\n\
+         轨迹 · 0 里程碑\n\
+         \x20 W9 v1 黄金对照样例 ▓▓▓░░░░░░░ 1/3 active\n\
+         \x20 进行中\n\
+         {dash64}\n\
+         车道 / 任务\n\
+         甲-实现\n\
+         ✓ 01 契约解析\n\
+         ▶ 02 模型合并 R2/5 边界样例\n\
+         乙-验证\n\
+         · 03 渲染对照\n\
+         \x20 ⇕ 01 → 03"
+    );
+    assert_eq!(
+        lines.join("\n"),
+        expected_panel,
+        "v1 台账 panel 必须与扩展前逐字节一致(仅时钟归一)"
+    );
+
+    // oneline:无时钟,整行黄金
+    assert_eq!(
+        render_oneline(&dash),
+        "[dash] ad-golden-v1 W9 ✓1▶1·1 ⚑0 ·0ag",
+        "v1 台账 oneline 逐字节一致"
+    );
+
+    // graph:无时钟,整图黄金
+    let graph = strip_ansi(&render::graph::render_graph(&dash, 72));
+    let expected_graph = format!(
+        "ad-golden-v1 · DAG\n\
+         {sep72}\n\
+         ┌───────────────┐\n\
+         │ ✓ 01 契约解析 │\n\
+         └───────┬───────┘\n\
+         \x20       │\n\
+         \x20       └──────────────────│\n\
+         ┌───────▼───────┐  ┌───────▼───────┐\n\
+         │ ▶ 02 模型合并 │  │ · 03 渲染对照 │\n\
+         └───────────────┘  └───────────────┘\n\
+         {sep72}"
+    );
+    assert_eq!(
+        graph, expected_graph,
+        "v1 台账 graph 必须与扩展前逐字节一致"
+    );
+    let _ = fs::remove_dir_all(&repo);
 }

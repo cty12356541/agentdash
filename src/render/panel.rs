@@ -5,12 +5,12 @@ use std::fmt::Write as _;
 
 use super::{
     C_ACTIVE, C_BOLD, C_DONE, C_END, C_PENDING, C_STALLED, C_WARN, Visual, active_milestone,
-    clamp_width, display_width, is_lane_marker, milestone_state, project_label, round_half_even,
-    visual,
+    clamp_width, display_width, is_lane_marker, milestone_state, round_half_even, visual,
 };
 use crate::contract::TaskState;
 use crate::model::{
     AgentView, BarrierEdges, Dashboard, GateView, MilestoneView, TaskView, parse_fix_round,
+    rfc3339_to_secs, velocity,
 };
 
 /// 面板默认宽。
@@ -48,17 +48,18 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     // 吞吐暂无逐时刻数据,以里程碑计数近似(见区块 B 速度线)
     let agents = dash.agents.len();
 
-    // 页眉:项目 · 活跃里程碑
+    // 页眉:项目 · 活跃里程碑(D3:project 读模型字段;整行过 elide 钳宽)
     let active_ms = active_milestone(dash);
-    match active_ms {
-        Some(milestone) => lines.push(format!(
+    let head = match active_ms {
+        Some(milestone) => format!(
             "{} · {} {}",
-            project_label(dash),
+            dash.project,
             ms_id(milestone),
             milestone.title
-        )),
-        None => lines.push(project_label(dash)),
-    }
+        ),
+        None => dash.project.clone(),
+    };
+    lines.push(elide(&head, width));
     let clock = clock_slice(&dash.generated_at);
     lines.push(format!(
         "{C_DONE}✓{done}{C_END} {C_ACTIVE}▶{running}{C_END} \
@@ -106,7 +107,7 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     for milestone in dash.milestones.iter().rev().take(5).rev() {
         lines.push(milestone_line(milestone, width));
     }
-    if let Some(speed) = speed_line(&dash.milestones) {
+    if let Some(speed) = speed_line(dash) {
         lines.push(speed);
     }
     let planned = dash
@@ -214,21 +215,12 @@ fn clock_slice(rfc3339: &str) -> String {
     }
 }
 
-/// 速度线:里程碑无逐任务时刻,吞吐以「最近 3 波 done 均值(任务/波次)」
-/// 近似(银行家舍入);单里程碑无均值可言,返回 [`None`] 不打。
-fn speed_line(milestones: &[MilestoneView]) -> Option<String> {
-    if milestones.len() < 2 {
-        return None;
-    }
-    let window = milestones.len().min(3);
-    let recent_done: usize = milestones
-        .iter()
-        .rev()
-        .take(window)
-        .map(|milestone| milestone.done)
-        .sum();
-    let per_wave = round_half_even(recent_done, window);
-    Some(format!("  速度 {per_wave} 任务/波次"))
+/// 速度线(W3-004 真实吞吐口径):`速度 <done/跨度小时> tasks/h`——
+/// 生效条件与数值全部出自 [`velocity`] 模型纯函数(≥2 里程碑且任务
+/// `since` 跨度 > 0),不满足则不打(负断言钉死,不虚报)。
+fn speed_line(dash: &Dashboard) -> Option<String> {
+    let rate = velocity(&dash.tasks, &dash.milestones)?;
+    Some(format!("  速度 {rate:.1} tasks/h"))
 }
 
 /// 任务行:`<mark> <id> <label>[ R<N>/<M>[ <残余 note>]][ · <note>][ ⚑]`——
@@ -236,7 +228,9 @@ fn speed_line(milestones: &[MilestoneView]) -> Option<String> {
 /// `fix round N/M <残余>` 时残余折到尾缀之后(`R2/5 auth bug`),解析不出
 /// 残余(纯 `fix round N/M`)只出尾缀,解析不了 `fix_round` 才回退整段
 /// note 原文;since 距 `generated_at` 超过 2 小时([`STALE_THRESHOLD_SECS`])
-/// 打停滞 ⚑,无戳/坏戳/时刻在未来一律不打(不虚报)。
+/// 打停滞 ⚑,无戳/坏戳/时刻在未来一律不打(不虚报);两种 RFC 3339 形态
+/// (`…Z` UTC / `…±HH:MM` 本地偏移,发现 9)统一按绝对时刻折算比较
+/// ([`rfc3339_to_secs`] 出自 model,W3-004)。
 fn task_line(task: &TaskView, generated_at: &str) -> String {
     let state = visual(task.state);
     let residual = task
@@ -274,45 +268,6 @@ fn task_line(task: &TaskView, generated_at: &str) -> String {
         stale_flag,
         C_END
     )
-}
-
-/// 纯函数:`YYYY-MM-DDTHH:MM:SSZ` → Unix 纪元秒(Hinnant civil 逆变换,与
-/// `model::utc_timestamp` 互逆)。形态不符、字段越界或年份为 0 返回 [`None`]。
-fn rfc3339_to_secs(text: &str) -> Option<u64> {
-    let bytes = text.as_bytes();
-    if bytes.len() != 20
-        || bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || bytes[10] != b'T'
-        || bytes[13] != b':'
-        || bytes[16] != b':'
-        || bytes[19] != b'Z'
-    {
-        return None;
-    }
-    let field = |range: std::ops::Range<usize>| text.get(range)?.parse::<i64>().ok();
-    let (year, month, day) = (field(0..4)?, field(5..7)?, field(8..10)?);
-    let (hour, minute, second) = (field(11..13)?, field(14..16)?, field(17..19)?);
-    if year < 1
-        || !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || !(0..=23).contains(&hour)
-        || !(0..=59).contains(&minute)
-        || !(0..=59).contains(&second)
-    {
-        return None;
-    }
-    let (year, month) = if month <= 2 {
-        (year - 1, month + 12)
-    } else {
-        (year, month)
-    };
-    let era = year / 400;
-    let yoe = year - era * 400;
-    let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    u64::try_from(days * 86_400 + hour * 3_600 + minute * 60 + second).ok()
 }
 
 /// 在跑 agent 行:`▶ <who>[ · <task>][ · <MM-DDTHH:MM>]`,超宽整行截断。

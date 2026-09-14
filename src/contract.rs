@@ -87,6 +87,18 @@ pub struct Barrier {
     pub unlocks: Vec<String>,
 }
 
+/// 声明式里程碑(W3-004 加法,可选):显式把任务归入多个里程碑。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Milestone {
+    /// 里程碑显示 `id`(如 `M1`)。
+    pub id: String,
+    /// 里程碑标题。
+    pub title: String,
+    /// 归入本里程碑的任务 `id` 引用(字符串或整数,统一收成字符串)。
+    #[serde(default, deserialize_with = "de_task_ids")]
+    pub tasks: Vec<String>,
+}
+
 /// 单条任务规格。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct TaskSpec {
@@ -114,6 +126,9 @@ pub struct Ledger {
     pub tasks: HashMap<String, TaskSpec>,
     /// 屏障列表。
     pub barriers: Vec<Barrier>,
+    /// 声明式里程碑(W3-004,可选);缺省为空表,模型层据 `wave` + 全任务
+    /// 合成单里程碑兜底。
+    pub milestones: Vec<Milestone>,
     /// 非致命降级/提示(如富态无 `profile` 降级、未知 `$schema`)。
     pub warnings: Vec<String>,
 }
@@ -141,6 +156,10 @@ struct RawLedger {
     /// 屏障列表。
     #[serde(default)]
     barriers: Vec<Barrier>,
+    /// 声明式里程碑:先按原样接住(`Value`),结构校验放后方降级——损坏时
+    /// 只折损自身(警告 + 空表),不拖垮整账(降级铁律,W3-004)。
+    #[serde(default)]
+    milestones: Option<serde_json::Value>,
 }
 
 /// 台账里任务引用可为字符串或整数(`"tasks": [1, 2]`),统一收成字符串 `id`。
@@ -206,6 +225,20 @@ pub fn parse_ledger(text: &str) -> Result<Ledger, ContractError> {
         ));
     }
 
+    // 可选 `milestones` 降级校验(W3-004):结构损坏 → 警告 + 空表(缺省 /
+    // `null` 视同未声明),其余字段照常——增强字段坏了不拖垮台账
+    let milestones = match raw.milestones {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(raw_milestones) => serde_json::from_value::<Vec<Milestone>>(raw_milestones).unwrap_or_else(
+            |err| {
+                warnings.push(format!(
+                    "malformed `milestones` ({err}); ignored, falling back to single-milestone synthesis"
+                ));
+                Vec::new()
+            },
+        ),
+    };
+
     let mut tasks = raw.tasks;
     let mut degraded: Vec<(String, String)> = Vec::new();
     for (id, task) in &mut tasks {
@@ -232,6 +265,7 @@ pub fn parse_ledger(text: &str) -> Result<Ledger, ContractError> {
         lanes: raw.lanes,
         tasks,
         barriers: raw.barriers,
+        milestones,
         warnings,
     })
 }

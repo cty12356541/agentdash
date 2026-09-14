@@ -30,6 +30,9 @@
     },
     "barriers": {
       "$ref": "#/$defs/barriers"
+    },
+    "milestones": {
+      "$ref": "#/$defs/milestones"
     }
   },
   "$defs": {
@@ -101,6 +104,28 @@
       "items": {
         "type": ["string", "integer"]
       }
+    },
+    "milestones": {
+      "type": "array",
+      "description": "声明式里程碑分组(W3-004 加法,可选):被引用的任务按此分组,未被任何里程碑引用的任务进「未分组」尾组;同一任务被多个里程碑引用时以首见为准。缺省(或结构损坏降级)时由 wave + 全任务合成单里程碑。",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "里程碑显示 id(如 M1)。"
+          },
+          "title": {
+            "type": "string",
+            "description": "里程碑标题。"
+          },
+          "tasks": {
+            "$ref": "#/$defs/taskIds"
+          }
+        }
+      }
     }
   },
   "examples": [
@@ -117,6 +142,10 @@
       },
       "barriers": [
         {"id": "B1", "after": [1], "unlocks": [2]}
+      ],
+      "milestones": [
+        {"id": "M1", "title": "契约与解析", "tasks": [1]},
+        {"id": "M2", "title": "渲染与收尾", "tasks": [2]}
       ]
     }
   ]

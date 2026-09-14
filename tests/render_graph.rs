@@ -72,6 +72,7 @@ fn w25_dash() -> Dashboard {
         agents: Vec::new(),
         remote: None,
         gates: Vec::new(),
+        project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -256,6 +257,7 @@ fn cjk_label_fits_box() {
         agents: Vec::new(),
         remote: None,
         gates: Vec::new(),
+        project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let layers = layout_layers(&dash, &[]);
@@ -300,6 +302,7 @@ fn cycle_remaining_merges_into_last_layer() {
         agents: Vec::new(),
         remote: None,
         gates: Vec::new(),
+        project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let barriers = vec![BarrierEdges {
@@ -329,6 +332,7 @@ fn lane_chain_forms_layers() {
         agents: Vec::new(),
         remote: None,
         gates: Vec::new(),
+        project: "agentdash".into(), // W3-004 D3:项目名上模型
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let layers = layout_layers(&dash, &[]);

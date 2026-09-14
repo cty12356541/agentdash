@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 
 use std::cmp::Reverse;
 
-use super::{C_END, clamp_width, display_width, is_lane_marker, project_label, visual};
+use super::{C_END, clamp_width, display_width, elide, is_lane_marker, visual};
 use crate::model::{Dashboard, TaskView};
 
 /// 节点单元格内 label 截断宽(承 Python `_CELL_LABEL`)。
@@ -290,7 +290,7 @@ pub fn render_graph(dash: &Dashboard, width: usize) -> String {
             .is_some_and(|ranges| ranges.iter().any(|(x0, x1)| *x0 <= col && col < *x1))
     };
     route_child_edges(&mut canvas, &edges, &cell_of, &in_box);
-    assemble_output(&canvas, overlays, &project_label(dash), width)
+    assemble_output(&canvas, overlays, &dash.project, width)
 }
 
 /// 步骤 1:画节点框(顶/底横线 + 四角 + 文字行侧框),有出边的框底打 ┬ 出线桩;
@@ -408,7 +408,8 @@ fn assemble_output(
     project: &str,
     width: usize,
 ) -> String {
-    let mut lines = vec![format!("{project} · DAG"), "─".repeat(width)];
+    // 图题 `project · DAG` 过 elide(W3-004 D3:超宽仓名不破版面)
+    let mut lines = vec![elide(&format!("{project} · DAG"), width), "─".repeat(width)];
     let mut by_row: HashMap<usize, Vec<(usize, String, usize)>> = HashMap::new();
     for (row, col, text, plen) in overlays {
         by_row.entry(row).or_default().push((col, text, plen));
