@@ -29,8 +29,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 
-use tui::{Action as KeyAction, InputMode};
 use tui::writeback::Action as WriteAction;
+use tui::{Action as KeyAction, InputMode};
 
 // ---------------------------------------------------------------- helpers
 
@@ -219,7 +219,11 @@ fn apply_is_atomic_no_tmp_residue_and_valid_json() {
         .collect();
     let residue: Vec<&String> = entries
         .iter()
-        .filter(|name| std::path::Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("tmp")))
+        .filter(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("tmp"))
+        })
         .collect();
     assert!(residue.is_empty(), "tmp 残留:{residue:?}");
     // ledger_value 内部断言 JSON 合法;此处再验落位
