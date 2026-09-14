@@ -1,7 +1,11 @@
 {
   "name": "agentdash",
-  "version": "0.2.0",
-  "author": {"name": "cty12356541", "url": "https://github.com/cty12356541"},
+  "version": "0.2.1",
+  "author": {
+    "name": "cty12356541",
+    "url": "https://github.com/cty12356541"
+  },
   "description": "Agent progress dashboard: session-native hooks + task-DAG panel/graph/oneline/watch; zero runtime, hooks call `agentdash` on PATH",
-  "displayName": "agentdash"
+  "displayName": "agentdash",
+  "homepage": "https://github.com/cty12356541/agentdash"
 }
