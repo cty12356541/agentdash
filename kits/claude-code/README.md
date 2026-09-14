@@ -17,7 +17,7 @@ agentdash --version                           # 自检
 
 | 文件 | 作用 |
 |---|---|
-| `hooks/hooks.json` | PostToolUse/Stop/SubagentStop 三钩子注册(插件形态,直调 `agentdash hook <event>`) |
+| `hooks/hooks.json` | PostToolUse/PreToolUse/Stop/SubagentStop 四钩子注册(插件形态,直调 `agentdash hook <event>`) |
 | `skills/agentdash/SKILL.md` | `/agentdash` 点播渲染 + 状态跃迁附图约定 |
 | `install.sh` / `install.ps1` | 装进目标项目 `.claude/`:幂等注册 settings.json hooks + `.gitignore` 幂等追加 `.agentdash/` |
 | 仓库 `tests/hook.rs` | hook 套件:Rust 集成测试(fixture 回放 + 并发零丢失),Python 测试随垫片一并退役 |
@@ -41,7 +41,7 @@ claude plugin marketplace add cty12356541/agentdash
 claude plugin install agentdash@agentdash-marketplace
 ```
 
-插件体即本目录(`hooks/hooks.json` 三钩子 + `skills/agentdash/`),不用安装脚本、
+插件体即本目录(`hooks/hooks.json` 四钩子 + `skills/agentdash/`),不用安装脚本、
 不改目标项目 settings.json。**注意**:hooks.json 的 `agentdash hook <event>` 直调
 PATH 上的二进制,市场包**不内嵌二进制**——缺二进制时 hook 按降级铁律静默跳过,
 需先 `cargo install --path` 或从 Releases 下载放入 PATH(Windows release 资产
@@ -62,6 +62,7 @@ PATH 上的二进制,市场包**不内嵌二进制**——缺二进制时 hook �
 
 | hook | 条件 | 事件 |
 |---|---|---|
+| PreToolUse | Task/Agent 工具派发(matcher `Task\|Agent`) | `agent` event=dispatched(`who`=tool_input 的 agentType/subagent_type,缺省 `agent`;`task`=description 截 80 字符,缺省省略该字段;其余工具零写入静默) |
 | PostToolUse | bash 且命令命中 `cargo test`/`clippy`/`fmt`、`go test`、`npm test`、`gh pr checks`(词边界 + 词间空白) | `gate` state=running;退出码+一行摘要暂存 `.agentdash/pending_gate.json`(hook 为一次性进程,折叠须经落盘交接) |
 | Stop | 有在途 gate | 折叠为 `gate` passed/failed(exit + detail 摘要行),消费后删除暂存 |
 | PostToolUse | 其他任何工具 | `tool` phase=end + exit + summary(命令/描述/文件路径,截 80 字符) |
@@ -86,6 +87,7 @@ hook 套件是仓库的 Rust 集成测试(子进程回放真实二进制):
 cargo test --test hook
 ```
 
-覆盖:三钩子 fixture 回放(含 gate running→passed/failed 折叠)、gate 命令匹配表
+覆盖:四钩子 fixture 回放(含 gate running→passed/failed 折叠、Task/Agent 派发
+dispatched 行)、gate 命令匹配表
 (词边界/多空白/复合命令)、退出码与摘要提取变体、UTF-8 中文往返、损坏输入降级、
-事件名回退分派、hooks.json 清单(三事件 + 二进制直调 + `|| true`)、并发零丢失。
+事件名回退分派、hooks.json 清单(四事件 + matcher + 二进制直调 + `|| true`)、并发零丢失。

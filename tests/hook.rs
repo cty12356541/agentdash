@@ -535,6 +535,76 @@ fn unknown_event_arg_is_silent() {
     assert!(!events_path(t.path()).exists(), "未知事件不得落盘");
 }
 
+// ------------------------------------------------------------ PreToolUse dispatched(W3-003)
+
+/// `PreToolUse` · 子代理派发工具(载荷形制承 Claude Code Task/Agent 新旧名)。
+fn pre_tool_use_payload(tool: &str, input: &Value) -> Value {
+    json!({
+        "session_id": "s-w3-003",
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": input
+    })
+}
+
+#[test]
+fn pretooluse_task_dispatch_emits_agent_dispatched() {
+    let t = TempDir::new("dispatch");
+    let payload = pre_tool_use_payload(
+        "Task",
+        &json!({"agentType": "general-purpose", "description": "实现 W3", "prompt": "…"}),
+    );
+    assert_silent_success(
+        &feed_payload("pretooluse", &in_cwd(&payload, t.path()), t.path()),
+        "Task 派发回放",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1, "Task 派发恰一行 dispatched");
+    assert_eq!(evs[0]["kind"], "agent");
+    assert_eq!(evs[0]["event"], "dispatched");
+    assert_eq!(evs[0]["who"], "general-purpose");
+    assert_eq!(evs[0]["task"], "实现 W3");
+    assert!(
+        is_iso8601_local(evs[0]["ts"].as_str().unwrap()),
+        "ts 非本地 ISO8601 秒级: {}",
+        evs[0]["ts"]
+    );
+}
+
+#[test]
+fn pretooluse_non_agent_tool_writes_nothing() {
+    let t = TempDir::new("prebash");
+    // 防御:matcher 之外直调 pretooluse 也不产事件(matcher 只兜宿主,不兜误调)
+    let payload = pre_tool_use_payload(
+        "Bash",
+        &json!({"command": "cargo test", "description": "run tests"}),
+    );
+    assert_silent_success(
+        &feed_payload("pretooluse", &in_cwd(&payload, t.path()), t.path()),
+        "Bash 直调 pretooluse",
+    );
+    assert!(!events_path(t.path()).exists(), "非 agent 工具零写入");
+}
+
+#[test]
+fn pretooluse_who_falls_back_to_agent_without_agent_type() {
+    let t = TempDir::new("whofallback");
+    let payload = pre_tool_use_payload("Agent", &json!({"prompt": "do something"}));
+    assert_silent_success(
+        &feed_payload("pretooluse", &in_cwd(&payload, t.path()), t.path()),
+        "无 agentType 派发回放",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["event"], "dispatched");
+    assert_eq!(evs[0]["who"], "agent", "who 缺省回退 agent");
+    assert!(
+        evs[0].get("task").is_none(),
+        "无 description 应整字段省略: {}",
+        evs[0]
+    );
+}
+
 // ------------------------------------------------------------ 事件名回退与清单
 
 #[test]
@@ -564,13 +634,37 @@ fn stop_folds_without_event_arg_via_payload_name() {
 }
 
 #[test]
-fn hooks_json_registers_three_events_with_binary_command() {
+fn pretooluse_dispatches_without_event_arg_via_payload_name() {
+    let t = TempDir::new("noargpre");
+    // 不传事件参数:载荷 hook_event_name 分派(老版本宿主防御),与 stop 同法
+    let payload = pre_tool_use_payload(
+        "Task",
+        &json!({"subagent_type": "Explore", "description": "长".repeat(100)}),
+    );
+    assert_silent_success(
+        &feed(&["hook"], &in_cwd(&payload, t.path()).to_string(), t.path()),
+        "无参 pretooluse",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["event"], "dispatched");
+    assert_eq!(evs[0]["who"], "Explore", "agentType 缺位时取 subagent_type");
+    assert_eq!(
+        evs[0]["task"].as_str().unwrap().chars().count(),
+        80,
+        "task 按字符截 80: {}",
+        evs[0]["task"]
+    );
+}
+
+#[test]
+fn hooks_json_registers_four_events_with_binary_command() {
     let path = Path::new(MANIFEST).join("kits/claude-code/hooks/hooks.json");
     let manifest: Value =
         serde_json::from_str(&fs::read_to_string(&path).expect("hooks.json readable"))
             .expect("hooks.json 合法 JSON");
     let hooks = manifest["hooks"].as_object().expect("hooks 对象");
-    assert_eq!(hooks.len(), 3, "恰注册三事件");
+    assert_eq!(hooks.len(), 4, "恰注册四事件");
     for event in ["PostToolUse", "Stop", "SubagentStop"] {
         let blocks = hooks[event]
             .as_array()
@@ -597,6 +691,25 @@ fn hooks_json_registers_three_events_with_binary_command() {
                 );
             }
         }
+    }
+    // PreToolUse:matcher 限定 Task/Agent 派发工具,命令同二进制直调 + || true
+    let blocks = hooks["PreToolUse"].as_array().expect("PreToolUse 注册块");
+    assert_eq!(blocks.len(), 1, "PreToolUse 恰一块");
+    assert_eq!(
+        blocks[0]["matcher"].as_str(),
+        Some("Task|Agent"),
+        "matcher 应限定派发工具 Task/Agent"
+    );
+    for hook_entry in blocks[0]["hooks"].as_array().expect("hook 列表") {
+        let cmd = hook_entry["command"].as_str().expect("command");
+        assert!(
+            cmd.contains("agentdash hook pretooluse"),
+            "PreToolUse 非二进制直调: {cmd}"
+        );
+        assert!(
+            cmd.ends_with("|| true"),
+            "PreToolUse 缺 || true 静默保险: {cmd}"
+        );
     }
 }
 

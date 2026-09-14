@@ -6,6 +6,9 @@
 //!   (同刻多个在途 gate 各占一槽,Stop 折叠须经落盘交接;旧单对象格式读入兼容);
 //!   否则 `tool` phase=end + exit + summary
 //! - stop:把在途 gate 逐槽折叠为各自 passed/failed(exit + detail 摘要行),消费后删除暂存
+//! - pretooluse:子代理派发工具(`Task`/`Agent`)→ `agent` dispatched(who=
+//!   `agentType`/`subagent_type`/`name`,缺省 `agent`;task=`description` 截 80,
+//!   缺省省略)
 //! - subagentstop:`agent` completed(载荷带 `agent_name`/`who` 则透传)
 //!
 //! events.jsonl 轮转(W2-008):追加前检查文件大小,超过 5MB 滚动为
@@ -59,6 +62,7 @@ pub fn run(event: Option<&str>) -> ExitCode {
     };
     match resolve_event(event, obj).as_deref() {
         Some("posttooluse") => on_post_tool_use(obj),
+        Some("pretooluse") => on_pre_tool_use(obj),
         Some("stop") => on_stop(obj),
         Some("subagentstop") => on_subagent_stop(obj),
         _ => {} // 未知事件名:静默
@@ -151,6 +155,51 @@ fn on_post_tool_use(payload: &Map<String, Value>) {
         })
         .unwrap_or_default();
     append_tool_event(&dir, &tool, response, summary);
+}
+
+/// PreToolUse:子代理派发工具(`Task`/`Agent` 新旧名)→ `agent` dispatched 行,
+/// "在跑 agent"画面闭环(W3-003)。who 取 `tool_input` 的 `agentType`/`subagent_type`/
+/// `name`,皆无回退 `agent`;task 取 `description` 截 80,缺省整字段省略。其余工具
+/// 零写入静默(matcher 只由宿主兜着,此处防御 matcher 之外直调也不产事件)。
+/// 复用既有文件锁/追加/降级铁律,零新依赖。
+fn on_pre_tool_use(payload: &Map<String, Value>) {
+    let tool = payload
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_ascii_lowercase);
+    if !matches!(tool.as_deref(), Some("task" | "agent")) {
+        return; // 非 agent 工具:零写入静默
+    }
+    let input = payload.get("tool_input").and_then(Value::as_object);
+    let who = input
+        .and_then(|i| {
+            ["agentType", "subagent_type", "name"]
+                .iter()
+                .find_map(|key| {
+                    i.get(*key)
+                        .and_then(Value::as_str)
+                        .filter(|w| !w.is_empty())
+                })
+        })
+        .unwrap_or("agent");
+    let mut event = json!({
+        "ts": ts_now(),
+        "kind": "agent",
+        "event": "dispatched",
+        "who": clip(who),
+    });
+    if let Some(task) = input
+        .and_then(|i| i.get("description"))
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+    {
+        // 注:events.rs 重放以 `who` 为 agent 事件主键,`task` 只是可选注记
+        event["task"] = json!(clip(task));
+    }
+    let dir = events_dir(payload);
+    with_lock(&dir, || append_line(&dir, &event));
 }
 
 /// `tool` 事件:phase=end + exit + 一行摘要(截 80)。

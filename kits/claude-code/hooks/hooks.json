@@ -8,6 +8,15 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook pretooluse || true"}
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
