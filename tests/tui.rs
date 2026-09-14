@@ -1,11 +1,17 @@
 //! W1-007 TUI 集成测试:键→动作映射、行编辑、SGR 鼠标命中(空面板与 w25
 //! 样例)、刷新节拍(注入时钟)、聚焦投递判定、SGR→Span 换算、barriers
-//! 入模后 `render_graph` 默认入口与显式入口的双轨收敛,以及窄终端形态
-//! 退化与输出宽度决策(AD-ERR-004,纯函数注入列数)。不测真终端。
+//! 入模后 `render_graph` 默认入口消费模型屏障(双轨已收敛:显式入口删除),
+//! 以及窄终端形态退化与输出宽度决策(AD-ERR-004,纯函数注入列数)。
+//! 不测真终端。
 //!
 //! W2 批二增补:任务详情面板(`detail_lines` 快照/截断,`d`/⏎/Esc 键位)、
 //! 多波次滚动(`select_wave`/`wave_view`/`wave_tag` 过滤与钳位)与 help
 //! 覆盖层键位表(`?`,全键位标注)。
+//!
+//! W2 批三增补(T5/T8):过滤(`filter_tasks`/`filter_view`,子串匹配
+//! lane/state/label)、车道折叠(`done_lanes`/`collapse_view` + tab 循环)、
+//! watch 位置参数(`parse_watch_args`,数字首参 = interval 钳 1..3600)、
+//! Windows 送对话通道(无 tmux 落盘 `prompt.txt`)、help 新键位。
 //!
 //! agentdash 是纯二进制 crate,集成测试按 `#[path]` 在 crate 根挂载模块树,
 //! 与 `tests/merge.rs` / `tests/render_graph.rs` 同约定;挂载源中本测试未
@@ -27,6 +33,7 @@ mod sources;
 mod tui;
 
 use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -87,6 +94,7 @@ fn w25_dash() -> Dashboard {
         git: GitFacts::absent(),
         agents: Vec::new(),
         gates: Vec::new(),
+        remote: None,
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -101,6 +109,7 @@ fn empty_dash() -> Dashboard {
         git: GitFacts::absent(),
         agents: Vec::new(),
         gates: Vec::new(),
+        remote: None,
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -318,7 +327,7 @@ fn click_maps_through_view_origin_offset() {
     );
 }
 
-// ---------- 聚焦投递判定(纯函数) ----------
+// ---------- 聚焦投递判定(纯函数;W2-008 起 Windows 通道走 prompt.txt) ----------
 
 #[test]
 fn focus_delivery_prefers_tmux_when_available() {
@@ -331,18 +340,48 @@ fn focus_delivery_prefers_tmux_when_available() {
     );
     assert_eq!(
         tui::focus_delivery(Some("session:0.1"), false, "W1-007"),
-        Delivery::Print("W1-007".into()),
-        "tmux 不可用退化为可复制文本"
+        Delivery::PromptFile {
+            text: "W1-007".into()
+        },
+        "tmux 不可用:落盘 prompt.txt(Windows 送对话通道)"
     );
     assert_eq!(
         tui::focus_delivery(None, true, "W1-007"),
-        Delivery::Print("W1-007".into()),
+        Delivery::PromptFile {
+            text: "W1-007".into()
+        },
         "无 DASH_TMUX_TARGET 同上"
     );
     assert_eq!(
         tui::focus_delivery(None, false, "W1-007"),
-        Delivery::Print("W1-007".into())
+        Delivery::PromptFile {
+            text: "W1-007".into()
+        }
     );
+}
+
+#[test]
+fn prompt_file_written_overwrite() {
+    static SERIAL: AtomicU32 = AtomicU32::new(0);
+    let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "agentdash-w2-008-prompt-{}-{serial}",
+        std::process::id()
+    ));
+    let path = tui::write_prompt_file(&dir, "W2-008").expect("首次写入成功");
+    assert_eq!(
+        path,
+        dir.join(".agentdash").join("prompt.txt"),
+        "落点恒为 <repo>/.agentdash/prompt.txt"
+    );
+    assert_eq!(fs::read_to_string(&path).expect("read"), "W2-008");
+    tui::write_prompt_file(&dir, "T-next").expect("重写成功");
+    assert_eq!(
+        fs::read_to_string(&path).expect("read"),
+        "T-next",
+        "覆盖写,不追加不残留"
+    );
+    assert!(fs::remove_dir_all(&dir).is_ok());
 }
 
 // ---------- SGR → Span 换算(差分重绘的结构化文本) ----------
@@ -421,27 +460,13 @@ fn default_render_graph_consumes_model_barriers() {
     let t3 = cell_of(&layers, "T3");
     let t4 = cell_of(&layers, "T4");
     assert!(t4.line > t3.line, "车道互不重叠,层间差只能来自模型屏障边");
-    // 默认单参入口 == 显式入口(双轨收敛:默认版委托同一实现)
-    let explicit_barriers: Vec<render::graph::BarrierEdges> = dash
-        .barriers
-        .iter()
-        .map(|barrier| render::graph::BarrierEdges {
-            after: barrier.after.clone(),
-            unlocks: barrier.unlocks.clone(),
-        })
-        .collect();
-    let default_plain = strip_ansi(&render::graph::render_graph(
+    // 双轨已收敛(W2-008):显式入口 `render_graph_with` 删除,默认单参版唯一
+    let plain = strip_ansi(&render::graph::render_graph(
         &dash,
         render::graph::DEFAULT_GRAPH_WIDTH,
     ));
-    let explicit_plain = strip_ansi(&render::graph::render_graph_with(
-        &dash,
-        &explicit_barriers,
-        render::graph::DEFAULT_GRAPH_WIDTH,
-    ));
-    assert_eq!(default_plain, explicit_plain, "两轨输出逐字一致");
     // 屏障真正进了画图:T4 框顶有入线箭头(无边时孤立节点无 ▼)
-    let rows: Vec<&str> = default_plain.lines().collect();
+    let rows: Vec<&str> = plain.lines().collect();
     assert!(
         rows[t4.line - 1].contains('▼'),
         "默认入口消费模型屏障:T4 顶有入线箭头"
@@ -524,6 +549,7 @@ fn detail_dash() -> Dashboard {
                 detail: "1 red".into(),
             },
         ],
+        remote: None,
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -593,7 +619,7 @@ fn detail_help_wave_key_map() {
     let none = KeyModifiers::NONE;
     assert_eq!(
         tui::key_action(InputMode::Normal, key(KeyCode::Char('d'), none)),
-        Action::ToggleDetail
+        Action::MarkDone
     );
     assert_eq!(
         tui::key_action(InputMode::Normal, key(KeyCode::Char('?'), none)),
@@ -646,6 +672,7 @@ fn wave_dash() -> Dashboard {
         git: GitFacts::absent(),
         agents: Vec::new(),
         gates: Vec::new(),
+        remote: None,
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -708,7 +735,9 @@ fn wave_tag_marks_current_over_total() {
 #[test]
 fn help_lines_cover_all_keys() {
     let help = tui::help_lines().join("\n");
-    for token in ["g", "f", "c", "⏎", "d", "Esc", "↑", "↓", "?", "q"] {
+    for token in [
+        "g", "f", "c", "⏎", "d", "Esc", "↑", "↓", "?", "q", "/", "tab",
+    ] {
         assert!(help.contains(token), "帮助缺键位标注:{token}");
     }
     let lines = tui::help_lines();
@@ -721,7 +750,273 @@ fn help_lines_cover_all_keys() {
         "帮助键独立条目"
     );
     assert!(
+        lines.iter().any(|line| line.starts_with("/ ")),
+        "过滤键独立条目(W2-005)"
+    );
+    assert!(
+        lines.iter().any(|line| line.starts_with("tab ")),
+        "折叠键独立条目(W2-005)"
+    );
+    assert!(
         lines.iter().any(|line| line.contains("任意键关闭")),
         "关闭方式可见"
+    );
+}
+
+// ---------- W2-005 过滤(纯函数) ----------
+
+/// 过滤/折叠样例:alpha 车道全 done(2 任务,成员不相邻)、beta 车道进行中
+/// (1 active)、gamma 车道单任务 done,另有 1 条无车道 pending 任务。
+fn filter_dash() -> Dashboard {
+    let t1 = task("T1", "fiber join", "alpha");
+    let mut t2 = task("T2", "scope 索引", "beta");
+    t2.state = TaskState::Active;
+    let t3 = task("T3", "发布件", "alpha");
+    let t4 = task("T4", "orphan 清理", "gamma");
+    let t5 = TaskView {
+        id: "T9".into(),
+        label: "无车道任务".into(),
+        state: TaskState::Pending,
+        lane: None,
+        note: None,
+        fix_round: None,
+        since: None,
+    };
+    Dashboard {
+        tasks: vec![t1, t2, t3, t4, t5],
+        milestones: Vec::new(),
+        warnings: Vec::new(),
+        barriers: Vec::new(),
+        git: GitFacts::absent(),
+        agents: Vec::new(),
+        gates: Vec::new(),
+        remote: None,
+        generated_at: GENERATED_AT.into(),
+    }
+}
+
+#[test]
+fn filter_tasks_substring_matches_lane_state_label() {
+    let dash = filter_dash();
+    let ids = |query: &str| -> Vec<String> {
+        tui::filter_tasks(&dash, query)
+            .into_iter()
+            .map(|task| task.id.clone())
+            .collect()
+    };
+    assert_eq!(ids("alpha"), vec!["T1", "T3"], "按 lane 名子串匹配");
+    assert_eq!(ids("scope"), vec!["T2"], "按 label 子串匹配");
+    assert_eq!(ids("active"), vec!["T2"], "按 state 名子串匹配");
+    assert_eq!(
+        ids("DONE"),
+        vec!["T1", "T3", "T4"],
+        "大小写不敏感:done 命中全部完成态任务"
+    );
+    assert_eq!(ids("Scope"), vec!["T2"], "label 匹配同样大小写不敏感");
+    assert_eq!(ids("").len(), 5, "空查询全通过");
+    assert!(ids("nomatch").is_empty(), "无命中返回空集");
+}
+
+#[test]
+fn filter_view_swaps_only_tasks() {
+    let dash = filter_dash();
+    let view = tui::filter_view(&dash, "active");
+    assert_eq!(view.tasks.len(), 1, "过滤视图只留命中任务");
+    assert_eq!(view.tasks[0].id, "T2");
+    assert_eq!(view.milestones, dash.milestones, "里程碑原样保留");
+    assert_eq!(view.barriers, dash.barriers, "屏障原样保留");
+    assert_eq!(view.git, dash.git, "git 快照原样保留");
+    assert_eq!(
+        tui::filter_view(&dash, "").tasks,
+        dash.tasks,
+        "空查询:视图任务集与原模型一致"
+    );
+}
+
+// ---------- W2-005 车道折叠(纯函数) ----------
+
+#[test]
+fn done_lanes_groups_complete_lanes_in_first_seen_order() {
+    let lanes = tui::done_lanes(&filter_dash().tasks);
+    assert_eq!(
+        lanes,
+        vec![("alpha".to_owned(), 2), ("gamma".to_owned(), 1)],
+        "只收全 done 车道,按首见序,计数为 done 任务数"
+    );
+}
+
+#[test]
+fn collapse_view_swaps_done_lanes_for_markers() {
+    let dash = filter_dash();
+    let view = tui::collapse_view(&dash, tui::LaneCollapse::DoneLanes);
+    let marker = &view.tasks[0];
+    assert!(marker.id.is_empty(), "折叠伪任务以空 id 为哨兵");
+    assert_eq!(marker.label, "(2 done)", "伪任务 label 携带 done 计数");
+    assert_eq!(marker.lane.as_deref(), Some("alpha"));
+    let ids: Vec<&str> = view.tasks.iter().map(|task| task.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["", "T2", "", "T9"],
+        "完成车道折叠为单标记(原首成员位),其余任务原样"
+    );
+    assert_eq!(
+        tui::collapse_view(&dash, tui::LaneCollapse::All).tasks,
+        dash.tasks,
+        "全部展开态:视图与原模型一致"
+    );
+}
+
+#[test]
+fn collapse_mode_cycles() {
+    assert_eq!(
+        tui::LaneCollapse::All.next(),
+        tui::LaneCollapse::DoneLanes,
+        "全部展开 → 折叠完成车道"
+    );
+    assert_eq!(
+        tui::LaneCollapse::DoneLanes.next(),
+        tui::LaneCollapse::All,
+        "循环回全部展开"
+    );
+}
+
+// ---------- W2-005 页眉与空结果提示(纯函数) ----------
+
+#[test]
+fn header_line_shows_filter_and_collapse() {
+    assert_eq!(
+        tui::header_line("", tui::LaneCollapse::All),
+        None,
+        "无过滤且全展开:不占页眉行"
+    );
+    assert_eq!(
+        tui::header_line("abc", tui::LaneCollapse::All).as_deref(),
+        Some("filter:\"abc\"")
+    );
+    assert_eq!(
+        tui::header_line("", tui::LaneCollapse::DoneLanes).as_deref(),
+        Some("折叠:完成车道")
+    );
+    assert_eq!(
+        tui::header_line("a b", tui::LaneCollapse::DoneLanes).as_deref(),
+        Some("filter:\"a b\" │ 折叠:完成车道")
+    );
+    assert_eq!(
+        tui::filter_empty_notice("xyz"),
+        "filter:\"xyz\" 无匹配任务",
+        "空结果显式提示"
+    );
+}
+
+// ---------- W2-005 新键位(/ tab)与过滤输入态 ----------
+
+#[test]
+fn filter_collapse_key_map() {
+    let none = KeyModifiers::NONE;
+    assert_eq!(
+        tui::key_action(InputMode::Normal, key(KeyCode::Char('/'), none)),
+        Action::StartFilter
+    );
+    assert_eq!(
+        tui::key_action(InputMode::Normal, key(KeyCode::Tab, none)),
+        Action::ToggleCollapse
+    );
+    // 过滤输入态与聚焦编辑态同一套行编辑语义
+    assert_eq!(
+        tui::key_action(InputMode::Filter, key(KeyCode::Char('x'), none)),
+        Action::Input('x')
+    );
+    assert_eq!(
+        tui::key_action(InputMode::Filter, key(KeyCode::Backspace, none)),
+        Action::Erase
+    );
+    assert_eq!(
+        tui::key_action(InputMode::Filter, key(KeyCode::Enter, none)),
+        Action::Submit,
+        "⏎ 应用过滤"
+    );
+    assert_eq!(
+        tui::key_action(InputMode::Filter, key(KeyCode::Esc, none)),
+        Action::Cancel,
+        "Esc 取消过滤输入"
+    );
+    assert_eq!(
+        tui::key_action(
+            InputMode::Filter,
+            key(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        ),
+        Action::Quit,
+        "过滤态 Ctrl-C 仍退出"
+    );
+}
+
+// ---------- W2-008 watch 位置参数(纯函数) ----------
+
+fn args(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+#[test]
+fn parse_watch_args_accepts_both_forms() {
+    let default_interval = tui::MODEL_INTERVAL;
+    assert_eq!(
+        tui::parse_watch_args(&args(&[])),
+        Ok((false, default_interval, PathBuf::from("."))),
+        "`watch`:默认档 + 当前目录"
+    );
+    assert_eq!(
+        tui::parse_watch_args(&args(&["plan"])),
+        Ok((false, default_interval, PathBuf::from("plan"))),
+        "`watch [PATH]`:非数字首参是路径"
+    );
+    assert_eq!(
+        tui::parse_watch_args(&args(&["30"])),
+        Ok((false, 30, PathBuf::from("."))),
+        "`watch [SECONDS]`:数字首参是间隔"
+    );
+    assert_eq!(
+        tui::parse_watch_args(&args(&["30", "plan"])),
+        Ok((false, 30, PathBuf::from("plan"))),
+        "`watch [SECONDS] [PATH]` 两形态"
+    );
+    assert_eq!(
+        tui::parse_watch_args(&args(&["--once", "2", "p"])),
+        Ok((true, 2, PathBuf::from("p"))),
+        "--once 与位置参数可混用"
+    );
+}
+
+#[test]
+fn parse_watch_args_clamps_interval() {
+    assert_eq!(
+        tui::parse_watch_args(&args(&["0"])),
+        Ok((false, 1, PathBuf::from("."))),
+        "下钳 1 秒"
+    );
+    assert_eq!(
+        tui::parse_watch_args(&args(&["99999"])),
+        Ok((false, 3600, PathBuf::from("."))),
+        "上钳 3600 秒"
+    );
+    assert_eq!(
+        tui::parse_watch_args(&args(&["99999999999999999999999"])),
+        Ok((false, 3600, PathBuf::from("."))),
+        "溢出数字仍按间隔钳到上限,不落成路径"
+    );
+}
+
+#[test]
+fn parse_watch_args_rejects_bad_input() {
+    assert!(
+        tui::parse_watch_args(&args(&["--wat"])).is_err(),
+        "未知旗标报错"
+    );
+    assert!(
+        tui::parse_watch_args(&args(&["a", "b", "c"])).is_err(),
+        "三个位置参数超出两形态"
+    );
+    assert!(
+        tui::parse_watch_args(&args(&["plan", "30"])).is_err(),
+        "PATH 之后再跟位置参数不合两形态"
     );
 }

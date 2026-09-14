@@ -5,7 +5,8 @@ use std::fmt::Write as _;
 
 use super::{
     C_ACTIVE, C_BOLD, C_DONE, C_END, C_PENDING, C_STALLED, C_WARN, Visual, active_milestone,
-    clamp_width, display_width, milestone_state, project_label, round_half_even, visual,
+    clamp_width, display_width, is_lane_marker, milestone_state, project_label, round_half_even,
+    visual,
 };
 use crate::contract::TaskState;
 use crate::model::{AgentView, Dashboard, GateView, MilestoneView, TaskView};
@@ -75,6 +76,10 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
             lines.push(gate_line(gate, width));
         }
     }
+    // 区块 A′:PR / 远程(W2-007;remote 缺省 = 探测降级,整块不打不虚占版面)
+    if let Some(remote) = &dash.remote {
+        push_remote_block(&mut lines, remote, width);
+    }
     for warning in &dash.warnings {
         lines.push(format!(
             "{C_WARN}⚠ {}{C_END}",
@@ -112,24 +117,62 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     // 区块 C:车道 / 任务
     if !dash.tasks.is_empty() {
         lines.push(format!("{C_BOLD}车道 / 任务{C_END}"));
-        let mut lane_groups: Vec<(String, Vec<&TaskView>)> = Vec::new();
-        for task in &dash.tasks {
-            let name = task.lane.clone().unwrap_or_else(|| "无车道".to_owned());
-            match lane_groups.iter_mut().find(|(group, _)| *group == name) {
-                Some((_, members)) => members.push(task),
-                None => lane_groups.push((name, vec![task])),
-            }
-        }
-        for (name, members) in &lane_groups {
-            lines.push(format!("{C_BOLD}{name}{C_END}"));
-            for task in members {
-                lines.push(task_line(task, &dash.generated_at));
-            }
-        }
+        let lane_groups = lane_groups(&dash.tasks);
+        push_lane_lines(&mut lines, &lane_groups, &dash.generated_at);
         // TODO(render):屏障行(claude-dash `  {barrier}`)——模型已携带 barriers
         // (T7 入模),面板侧渲染仍未做,待后续车道
     }
     lines.join("\n")
+}
+
+/// PR / 远程区块(W2-007):`#<号> <标题>` + 逐 check 行;超宽整行截断。
+fn push_remote_block(
+    lines: &mut Vec<String>,
+    remote: &crate::sources::remote::RemoteFacts,
+    width: usize,
+) {
+    lines.push(format!("{C_BOLD}PR / 远程{C_END}"));
+    if remote.pr_number == 0 {
+        lines.push(format!("{C_PENDING}· 无关联 PR{C_END}"));
+    } else {
+        let head = format!("#{} {}", remote.pr_number, remote.pr_title);
+        lines.push(format!("{C_ACTIVE}{}{C_END}", elide(&head, width)));
+    }
+    for (name, state) in &remote.checks {
+        lines.push(check_line(name, state, width));
+    }
+}
+
+/// 车道分组(首见序;无车道任务归"无车道"组)。
+fn lane_groups(tasks: &[TaskView]) -> Vec<(String, Vec<&TaskView>)> {
+    let mut groups: Vec<(String, Vec<&TaskView>)> = Vec::new();
+    for task in tasks {
+        let name = task.lane.clone().unwrap_or_else(|| "无车道".to_owned());
+        match groups.iter_mut().find(|(group, _)| *group == name) {
+            Some((_, members)) => members.push(task),
+            None => groups.push((name, vec![task])),
+        }
+    }
+    groups
+}
+
+/// 车道行输出:折叠车道(W2-005,视图层发空 id 伪任务)出
+/// `▸ 车道名 (N done)` 单行;其余车道头 + 逐任务行照旧。
+fn push_lane_lines(
+    lines: &mut Vec<String>,
+    groups: &[(String, Vec<&TaskView>)],
+    generated_at: &str,
+) {
+    for (name, members) in groups {
+        if members.len() == 1 && is_lane_marker(members[0]) {
+            lines.push(format!("{C_BOLD}▸ {name} {}{C_END}", members[0].label));
+            continue;
+        }
+        lines.push(format!("{C_BOLD}{name}{C_END}"));
+        for task in members {
+            lines.push(task_line(task, generated_at));
+        }
+    }
 }
 
 /// 里程碑显示 id(台账 wave;未声明时占位 `-`)。
@@ -259,6 +302,18 @@ fn gate_line(gate: &GateView, width: usize) -> String {
         let _ = write!(line, " · {}", gate.detail);
     }
     format!("{color}{}{C_END}", elide(&line, width))
+}
+
+/// PR check 行(W2-007,gh 词表原样直出不翻译):SUCCESS ✓ 绿 /
+/// FAILURE ✗ 黄 / 其余(PENDING 等)▶ 蓝;超宽整行截断。
+fn check_line(name: &str, state: &str, width: usize) -> String {
+    let (mark, color) = match state {
+        "SUCCESS" => ("✓", C_DONE),
+        "FAILURE" => ("✗", C_STALLED),
+        _ => ("▶", C_ACTIVE),
+    };
+    let body = format!("  {mark} {name} {state}");
+    format!("{color}{}{C_END}", elide(&body, width))
 }
 
 /// 按显示宽截断到 `budget` 列内的最长前缀(与里程碑标题同一算法)。

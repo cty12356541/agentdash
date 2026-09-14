@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 
 use std::cmp::Reverse;
 
-use super::{C_END, clamp_width, display_width, project_label, visual};
+use super::{C_END, clamp_width, display_width, is_lane_marker, project_label, visual};
 use crate::model::{Dashboard, TaskView};
 
 /// 节点单元格内 label 截断宽(承 Python `_CELL_LABEL`)。
@@ -42,8 +42,8 @@ type Overlay = (usize, usize, String, usize);
 type BoxRanges = HashMap<usize, Vec<(usize, usize)>>;
 
 /// 图侧屏障边(布局/渲染输入;W1-007 起模型携带同构的
-/// `model::BarrierEdges`,默认入口 [`render_graph`] 自动换形消费,
-/// 显式传参路径保留给测试与手工构造)。
+/// `model::BarrierEdges`,经 [`barriers_of`] 换形供 [`layout_layers`] /
+/// [`render_graph`] 消费)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BarrierEdges {
     /// 前置任务 id 集(after)。
@@ -187,8 +187,13 @@ fn compute_layers<'a>(dash: &'a Dashboard, edges: &Edges) -> Vec<Vec<&'a TaskVie
     }
 }
 
-/// 节点单元格文字:`<mark> <id> <label[:16 字符]>`。
+/// 节点单元格文字:`<mark> <id> <label[:16 字符]>`;折叠车道伪任务
+/// (W2-005,空 id 哨兵)出 `▸ 车道名 (N done)` 单节点。
 fn cell_text(task: &TaskView) -> String {
+    if is_lane_marker(task) {
+        let lane = task.lane.as_deref().unwrap_or("-");
+        return format!("▸ {lane} {}", task.label);
+    }
     format!(
         "{} {} {}",
         visual(task.state).mark(),
@@ -237,27 +242,26 @@ fn layout_rows(layers: &[Vec<&TaskView>]) -> Vec<Vec<Cell>> {
     rows
 }
 
-/// 默认入口:消费 `Dashboard.barriers`(W1-007 起模型携带屏障,双轨收敛——
-/// 默认版把模型屏障换形后委托 [`render_graph_with`];需要显式屏障集的
-/// 调用方仍可用后者)。
+/// 模型屏障 → 图屏障换形(W2-008 双轨收敛后的唯一换形点):布局与渲染
+/// 共用,`hit_test` 几何与 `render_graph` 输出因此同源。
 #[must_use]
-pub fn render_graph(dash: &Dashboard, width: usize) -> String {
-    let barriers: Vec<BarrierEdges> = dash
-        .barriers
+pub fn barriers_of(dash: &Dashboard) -> Vec<BarrierEdges> {
+    dash.barriers
         .iter()
         .map(|barrier| BarrierEdges {
             after: barrier.after.clone(),
             unlocks: barrier.unlocks.clone(),
         })
-        .collect();
-    render_graph_with(dash, &barriers, width)
+        .collect()
 }
 
-/// 框化节点 DAG:任意跨层边均路由(竖穿 + 角折 + ▼ 入框顶)。
+/// 框化节点 DAG(W2-008 起唯一入口):消费 `Dashboard.barriers`(W1-007 起
+/// 模型携带),任意跨层边均路由(竖穿 + 角折 + ▼ 入框顶)。
 #[must_use]
-pub fn render_graph_with(dash: &Dashboard, barriers: &[BarrierEdges], width: usize) -> String {
+pub fn render_graph(dash: &Dashboard, width: usize) -> String {
     let width = clamp_width(width);
-    let edges = edges_of(dash, barriers);
+    let barriers = barriers_of(dash);
+    let edges = edges_of(dash, &barriers);
     let layers = compute_layers(dash, &edges);
     let rows = layout_rows(&layers);
     let by_id: HashMap<&str, &TaskView> = dash

@@ -20,13 +20,14 @@ agentdash - agent progress dashboard
 Usage: agentdash <COMMAND> [ARGS]
 
 Commands:
-  render panel|graph [PATH]  Render the dashboard panel or the task DAG
-  oneline [PATH]             Print a one-line status summary
-  watch [--once] [PATH]      Watch a plan and refresh live (q/Ctrl-C quits)
-  hook <EVENT>               Consume a host-tool hook payload from stdin
+  render panel|graph [PATH]       Render the dashboard panel or the task DAG
+  oneline [PATH]                  Print a one-line status summary
+  watch [--once] [SECONDS] [PATH] Watch a plan and refresh live (q/Ctrl-C quits)
+  hook <EVENT>                    Consume a host-tool hook payload from stdin
 
 Arguments:
   [PATH]        Path to the project or plan directory [default: .]
+  [SECONDS]     Watch refresh interval, clamped to 1..3600 [default: 5]
   watch --once  Render a single frame and exit (implied when stdin is not a TTY)
 
 Options:
@@ -95,36 +96,28 @@ fn cmd_oneline(rest: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `watch [--once] [PATH]`:ratatui watch;`--once` 渲染一帧即退,非 tty
-/// stdin 同样自动退化为单帧。
+/// `watch [--once] [SECONDS] [PATH]`:ratatui watch;位置参数解析收口在
+/// [`tui::parse_watch_args`](W2-008 恢复 interval 位置档);`--once` 渲染
+/// 一帧即退,非 tty stdin 同样自动退化为单帧。
 fn cmd_watch(rest: &[String]) -> ExitCode {
-    let mut once = false;
-    let mut path: Option<PathBuf> = None;
-    for arg in rest {
-        match arg.as_str() {
-            "--once" => once = true,
-            other if other.starts_with('-') => {
-                eprintln!("error: unknown flag `{other}` (watch takes [--once] [PATH])\n\n{USAGE}");
-                return ExitCode::from(2);
-            }
-            other if path.is_none() => path = Some(PathBuf::from(other)),
-            _ => {
-                eprintln!("error: unexpected extra arguments after [PATH]\n\n{USAGE}");
-                return ExitCode::from(2);
+    match tui::parse_watch_args(rest) {
+        Ok((once, interval, repo)) => {
+            let outcome = if once {
+                tui::watch_once(&repo)
+            } else {
+                tui::watch(&repo, interval)
+            };
+            match outcome {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("error: watch failed: {err}");
+                    ExitCode::FAILURE
+                }
             }
         }
-    }
-    let repo = path.unwrap_or_else(|| PathBuf::from("."));
-    let outcome = if once {
-        tui::watch_once(&repo)
-    } else {
-        tui::watch(&repo, tui::MODEL_INTERVAL)
-    };
-    match outcome {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(err) => {
-            eprintln!("error: watch failed: {err}");
-            ExitCode::FAILURE
+        Err(msg) => {
+            eprintln!("error: {msg}\n\n{USAGE}");
+            ExitCode::from(2)
         }
     }
 }

@@ -2,10 +2,14 @@
 //!
 //! 读 stdin 全量 JSON 载荷,按事件追加一行(spec §4.2)到 `<cwd>/.agentdash/events.jsonl`:
 //! - posttooluse:bash 命中验证门(cargo test/clippy/fmt、go test、npm test、gh pr checks)
-//!   → `gate` running 行 + 退出码/一行摘要暂存 `pending_gate.json`(Stop 折叠须经落盘交接);
+//!   → `gate` running 行 + 退出码/一行摘要暂存 `pending_gate.json` **槽位数组**
+//!   (同刻多个在途 gate 各占一槽,Stop 折叠须经落盘交接;旧单对象格式读入兼容);
 //!   否则 `tool` phase=end + exit + summary
-//! - stop:把在途 gate 折叠为 passed/failed(exit + detail 摘要行),消费后删除暂存
+//! - stop:把在途 gate 逐槽折叠为各自 passed/failed(exit + detail 摘要行),消费后删除暂存
 //! - subagentstop:`agent` completed(载荷带 `agent_name`/`who` 则透传)
+//!
+//! events.jsonl 轮转(W2-008):追加前检查文件大小,超过 5MB 滚动为
+//! `events.jsonl.1`(覆盖旧 .1)再新建,防单文件无限增长。
 //!
 //! 铁律:自身任何失败(损坏/空 stdin、非对象载荷、IO 错误)一律静默退出 0,
 //! 绝不向宿主报错阻塞会话。并发追加经 `.agentdash/.lock` 文件锁自旋
@@ -26,6 +30,10 @@ const MAX_SUMMARY: usize = 80;
 const LOCK_NAME: &str = ".lock";
 const PENDING_NAME: &str = "pending_gate.json";
 const EVENTS_NAME: &str = "events.jsonl";
+/// 轮转落点:`events.jsonl.1`(单代保留,新轮转覆盖旧 .1)。
+const EVENTS_ROTATED_NAME: &str = "events.jsonl.1";
+/// 轮转阈值(W2-008):events.jsonl 严格超过 5MB 才滚动。
+const ROTATE_BYTES: u64 = 5 * 1024 * 1024;
 /// 锁自旋参数:上限重试后退化直接写(绝不让宿主 hook 长等待)。
 const LOCK_MAX_WAIT: Duration = Duration::from_secs(2);
 const LOCK_SLEEP: Duration = Duration::from_millis(2);
@@ -117,7 +125,7 @@ fn on_post_tool_use(payload: &Map<String, Value>) {
                     &dir,
                     &json!({ "ts": ts_now(), "kind": "gate", "gate": gate, "state": "running" }),
                 );
-                write_pending(
+                append_pending_slot(
                     &dir,
                     &json!({
                         "gate": gate,
@@ -162,7 +170,8 @@ fn append_tool_event(dir: &Path, tool: &str, response: Option<&Value>, summary: 
     });
 }
 
-/// Stop:折叠在途 gate 为 passed/failed;暂存无论解析成败都消费删除(折叠只做一次)。
+/// Stop:把暂存的每个在途 gate 逐槽折叠为各自 passed/failed;暂存无论解析
+/// 成败都消费删除(折叠只做一次)。槽缺 `gate` 字段跳过,不产生幽灵事件。
 fn on_stop(payload: &Map<String, Value>) {
     let dir = events_dir(payload);
     with_lock(&dir, || {
@@ -170,36 +179,34 @@ fn on_stop(payload: &Map<String, Value>) {
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok());
         let _ = fs::remove_file(dir.join(PENDING_NAME));
-        let Some(pending) = pending.filter(|p| {
-            p.get("gate")
-                .and_then(Value::as_str)
-                .is_some_and(|g| !g.is_empty())
-        }) else {
+        let slots = pending_slots(pending);
+        if slots.is_empty() {
             return; // 无在途 gate / 暂存损坏:不产生幽灵事件
-        };
-        let gate = pending
-            .get("gate")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let exit = pending.get("exit").and_then(Value::as_i64);
-        let state = if exit == Some(0) { "passed" } else { "failed" };
-        let detail = clip(
-            pending
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        );
-        append_line(
-            &dir,
-            &json!({
-                "ts": ts_now(),
-                "kind": "gate",
-                "gate": gate,
-                "state": state,
-                "exit": exit,
-                "detail": detail,
-            }),
-        );
+        }
+        for slot in slots {
+            let gate = slot.get("gate").and_then(Value::as_str).unwrap_or_default();
+            if gate.is_empty() {
+                continue;
+            }
+            let exit = slot.get("exit").and_then(Value::as_i64);
+            let state = if exit == Some(0) { "passed" } else { "failed" };
+            let detail = clip(
+                slot.get("detail")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            append_line(
+                &dir,
+                &json!({
+                    "ts": ts_now(),
+                    "kind": "gate",
+                    "gate": gate,
+                    "state": state,
+                    "exit": exit,
+                    "detail": detail,
+                }),
+            );
+        }
     });
 }
 
@@ -296,8 +303,10 @@ fn is_stale_lock(lock_path: &Path) -> bool {
         .is_some_and(|age| age >= LOCK_STALE)
 }
 
-/// 单行追加:整行(含换行)拼好后一次 `write_all`,锁内调用保证并发零丢失。
+/// 单行追加:轮转检查后,整行(含换行)拼好一次 `write_all`,锁内调用保证
+/// 并发零丢失。
 fn append_line(dir: &Path, event: &Value) {
+    rotate_if_large(dir);
     let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
@@ -311,12 +320,48 @@ fn append_line(dir: &Path, event: &Value) {
     let _ = file.flush();
 }
 
-/// gate 交接暂存:退出码 + 一行摘要(暂存失败只损失折叠,不损 events.jsonl)。
-fn write_pending(dir: &Path, pending: &Value) {
-    let Ok(mut file) = File::create(dir.join(PENDING_NAME)) else {
+/// 轮转(W2-008):events.jsonl 严格超过 [`ROTATE_BYTES`] 时滚动为
+/// `events.jsonl.1`(单代保留:先摘旧 .1 再 rename,Windows 侧 rename 不
+/// 覆盖既有目标)。任何失败静默——轮转缺失只损失历史留存,不阻塞本次追加。
+/// 锁内调用,无并发轮转竞态。
+fn rotate_if_large(dir: &Path) {
+    let path = dir.join(EVENTS_NAME);
+    let Ok(meta) = fs::metadata(&path) else {
+        return; // 尚无文件:无需轮转
+    };
+    if meta.len() <= ROTATE_BYTES {
+        return;
+    }
+    let rotated = dir.join(EVENTS_ROTATED_NAME);
+    let _ = fs::remove_file(&rotated);
+    let _ = fs::rename(&path, &rotated);
+}
+
+/// 暂存归一为槽位数组(W2-008 多槽位):数组原样;旧单对象格式向后兼容,
+/// 包一层成单槽;其余(损坏/缺失)视为空——折叠不产生幽灵事件,写入侧
+/// 则从当前槽重建。
+fn pending_slots(pending: Option<Value>) -> Vec<Value> {
+    match pending {
+        Some(Value::Array(items)) => items,
+        Some(obj @ Value::Object(_)) => vec![obj],
+        _ => Vec::new(),
+    }
+}
+
+/// gate 交接暂存(多槽位):读入既有暂存归一成数组后追加一槽,同刻多个
+/// 在途 gate 各占一槽,Stop 时逐槽折叠各自终态。读-并-写同在锁内临界区;
+/// 暂存失败只损失折叠,不损 events.jsonl。
+fn append_pending_slot(dir: &Path, slot: &Value) {
+    let path = dir.join(PENDING_NAME);
+    let existing = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let mut slots = pending_slots(existing);
+    slots.push(slot.clone());
+    let Ok(mut file) = File::create(&path) else {
         return;
     };
-    let _ = file.write_all(pending.to_string().as_bytes());
+    let _ = file.write_all(serde_json::to_string(&slots).unwrap_or_default().as_bytes());
 }
 
 /// 验证门命令匹配:连续词序列 + 词边界(承 Python 版 `\bcargo\s+test\b` 的

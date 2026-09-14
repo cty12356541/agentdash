@@ -24,11 +24,10 @@ mod render;
 mod sources;
 
 use contract::TaskState;
-use model::{Dashboard, MilestoneView, TaskView};
+use model::{BarrierEdges as ModelBarrierEdges, Dashboard, MilestoneView, TaskView};
 use render::display_width;
 use render::graph::{
-    BarrierEdges, Cell, DEFAULT_GRAPH_WIDTH, hit_test, layout_layers, render_graph,
-    render_graph_with,
+    BarrierEdges, Cell, DEFAULT_GRAPH_WIDTH, barriers_of, hit_test, layout_layers, render_graph,
 };
 use sources::git::GitFacts;
 
@@ -63,22 +62,23 @@ fn w25_dash() -> Dashboard {
             total: 4,
         }],
         warnings: Vec::new(),
-        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
+        barriers: w25_barriers(),
         git: GitFacts::absent(),
         agents: Vec::new(),
+        remote: None,
         gates: Vec::new(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
 
 /// 屏障集:屏障 B1: T1 → T2;屏障 B2: T2+T3 → T4(复刻 `_w25_like`)。
-fn w25_barriers() -> Vec<BarrierEdges> {
+fn w25_barriers() -> Vec<ModelBarrierEdges> {
     vec![
-        BarrierEdges {
+        ModelBarrierEdges {
             after: vec!["T1".into()],
             unlocks: vec!["T2".into()],
         },
-        BarrierEdges {
+        ModelBarrierEdges {
             after: vec!["T2".into(), "T3".into()],
             unlocks: vec!["T4".into()],
         },
@@ -116,8 +116,8 @@ fn at(line: &str, col: usize) -> char {
     ' '
 }
 
-fn plain_rows(dash: &Dashboard, barriers: &[BarrierEdges]) -> Vec<String> {
-    strip_ansi(&render_graph_with(dash, barriers, DEFAULT_GRAPH_WIDTH))
+fn plain_rows(dash: &Dashboard, _barriers: &[BarrierEdges]) -> Vec<String> {
+    strip_ansi(&render_graph(dash, DEFAULT_GRAPH_WIDTH))
         .lines()
         .map(str::to_owned)
         .collect()
@@ -135,7 +135,7 @@ fn cell_of(layers: &[Vec<Cell>], id: &str) -> Cell {
 #[test]
 fn every_task_has_framed_box() {
     let dash = w25_dash();
-    let barriers = w25_barriers();
+    let barriers = barriers_of(&dash);
     let layers = layout_layers(&dash, &barriers);
     let rows = plain_rows(&dash, &barriers);
     for tid in ["T1", "T2", "T3", "T4"] {
@@ -157,7 +157,7 @@ fn every_task_has_framed_box() {
 #[test]
 fn parent_bottom_has_out_stub() {
     let dash = w25_dash();
-    let barriers = w25_barriers();
+    let barriers = barriers_of(&dash);
     let layers = layout_layers(&dash, &barriers);
     let rows = plain_rows(&dash, &barriers);
     let c1 = cell_of(&layers, "T1");
@@ -177,7 +177,7 @@ fn parent_bottom_has_out_stub() {
 #[test]
 fn adjacent_edge_joins_parent_drop() {
     let dash = w25_dash();
-    let barriers = w25_barriers();
+    let barriers = barriers_of(&dash);
     let layers = layout_layers(&dash, &barriers);
     let rows = plain_rows(&dash, &barriers);
     let c1 = cell_of(&layers, "T1");
@@ -194,7 +194,7 @@ fn adjacent_edge_joins_parent_drop() {
 fn cross_layer_edge_is_routed() {
     // 核心:T3(层0)→T4(层2) 的跨层汇入边必须画出来。
     let dash = w25_dash();
-    let barriers = w25_barriers();
+    let barriers = barriers_of(&dash);
     let layers = layout_layers(&dash, &barriers);
     let rows = plain_rows(&dash, &barriers);
     let c3 = cell_of(&layers, "T3");
@@ -228,7 +228,7 @@ fn cross_layer_edge_is_routed() {
 #[test]
 fn t4_receives_two_arrows_at_one_point() {
     let dash = w25_dash();
-    let barriers = w25_barriers();
+    let barriers = barriers_of(&dash);
     let layers = layout_layers(&dash, &barriers);
     let rows = plain_rows(&dash, &barriers);
     let c4 = cell_of(&layers, "T4");
@@ -246,9 +246,10 @@ fn cjk_label_fits_box() {
         tasks: vec![task("T1", "中文标签宽字符测试", "A")],
         milestones: Vec::new(),
         warnings: Vec::new(),
-        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
+        barriers: w25_barriers(),
         git: GitFacts::absent(),
         agents: Vec::new(),
+        remote: None,
         gates: Vec::new(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
@@ -289,9 +290,10 @@ fn cycle_remaining_merges_into_last_layer() {
         ],
         milestones: Vec::new(),
         warnings: Vec::new(),
-        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
+        barriers: w25_barriers(),
         git: GitFacts::absent(),
         agents: Vec::new(),
+        remote: None,
         gates: Vec::new(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
@@ -305,7 +307,7 @@ fn cycle_remaining_merges_into_last_layer() {
     let c = cell_of(&layers, "C");
     assert_eq!(a.line, b.line, "环残余并入同一层并列");
     assert!(c.line < a.line, "无依赖节点在前层");
-    let plain = strip_ansi(&render_graph_with(&dash, &barriers, DEFAULT_GRAPH_WIDTH));
+    let plain = strip_ansi(&render_graph(&dash, DEFAULT_GRAPH_WIDTH));
     for id in ["A", "B", "C"] {
         assert!(plain.contains(id), "环保险全量输出 {id}");
     }
@@ -317,9 +319,10 @@ fn lane_chain_forms_layers() {
         tasks: vec![task("X2", "后手", "L"), task("X1", "先手", "L")],
         milestones: Vec::new(),
         warnings: Vec::new(),
-        barriers: Vec::new(), // W1-007:模型新增 barriers 字段;本组屏障走显式传参
+        barriers: w25_barriers(),
         git: GitFacts::absent(),
         agents: Vec::new(),
+        remote: None,
         gates: Vec::new(),
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
@@ -336,15 +339,12 @@ fn lane_chain_forms_layers() {
 #[test]
 fn width_rules_and_clamp() {
     let dash = w25_dash();
-    let barriers = w25_barriers();
-    let lines: Vec<String> = render_graph_with(&dash, &barriers, 46)
-        .lines()
-        .map(str::to_owned)
-        .collect();
+    let _barriers = barriers_of(&dash);
+    let lines: Vec<String> = render_graph(&dash, 46).lines().map(str::to_owned).collect();
     assert_eq!(lines[0], "agentdash · DAG");
     assert_eq!(lines[1], "─".repeat(46));
     assert_eq!(lines.last().expect("非空"), &"─".repeat(46));
-    let narrow = render_graph_with(&dash, &barriers, 10);
+    let narrow = render_graph(&dash, 10);
     assert_eq!(
         narrow.lines().nth(1).expect("非空").chars().count(),
         40,
@@ -361,8 +361,7 @@ fn width_rules_and_clamp() {
 #[test]
 fn default_layout_fits_within_width() {
     let dash = w25_dash();
-    let barriers = w25_barriers();
-    let plain = strip_ansi(&render_graph_with(&dash, &barriers, DEFAULT_GRAPH_WIDTH));
+    let plain = strip_ansi(&render_graph(&dash, DEFAULT_GRAPH_WIDTH));
     for line in plain.lines() {
         assert!(
             display_width(line) <= DEFAULT_GRAPH_WIDTH,
@@ -374,7 +373,7 @@ fn default_layout_fits_within_width() {
 #[test]
 fn hit_test_targets_box_region() {
     let dash = w25_dash();
-    let barriers = w25_barriers();
+    let barriers = barriers_of(&dash);
     let layers = layout_layers(&dash, &barriers);
     let c2 = cell_of(&layers, "T2");
     for row in [c2.line - 1, c2.line, c2.line + 1] {
@@ -394,8 +393,8 @@ fn hit_test_targets_box_region() {
 #[test]
 fn done_tasks_render_green_with_ansi() {
     let dash = w25_dash();
-    let barriers = w25_barriers();
-    let out = render_graph_with(&dash, &barriers, DEFAULT_GRAPH_WIDTH);
+    let _barriers = barriers_of(&dash);
+    let out = render_graph(&dash, DEFAULT_GRAPH_WIDTH);
     assert!(out.contains("\x1b[32m"), "done 绿");
     assert!(out.contains('▼') && out.contains('│'), "连接符在位");
 }
