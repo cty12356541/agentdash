@@ -27,5 +27,10 @@
 
 ## 收口
 
+### T4b (W3-006):事件窗速度线(真实数据点亮)
+**Files:** `src/model.rs`(velocity 的 span 数据源:events ≥2 条不同 ts → 活动窗 max−min;回退任务 since 跨度;再不满足隐藏)、`src/render/panel.rs`(措辞+陈旧注释清)、`tests/merge.rs`+`tests/render_panel.rs`(正/负断言:无 events/单条/<2 里程碑均隐藏;真实 dogfood events 下可见)。
+**背景:** R13——W3-004 velocity 公式正确但契约任务 since 同源致 span 恒 0,真实数据不可达;本任务兑现规格 §4 验收"多里程碑面板含速度线"。
+**验收:** dogfood 真实 events 下速度行出现;三态负断言;velocity 公式不重写;三件套净。
+
 ### T5 (W3-005):版本 + 收尾
 0.2.0 三处版本号;README 路线/契约段更新;dogfood 台账更新 W3 真值(多里程碑样例入 dogfood);帧 spot-check(速度线可见);三件套;全分支终审;推送(先核远端);tag `v0.2.0`;Release Windows 资产(git credential token 走 API,或装 gh)。
