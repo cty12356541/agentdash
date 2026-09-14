@@ -48,7 +48,7 @@ PATH 上的二进制,市场包**不内嵌二进制**——缺二进制时 hook �
 后续手动挂;预构建分发策略见仓库 `bin/README.md`)。
 
 安装动作:检测 `agentdash` 在 PATH(缺失给安装指引并退出)→ skill 复制到
-`<目标>/.claude/skills/agentdash/` → 三钩子以固定命令 `agentdash hook <event> || true`
+`<目标>/.claude/skills/agentdash/` → 四钩子以固定命令 `agentdash hook <event> || true`
 幂等写入 `<目标>/.claude/settings.json`(**无路径 baked**;老版本 `record_event.py`
 的注册与文件残留一并清理)→ 目标仓 `.gitignore` 幂等追加 `.agentdash/`。
 

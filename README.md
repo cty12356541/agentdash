@@ -38,7 +38,8 @@ hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo ins
 .\kits\claude-code\install.ps1 [-Target <目标项目目录>]
 ```
 
-安装器幂等注册三个 hook(PostToolUse / Stop / SubagentStop),命令直调二进制
+安装器幂等注册四个 hook(PostToolUse / PreToolUse / Stop / SubagentStop;
+PreToolUse 以 matcher `Task|Agent` 只拦 agent 派发),命令直调二进制
 `agentdash hook <event> || true`——**无路径 baked、无任何脚本运行时依赖**;
 hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直接用
 `kits/claude-code/hooks/hooks.json`。详见 `kits/claude-code/README.md`。
@@ -66,7 +67,7 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 
 | 文件 | 写入方 | 内容 |
 |---|---|---|
-| `ledger.json` | agent 或人 | 任务台账:`wave` / `title`(必填)/ `profile` / `lanes` / `tasks`(label+state)/ `barriers`(after→unlocks)。状态机最小核 `pending→active→done`,终态 `blocked`;`review`/`fix-round` 富态仅在声明 `profile` 后有效,否则自动降级并记警告。严格校验面:`schema/agentdash.tasklog.v1.json` |
+| `ledger.json` | agent 或人 | 任务台账:`wave` / `title`(必填)/ `profile` / `lanes` / `tasks`(label+state)/ `barriers`(after→unlocks)/ `milestones`(可选声明式分组:被引用任务按组归并、同任务首见为准,余者入「未分组」尾组;缺省由 wave+全任务合成单里程碑)。状态机最小核 `pending→active→done`,终态 `blocked`;`review`/`fix-round` 富态仅在声明 `profile` 后有效,否则自动降级并记警告。严格校验面:`schema/agentdash.tasklog.v1.json` |
 | `events.jsonl` | `agentdash hook` | 会话事件流:`gate`(running→passed/failed,验证门自动登记)、`tool`、`agent`;多进程并发追加经文件锁保证零丢失 |
 
 三源全无时输出空态引导文案;仅 git 仓无契约时降级为最近提交伪任务单链
@@ -75,8 +76,8 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 
 ## 路线
 
-- **一期(本版,W1)**:Rust 内核(契约/事件/git 源/合并/渲染/TUI)+ claude-code-kit + gate 事件 + oneline;三平台 CI(ubuntu / windows / macos)。
-- **二期**:codex-kit / opencode-kit(宿主扩展)、远程源(gh / PR / CI 缓存)、观察者兼底完善。
+- **一期(W1–W3,0.2.0)**:Rust 内核(契约/事件/git 源/合并/渲染/TUI)+ claude-code-kit + gate 事件 + oneline + 三平台 CI(ubuntu / windows / macos);W2 交互跃迁(任务详情/多波次/过滤/台账写回/gh 远程源);W3 收口:多里程碑分组、面板屏障行、PreToolUse dispatched 入口、事件窗速度线。
+- **二期**:codex-kit / opencode-kit(宿主扩展)、远程源扩展(PR / CI 缓存)、观察者兼底完善。
 - **三期**:分发矩阵铺满(Release 二进制 / 包管理器 / 插件市场)。
 
 ## 与 claude-dash 的关系

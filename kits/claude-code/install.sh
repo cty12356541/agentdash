@@ -5,7 +5,7 @@
 # 动作:
 #   1. 检测 agentdash 在 PATH(缺失 → 打印安装指引并退出)
 #   2. skill 复制进 <目标>/.claude/skills/agentdash/
-#   3. <目标>/.claude/settings.json 幂等注册三钩子(命令为常量,无路径 baked)
+#   3. <目标>/.claude/settings.json 幂等注册四钩子(命令为常量,无路径 baked)
 #   4. <目标>/.gitignore 幂等追加 .agentdash/(M-2)
 #   5. 清理老版本 Python 垫片残留(record_event.py 及空目录)
 # 幂等:重复执行只刷新自家注册与文件,不动 settings.json 其他内容。
@@ -45,7 +45,7 @@ if [ ! -f "$gitignore" ] || ! grep -qE '^[[:space:]]*\.agentdash/?[[:space:]]*$'
 fi
 echo "[agentdash] .gitignore ensured: .agentdash/ ($gitignore)"
 
-# --- settings.json 幂等注册三钩子 ---
+# --- settings.json 幂等注册四钩子 ---
 settings="$target/.claude/settings.json"
 
 write_fresh_settings() {
@@ -54,6 +54,9 @@ write_fresh_settings() {
   "hooks": {
     "PostToolUse": [
       {"hooks": [{"type": "command", "command": "agentdash hook posttooluse || true"}]}
+    ],
+    "PreToolUse": [
+      {"matcher": "Task|Agent", "hooks": [{"type": "command", "command": "agentdash hook pretooluse || true"}]}
     ],
     "Stop": [
       {"hooks": [{"type": "command", "command": "agentdash hook stop || true"}]}
@@ -77,6 +80,9 @@ merge_with_jq() {
     .hooks //= {}
     | .hooks.PostToolUse  = ((.hooks.PostToolUse  // []) | clean)
         + [{hooks: [{type: "command", command: "agentdash hook posttooluse || true"}]}]
+    | .hooks.PreToolUse   = ((.hooks.PreToolUse   // []) | clean)
+        + [{matcher: "Task|Agent",
+            hooks: [{type: "command", command: "agentdash hook pretooluse || true"}]}]
     | .hooks.Stop         = ((.hooks.Stop         // []) | clean)
         + [{hooks: [{type: "command", command: "agentdash hook stop || true"}]}]
     | .hooks.SubagentStop = ((.hooks.SubagentStop // []) | clean)
@@ -101,9 +107,10 @@ elif command -v jq >/dev/null 2>&1; then
   echo "[agentdash] settings.json 损坏,已备份为 $settings.bak-agentdash 后重建注册"
 else
   # 降级:无 jq 不动用户文件,打印手工合并指引(其余安装产物已完成)
-  echo "[agentdash] 未找到 jq,不改动既有 $settings;请把以下三段并入其 hooks(或装 jq 后重跑):" >&2
+  echo "[agentdash] 未找到 jq,不改动既有 $settings;请把以下四段并入其 hooks(或装 jq 后重跑):" >&2
   cat >&2 <<'EOF'
     "PostToolUse":  [{"hooks": [{"type": "command", "command": "agentdash hook posttooluse || true"}]}],
+    "PreToolUse":   [{"matcher": "Task|Agent", "hooks": [{"type": "command", "command": "agentdash hook pretooluse || true"}]}],
     "Stop":         [{"hooks": [{"type": "command", "command": "agentdash hook stop || true"}]}],
     "SubagentStop": [{"hooks": [{"type": "command", "command": "agentdash hook subagentstop || true"}]}]
 EOF
