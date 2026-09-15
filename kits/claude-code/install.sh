@@ -29,6 +29,36 @@ fi
 mkdir -p "$target/.claude/skills/agentdash"
 cp "$here/skills/agentdash/SKILL.md" "$target/.claude/skills/agentdash/SKILL.md"
 
+# --- AGENTDASH.md 标记段幂等合入 CLAUDE.md(harness 单源,W7-005/C3)。块经
+# 文件传入 awk(赋值前缀而非 -v:BSD awk 对 -v 值做转义处理,多行块会炸)---
+merge_instructions() {
+  local file="$1" block_file="$here/../shared/AGENTDASH.md" tmp
+  if [ ! -f "$file" ]; then
+    cp "$block_file" "$file"
+    echo "[agentdash] instructions created: $file"
+  elif grep -q 'agentdash:begin' "$file"; then
+    tmp="$file.tmp-agentdash"
+    awk '
+      /<!-- agentdash:begin/ {
+        skip = 1
+        while ((getline line < block_file) > 0) print line
+        close(block_file)
+        next
+      }
+      /<!-- agentdash:end/ { skip = 0; next }
+      skip == 0 { print }
+    ' block_file="$block_file" "$file" > "$tmp"
+    mv "$tmp" "$file"
+    echo "[agentdash] instructions refreshed: $file"
+  else
+    tmp="$file.tmp-agentdash"
+    { cat "$file"; [ -s "$file" ] && [ -n "$(tail -c1 "$file")" ] && printf '\n'; cat "$block_file"; } > "$tmp"
+    mv "$tmp" "$file"
+    echo "[agentdash] instructions appended: $file"
+  fi
+}
+merge_instructions "$target/CLAUDE.md"
+
 # --- 清理被二进制方案替代的 Python 垫片残留(老版本安装产物)---
 rm -f "$target/.claude/agentdash/hooks/record_event.py"
 rmdir "$target/.claude/agentdash/hooks" "$target/.claude/agentdash" 2>/dev/null || true

@@ -24,20 +24,32 @@ fi
 
 # --- AGENTDASH.md 标记段幂等合入 AGENTS.md(harness 单源,C3)---
 merge_instructions() {
-  # $1 = 指令文件(CLAUDE.md / AGENTS.md)
-  local file="$1" block
-  block="$(cat "$here/../shared/AGENTDASH.md")"
+  # $1 = 指令文件(CLAUDE.md / AGENTS.md)。块经文件传入 awk(赋值前缀而非
+  # -v:BSD awk 对 -v 值做转义处理,多行块会炸——生态 dogfood 实测)
+  local file="$1" block_file="$here/../shared/AGENTDASH.md" tmp
   if [ ! -f "$file" ]; then
-    printf '%s\n' "$block" > "$file"
+    cp "$block_file" "$file"
     echo "[agentdash] instructions created: $file"
   elif grep -q 'agentdash:begin' "$file"; then
     # 已有标记段:整段替换(v1 内容刷新)
-    local tmp="$file.tmp-agentdash"
-    awk -v blk="$block" 'BEGIN{skip=0} /agentdash:begin/{skip=1; printf "%s\n", blk; next} /agentdash:end/{skip=0; next} skip==0{print}' "$file" > "$tmp"
+    tmp="$file.tmp-agentdash"
+    awk '
+      /<!-- agentdash:begin/ {
+        skip = 1
+        while ((getline line < block_file) > 0) print line
+        close(block_file)
+        next
+      }
+      /<!-- agentdash:end/ { skip = 0; next }
+      skip == 0 { print }
+    ' block_file="$block_file" "$file" > "$tmp"
     mv "$tmp" "$file"
     echo "[agentdash] instructions refreshed: $file"
   else
-    { cat "$file"; printf '\n%s\n' "$block"; } >> "$file"
+    # 无标记段:末尾追加(先补末行换行,防粘行)
+    tmp="$file.tmp-agentdash"
+    { cat "$file"; [ -s "$file" ] && [ -n "$(tail -c1 "$file")" ] && printf '\n'; cat "$block_file"; } > "$tmp"
+    mv "$tmp" "$file"
     echo "[agentdash] instructions appended: $file"
   fi
 }
