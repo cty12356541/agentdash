@@ -53,16 +53,16 @@ write_fresh_settings() {
 {
   "hooks": {
     "PostToolUse": [
-      {"hooks": [{"type": "command", "command": "agentdash hook posttooluse || true"}]}
+      {"hooks": [{"type": "command", "command": "agentdash hook --host claude posttooluse || true"}]}
     ],
     "PreToolUse": [
-      {"matcher": "Task|Agent", "hooks": [{"type": "command", "command": "agentdash hook pretooluse || true"}]}
+      {"matcher": "Task|Agent", "hooks": [{"type": "command", "command": "agentdash hook --host claude pretooluse || true"}]}
     ],
     "Stop": [
-      {"hooks": [{"type": "command", "command": "agentdash hook stop || true"}]}
+      {"hooks": [{"type": "command", "command": "agentdash hook --host claude stop || true"}]}
     ],
     "SubagentStop": [
-      {"hooks": [{"type": "command", "command": "agentdash hook subagentstop || true"}]}
+      {"hooks": [{"type": "command", "command": "agentdash hook --host claude subagentstop || true"}]}
     ]
   }
 }
@@ -79,14 +79,14 @@ merge_with_jq() {
       | map(select((.hooks | length) > 0));
     .hooks //= {}
     | .hooks.PostToolUse  = ((.hooks.PostToolUse  // []) | clean)
-        + [{hooks: [{type: "command", command: "agentdash hook posttooluse || true"}]}]
+        + [{hooks: [{type: "command", command: "agentdash hook --host claude posttooluse || true"}]}]
     | .hooks.PreToolUse   = ((.hooks.PreToolUse   // []) | clean)
         + [{matcher: "Task|Agent",
-            hooks: [{type: "command", command: "agentdash hook pretooluse || true"}]}]
+            hooks: [{type: "command", command: "agentdash hook --host claude pretooluse || true"}]}]
     | .hooks.Stop         = ((.hooks.Stop         // []) | clean)
-        + [{hooks: [{type: "command", command: "agentdash hook stop || true"}]}]
+        + [{hooks: [{type: "command", command: "agentdash hook --host claude stop || true"}]}]
     | .hooks.SubagentStop = ((.hooks.SubagentStop // []) | clean)
-        + [{hooks: [{type: "command", command: "agentdash hook subagentstop || true"}]}]
+        + [{hooks: [{type: "command", command: "agentdash hook --host claude subagentstop || true"}]}]
   ' "$settings" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$settings"
     return 0
@@ -109,10 +109,10 @@ else
   # 降级:无 jq 不动用户文件,打印手工合并指引(其余安装产物已完成)
   echo "[agentdash] 未找到 jq,不改动既有 $settings;请把以下四段并入其 hooks(或装 jq 后重跑):" >&2
   cat >&2 <<'EOF'
-    "PostToolUse":  [{"hooks": [{"type": "command", "command": "agentdash hook posttooluse || true"}]}],
-    "PreToolUse":   [{"matcher": "Task|Agent", "hooks": [{"type": "command", "command": "agentdash hook pretooluse || true"}]}],
-    "Stop":         [{"hooks": [{"type": "command", "command": "agentdash hook stop || true"}]}],
-    "SubagentStop": [{"hooks": [{"type": "command", "command": "agentdash hook subagentstop || true"}]}]
+    "PostToolUse":  [{"hooks": [{"type": "command", "command": "agentdash hook --host claude posttooluse || true"}]}],
+    "PreToolUse":   [{"matcher": "Task|Agent", "hooks": [{"type": "command", "command": "agentdash hook --host claude pretooluse || true"}]}],
+    "Stop":         [{"hooks": [{"type": "command", "command": "agentdash hook --host claude stop || true"}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "agentdash hook --host claude subagentstop || true"}]}]
 EOF
 fi
 

@@ -3,8 +3,10 @@
     "PostToolUse": [
       {
         "hooks": [
-          {"type": "command",
-           "command": "agentdash hook posttooluse || true"}
+          {
+            "type": "command",
+            "command": "agentdash hook --host claude posttooluse || true"
+          }
         ]
       }
     ],
@@ -12,24 +14,30 @@
       {
         "matcher": "Task|Agent",
         "hooks": [
-          {"type": "command",
-           "command": "agentdash hook pretooluse || true"}
+          {
+            "type": "command",
+            "command": "agentdash hook --host claude pretooluse || true"
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          {"type": "command",
-           "command": "agentdash hook stop || true"}
+          {
+            "type": "command",
+            "command": "agentdash hook --host claude stop || true"
+          }
         ]
       }
     ],
     "SubagentStop": [
       {
         "hooks": [
-          {"type": "command",
-           "command": "agentdash hook subagentstop || true"}
+          {
+            "type": "command",
+            "command": "agentdash hook --host claude subagentstop || true"
+          }
         ]
       }
     ]

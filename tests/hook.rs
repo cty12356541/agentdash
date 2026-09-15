@@ -743,8 +743,8 @@ fn hooks_json_registers_four_events_with_binary_command() {
             for hook_entry in block["hooks"].as_array().expect("hook 列表") {
                 let cmd = hook_entry["command"].as_str().expect("command");
                 assert!(
-                    cmd.contains("agentdash hook"),
-                    "{event} 非二进制直调: {cmd}"
+                    cmd.contains("agentdash hook --host claude"),
+                    "{event} 非二进制直调或缺宿主归属: {cmd}"
                 );
                 assert!(
                     cmd.ends_with("|| true"),

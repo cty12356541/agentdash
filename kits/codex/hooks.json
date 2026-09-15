@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook --host codex posttooluse || true"}
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook --host codex subagentstart || true"}
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook --host codex subagentstop || true"}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook --host codex stop || true"}
+        ]
+      }
+    ]
+  }
+}
