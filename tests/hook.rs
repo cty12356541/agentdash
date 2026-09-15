@@ -213,7 +213,9 @@ fn three_hooks_replay_with_gate_fold() {
     // 行2:tool 事件 phase=end + exit + summary
     assert_eq!(evs[1]["tool"], "edit");
     assert_eq!(evs[1]["phase"], "end");
-    assert_eq!(evs[1]["exit"], 0);
+    // W4-001 改判:Edit 的 response({"structuredPatch":…})无退出码证据,exit 记
+    // null 不臆造 0(此字段为溯源事实,内核重放不读)
+    assert!(evs[1]["exit"].is_null(), "无证据 exit 应为 null");
     assert_eq!(evs[1]["summary"], "src/main.rs");
     // 行3:agent completed
     assert_eq!(evs[2]["event"], "completed");
@@ -397,13 +399,14 @@ fn summary_truncated_to_80() {
 #[test]
 fn exit_code_variants() {
     let cases = [
-        (json!({"status": 0}), 0),
-        (json!({"exit_code": 3}), 3),
-        (json!({"interrupted": true, "status": 0}), 130),
-        (json!({"is_error": true}), 1),
-        (json!({"ok": true}), 0),
-        (json!("plain string response"), 0),
-        (Value::Null, 0),
+        (json!({"status": 0}), json!(0)),
+        (json!({"exit_code": 3}), json!(3)),
+        (json!({"interrupted": true, "status": 0}), json!(130)),
+        (json!({"is_error": true}), json!(1)),
+        // W4-001 改判:无退出码证据(缺字段/非对象/载荷缺失)记 null,不臆造 0
+        (json!({"ok": true}), Value::Null),
+        (json!("plain string response"), Value::Null),
+        (Value::Null, Value::Null),
     ];
     for (response, expected) in cases {
         let t = TempDir::new("exit");
@@ -426,12 +429,21 @@ fn exit_code_variants() {
 
 #[test]
 fn summary_line_variants() {
-    // 摘要提取经 gate 折叠路径可见(bash 非 gate 的 tool 行 summary 恒为命令本身)
+    // 摘要提取经 gate 折叠路径可见(bash 非 gate 的 tool 行 summary 恒为命令本身);
+    // 对象 fixture 显式带 status:0——本组只测摘要,不可知折叠语义由
+    // unknown_exit_gate_folds_failed 专测钉住(W4-001)
     let cases = [
-        (json!({"stdout": "a\n\nb  \n", "stderr": ""}), "b"),
-        (json!({"stdout": "", "stderr": "boom\nboom\n"}), "boom"),
-        (json!({"stdout": ""}), ""),
-        (json!("not-a-dict"), ""),
+        (
+            json!({"stdout": "a\n\nb  \n", "stderr": "", "status": 0}),
+            "b",
+        ),
+        (
+            json!({"stdout": "", "stderr": "boom\nboom\n", "status": 0}),
+            "boom",
+        ),
+        (json!({"stdout": "", "status": 0}), ""),
+        // 非对象 response:摘要为空,折叠走不可知 failed 路径
+        (json!("not-a-dict"), "(exit unknown)"),
     ];
     for (response, expected) in cases {
         let t = TempDir::new("summary");
@@ -454,6 +466,59 @@ fn summary_line_variants() {
         assert_eq!(evs.len(), 2);
         assert_eq!(evs[1]["detail"], expected, "response={response}");
     }
+}
+
+#[test]
+fn unknown_exit_gate_folds_failed_with_tailnote() {
+    // W4-001 D1:gate 命中但 response 无退出码证据 → 折叠记 failed(不虚报
+    // passed),exit 记 null,detail 补 `(exit unknown)` 尾注区分"真失败"与
+    // "证据缺失";summary 在场时尾注接在摘要后。
+    let t = TempDir::new("unknownexit");
+    let payload = json!({
+        "session_id": "s",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo test"},
+        "tool_response": {"stdout": "ok 10\n", "stderr": ""}
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+        "unknown gate running",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "unknown gate fold",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[0]["state"], "running");
+    assert_eq!(
+        evs[1]["state"], "failed",
+        "不可知折叠为 failed,不虚报 passed"
+    );
+    assert!(evs[1]["exit"].is_null(), "不可知 exit 记 null: {}", evs[1]);
+    assert_eq!(evs[1]["detail"], "ok 10 (exit unknown)");
+
+    // response 整体缺失:detail 只有尾注
+    let t2 = TempDir::new("unknownexit2");
+    let bare = json!({
+        "session_id": "s",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo clippy"}
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&bare, t2.path()), t2.path()),
+        "bare gate running",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t2.path()), t2.path()),
+        "bare gate fold",
+    );
+    let evs = read_events(t2.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[1]["state"], "failed");
+    assert_eq!(evs[1]["detail"], "(exit unknown)");
 }
 
 // ------------------------------------------------------------ 降级路径(铁律)

@@ -64,7 +64,7 @@ PATH 上的二进制,市场包**不内嵌二进制**——缺二进制时 hook �
 |---|---|---|
 | PreToolUse | Task/Agent 工具派发(matcher `Task\|Agent`) | `agent` event=dispatched(`who`=tool_input 的 agentType/subagent_type,缺省 `agent`;`task`=description 截 80 字符,缺省省略该字段;其余工具零写入静默) |
 | PostToolUse | bash 且命令命中 `cargo test`/`clippy`/`fmt`、`go test`、`npm test`、`gh pr checks`(词边界 + 词间空白) | `gate` state=running;退出码+一行摘要暂存 `.agentdash/pending_gate.json`(hook 为一次性进程,折叠须经落盘交接) |
-| Stop | 有在途 gate | 折叠为 `gate` passed/failed(exit + detail 摘要行),消费后删除暂存 |
+| Stop | 有在途 gate | 折叠为 `gate` passed/failed(exit + detail 摘要行;退出码不可知记 failed + `(exit unknown)` 尾注,不虚报),消费后删除暂存 |
 | PostToolUse | 其他任何工具 | `tool` phase=end + exit + summary(命令/描述/文件路径,截 80 字符) |
 | SubagentStop | — | `agent` event=completed(载荷带 `agent_name` 则透传 `who`) |
 

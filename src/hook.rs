@@ -5,7 +5,9 @@
 //!   → `gate` running 行 + 退出码/一行摘要暂存 `pending_gate.json` **槽位数组**
 //!   (同刻多个在途 gate 各占一槽,Stop 折叠须经落盘交接;旧单对象格式读入兼容);
 //!   否则 `tool` phase=end + exit + summary
-//! - stop:把在途 gate 逐槽折叠为各自 passed/failed(exit + detail 摘要行),消费后删除暂存
+//! - stop:把在途 gate 逐槽折叠为各自 passed/failed(exit + detail 摘要行),消费后删除暂存;
+//!   退出码不可知(暂存 exit 为 `null`)记 `failed` + detail 尾注 `(exit unknown)`——
+//!   不虚报通过(W4-001 D1)
 //! - pretooluse:子代理派发工具(`Task`/`Agent`)→ `agent` dispatched(who=
 //!   `agentType`/`subagent_type`/`name`,缺省 `agent`;task=`description` 截 80,
 //!   缺省省略)
@@ -238,12 +240,26 @@ fn on_stop(payload: &Map<String, Value>) {
                 continue;
             }
             let exit = slot.get("exit").and_then(Value::as_i64);
-            let state = if exit == Some(0) { "passed" } else { "failed" };
             let detail = clip(
                 slot.get("detail")
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
             );
+            // 折叠语义(W4-001 D1):显式 0 才 passed;非零(含 interrupted 130)
+            // failed;不可知(null)同样 failed——宁可误报失败,不虚报通过。
+            // 尾注 `(exit unknown)` 只加在不可知路径,区分"真失败"与"证据缺失"。
+            let (state, detail) = match exit {
+                Some(0) => ("passed", detail),
+                Some(_) => ("failed", detail),
+                None => (
+                    "failed",
+                    if detail.is_empty() {
+                        String::from("(exit unknown)")
+                    } else {
+                        format!("{detail} (exit unknown)")
+                    },
+                ),
+            };
             append_line(
                 &dir,
                 &json!({
@@ -523,20 +539,20 @@ fn is_ws_byte(b: u8) -> bool {
     b.is_ascii_whitespace() || b == 0x0B // \v:Python \s 亦匹配
 }
 
-/// 退出码:Bash 的 `status`/`exit_code`/`exit`;`interrupted` → 130;`is_error` → 1;不可知 → 0。
-fn exit_code(response: Option<&Value>) -> i64 {
-    let Some(obj) = response.and_then(Value::as_object) else {
-        return 0;
-    };
+/// 退出码证据:Bash 的 `status`/`exit_code`/`exit`;`interrupted` → 130;`is_error` → 1。
+/// 无任何证据(response 缺失/非对象/无退出码字段)→ [`None`]——落盘为 `null`,
+/// 不臆造 0;Stop 折叠按失败处理(W4-001 D1,不虚报)。
+fn exit_code(response: Option<&Value>) -> Option<i64> {
+    let obj = response.and_then(Value::as_object)?;
     if obj.get("interrupted").and_then(Value::as_bool) == Some(true) {
-        return 130;
+        return Some(130);
     }
     for key in ["status", "exit_code", "exit"] {
         if let Some(code) = obj.get(key).and_then(Value::as_i64) {
-            return code;
+            return Some(code);
         }
     }
-    i64::from(obj.get("is_error").and_then(Value::as_bool) == Some(true))
+    (obj.get("is_error").and_then(Value::as_bool) == Some(true)).then_some(1)
 }
 
 /// 一行摘要:stdout(空则 stderr)最后一条非空行,截 `MAX_SUMMARY`。
