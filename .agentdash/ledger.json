@@ -1,7 +1,7 @@
 {
   "$schema": "agentdash.tasklog.v1",
   "wave": "W9",
-  "title": "W9 dogfood 闭环实测 + 宿主巡检 + cursor-kit(第五宿主)",
+  "title": "W9 dogfood 闭环实测 + 宿主扩展(cursor-kit 已落 + deepseek 规划)+ 巡检 + CLI 双语",
   "profile": "sdd",
   "note": "W8-02 遗留待验项收口 + kits 巡检工具化 + cursor-kit;结论一律取自 events.jsonl 实测,不预记。",
   "lanes": [
@@ -23,6 +23,12 @@
       "name": "CLI 双语",
       "tasks": [
         "05"
+      ]
+    },
+    {
+      "name": "deepseek-kit(规划)",
+      "tasks": [
+        "06"
       ]
     }
   ],
@@ -55,6 +61,11 @@
       "state": "done",
       "done_at": "2026-09-16T00:09:19+08:00",
       "note": "W9-005:lang.rs 双语文案表;--help/参数错误全走 lang,watch 错误改结构化枚举(#[path] 测试 crate 不牵 lang);缺省 zh,en/en-US/en_US 切英文;帮助尾部互附切换提示;测试 214 全过(含 4 语言用例);README 补 CLI 语言段"
+    },
+    "06": {
+      "label": "deepseek-kit(第六宿主:DeepSeek Harness,桥接形制)",
+      "state": "pending",
+      "note": "调研已毕(2026-09-16,官方仓库 packages/hooks):DSH 经 dsh-hooks-claude-code 桥复用 Claude Code 形制 hooks.json(configPath 指向,SubagentStart/Stop 原生);词表全(SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/Stop/Subagent*),载荷=claude 命令钩子子集,hook.rs 零改动,仅出 --host deepseek 变体 hooks.json;gate 折叠有望带真退出码(claude 形制)。待定:DSH 项目级插件挂载的配置位置与幂等写法;安装器动作=AGENTS.md 合入+hooks.json 写入+挂载指引"
     }
   },
   "barriers": []

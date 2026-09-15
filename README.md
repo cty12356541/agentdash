@@ -43,6 +43,11 @@ hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo ins
 | ZCode(公司内部) | `kits/zcode` | `.zcode/config.json` → hooks(`enabled:true`,安装器置位;会话启动加载) | 待宿主子代理事件 |
 | Cursor | `kits/cursor` | `.cursor/hooks.json`(`version:1`;项目级需信任工作区) | ✓(`subagentStart/Stop` 原生) |
 
+**规划中**:DeepSeek Harness(`deepseek-kit`,W9-06 调研入台账)——DSH 经
+`dsh-hooks-claude-code` 桥复用 Claude Code 形制 `hooks.json`,词表全
+(含 `SubagentStart`),hook 二进制零改动,仅出 `--host deepseek` 变体;
+待定 DSH 项目级插件挂载的幂等写法,落地后矩阵加行。
+
 **一致性保证**:五套 kit 写同一 `<repo>/.agentdash/`(同文件、同锁、同事件词表),
 事件带 `host` 字段归因,面板在跑行显示 `▶ <who> [host]`;harness 约定单源
 `kits/shared/AGENTDASH.md`,各安装器以标记段幂等合入宿主指令文件
