@@ -14,7 +14,8 @@ description: Install and verify the agentdash binary that this plugin's hooks ca
 1. **探测**:`agentdash --version`(bash 直接跑)。输出 `agentdash 0.x.y` 且退 0 → 已装,跳到第 4 步
 2. **安装**(按平台):
    - **Windows**:从 [Releases](https://github.com/cty12356541/agentdash/releases) 下载
-     `agentdash-v<x>-x86_64-pc-windows-gnu.zip`,解压 `agentdash.exe` 放入 PATH 目录
+     `agentdash-v<x>-x86_64-pc-windows-msvc.zip`(W4-006 起资产由 Release workflow
+     自动挂载,triple 与之一致),解压 `agentdash.exe` 放入 PATH 目录
      (如 `%LOCALAPPDATA%\Programs\agentdash`,或在 PowerShell 里:
      `New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\agentdash"; Expand-Archive <zip> -DestinationPath 上述目录 -Force`,再把该目录加入用户 PATH 后重开终端)
    - **macOS / Linux**:`cargo install --path <仓库根>`(Rust ≥1.85),或 Releases 对应

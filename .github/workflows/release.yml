@@ -1,0 +1,69 @@
+name: Release
+
+# W4-006:tag `v*` 触发三平台预构建分发(spec D5);workflow_dispatch 供干跑
+# (非 tag 触发只传 artifact、不发 Release,资产名回退 v0.0.0-dev)。
+# Windows 资产出 x86_64-pc-windows-msvc(宿主默认工具链,免 mingw 前置),
+# kits/claude-code/skills/agentdash-setup/SKILL.md 与 bin/README.md 的获取
+# 指引已按此对齐——文档与资产禁止各说各话。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME}"
+          case "$VER" in v*) ;; *) VER="v0.0.0-dev" ;; esac
+          NAME="agentdash-${VER}-${{ matrix.target }}"
+          mkdir -p dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/agentdash.exe" "dist/${NAME}.exe"
+            # Windows 10+ 自带 bsdtar:-a 按扩展名出 zip
+            tar -a -cf "dist/${NAME}.zip" -C dist "${NAME}.exe"
+            rm "dist/${NAME}.exe"
+          else
+            cp "target/${{ matrix.target }}/release/agentdash" "dist/${NAME}"
+            strip "dist/${NAME}"
+            tar -czf "dist/${NAME}.tar.gz" -C dist "${NAME}"
+            rm "dist/${NAME}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
