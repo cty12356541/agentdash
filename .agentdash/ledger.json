@@ -1,79 +1,81 @@
 {
   "$schema": "agentdash.tasklog.v1",
-  "wave": "W6",
-  "title": "W6 输出可达性收口:svg 输出 + 解析容忍",
+  "wave": "W7",
+  "title": "W7 多宿主 kit 与跨宿主一致性",
   "profile": "sdd",
-  "note": "W6 开工换血。范围取自历次挂账候选;codex/opencode kit 需宿主 API 调研,列非目标。",
+  "note": "W7 开工换血。API 依据 2026-09 调研(codex lifecycle hooks / opencode plugins);一致性 = 同台账同锁同词表(C1)+ host 归属(C2)+ AGENTDASH.md 单源(C3)。",
   "lanes": [
     {
-      "name": "批一-解析与设施",
+      "name": "批一-内核地基",
       "tasks": [
-        "01",
-        "02"
+        "01"
       ]
     },
     {
-      "name": "批二-svg 输出",
+      "name": "批二-kit 全家",
       "tasks": [
-        "03"
-      ]
-    },
-    {
-      "name": "批三-审查",
-      "tasks": [
-        "04"
+        "02",
+        "03",
+        "04",
+        "05"
       ]
     },
     {
       "name": "收口",
       "tasks": [
-        "05"
+        "06"
       ]
     }
   ],
   "tasks": {
     "01": {
-      "label": "±HHMM 基本格式容忍",
-      "state": "done",
-      "done_at": "2026-09-15T22:14:28+08:00",
-      "note": "W6-001:单臂守卫统一 ±HH:MM/±HHMM,6 例点断言"
+      "label": "--host 旗标+subagentstart+agent 表 host",
+      "state": "active"
     },
     "02": {
-      "label": "proptest 失败回归落盘",
-      "state": "done",
-      "done_at": "2026-09-15T22:14:28+08:00",
-      "note": "W6-004:Direct → crate 根 proptest-regressions/"
+      "label": "共享 AGENTDASH.md 单源",
+      "state": "pending"
     },
     "03": {
-      "label": "render graph --format svg",
-      "state": "done",
-      "done_at": "2026-09-15T22:14:28+08:00",
-      "note": "W6-002:svg 与 ansi 同源异渲染;CLI 3 测试"
+      "label": "codex-kit(hooks.json+安装器)",
+      "state": "pending"
     },
     "04": {
-      "label": "install.ps1 静态审查(记录)",
-      "state": "done",
-      "done_at": "2026-09-15T22:14:28+08:00",
-      "note": "W6-003:五项逐条核对通过,零改码(见收口报告)"
+      "label": "opencode-kit(插件+安装器)",
+      "state": "pending"
     },
     "05": {
-      "label": "0.5.0 收口+样张+tag",
-      "state": "done",
-      "done_at": "2026-09-15T22:15:15+08:00",
-      "note": "0.5.0 三处版本 + svg 样张 + tag v0.5.0"
+      "label": "claude-code kit 归属补齐",
+      "state": "pending"
+    },
+    "06": {
+      "label": "双宿主交错 dogfood+0.6.0 收口",
+      "state": "pending"
     }
   },
   "barriers": [
     {
       "id": "B1",
       "after": [
-        "01",
-        "02",
-        "03",
-        "04"
+        "01"
       ],
       "unlocks": [
+        "02",
+        "03",
+        "04",
         "05"
+      ]
+    },
+    {
+      "id": "B2",
+      "after": [
+        "02",
+        "03",
+        "04",
+        "05"
+      ],
+      "unlocks": [
+        "06"
       ]
     }
   ]
