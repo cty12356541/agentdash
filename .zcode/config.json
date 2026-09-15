@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "PostToolUse": [
+        {
+          "hooks": [
+            {"type": "command",
+             "command": "agentdash hook --host zcode posttooluse || true"}
+          ]
+        }
+      ],
+      "PreToolUse": [
+        {
+          "matcher": "Task|Agent",
+          "hooks": [
+            {"type": "command",
+             "command": "agentdash hook --host zcode pretooluse || true"}
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "hooks": [
+            {"type": "command",
+             "command": "agentdash hook --host zcode stop || true"}
+          ]
+        }
+      ]
+    }
+  }
+}

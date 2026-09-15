@@ -5,7 +5,7 @@
     "name": "cty12356541",
     "url": "https://github.com/cty12356541"
   },
-  "description": "Agent progress dashboard: session-native hooks + task-DAG panel/graph/oneline/watch + vector svg; part of a multi-host kit family (claude-code / codex / opencode) sharing one .agentdash contract; zero runtime, hooks call `agentdash` on PATH",
+  "description": "Agent progress dashboard: session-native hooks + task-DAG panel/graph/oneline/watch + vector svg; part of a multi-host kit family (claude-code / codex / opencode / zcode) sharing one .agentdash contract; zero runtime, hooks call `agentdash` on PATH",
   "displayName": "agentdash",
   "homepage": "https://github.com/cty12356541/agentdash"
 }

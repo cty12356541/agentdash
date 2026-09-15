@@ -34,8 +34,9 @@ hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo ins
 | Claude Code | `kits/claude-code`(插件市场) | hooks.json 四事件 | ✓ |
 | Codex CLI | `kits/codex` | `.codex/hooks.json`(repo 级;需 trust + `/hooks` 一次性审查) | ✓ |
 | opencode | `kits/opencode` | `.opencode/plugins/agentdash.js`(Bun 插件) | 待宿主子代理事件 |
+| ZCode(公司内部) | `kits/zcode` | `.zcode/config.json` → hooks(`enabled:true`,安装器置位;会话启动加载) | 待宿主子代理事件 |
 
-**一致性保证**:三套 kit 写同一 `<repo>/.agentdash/`(同文件、同锁、同事件词表),
+**一致性保证**:四套 kit 写同一 `<repo>/.agentdash/`(同文件、同锁、同事件词表),
 事件带 `host` 字段归因,面板在跑行显示 `▶ <who> [host]`;harness 约定单源
 `kits/shared/AGENTDASH.md`,各安装器以标记段幂等合入宿主指令文件
 (Claude Code → `CLAUDE.md`,codex / opencode → `AGENTS.md`)——换工具不换契约。
