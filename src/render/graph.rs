@@ -14,10 +14,11 @@
 //!   └/┘ 角折,子中心列以 │ 接 ▼ 入框顶
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 
 use std::cmp::Reverse;
 
-use super::{C_END, clamp_width, display_width, elide, is_lane_marker, visual};
+use super::{C_END, Visual, clamp_width, display_width, elide, is_lane_marker, visual};
 use crate::model::{Dashboard, TaskView};
 
 /// 节点单元格内 label 截断宽(承 Python `_CELL_LABEL`)。
@@ -465,5 +466,148 @@ fn put(canvas: &mut [Vec<char>], row: usize, col: usize, ch: char, only_space: b
         true
     } else {
         false
+    }
+}
+
+/// 等宽近似像素几何(W6-002):列宽 / 行高。
+const SVG_CW: usize = 8;
+const SVG_LH: usize = 24;
+
+/// Visual → SVG 前景色(hex;承 ANSI 调色语义)。
+fn visual_hex(v: Visual) -> &'static str {
+    match v {
+        Visual::Done => "#2E7D32",
+        Visual::Active => "#1565C0",
+        Visual::Stalled => "#B45309",
+        Visual::Pending | Visual::Blocked => "#757575",
+    }
+}
+
+/// XML 转义(任务 label 可能含 `&` `<` `>` 与引号)。
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// 矢量 DAG(W6-002):复用 ansi 版单一几何源(`edges_of` / `compute_layers` /
+/// `layout_rows`),肘形连线(父框底中 → 子框顶汇流行 → 子顶中箭头)。自包含
+/// SVG 文档;坐标 = 字符几何 ×(列宽 8px / 行高 24px)等宽近似。
+#[must_use]
+pub fn render_graph_svg(dash: &Dashboard) -> String {
+    let barriers = barriers_of(dash);
+    let edges = edges_of(dash, &barriers);
+    let layers = compute_layers(dash, &edges);
+    let rows = layout_rows(&layers);
+    let by_id: HashMap<&str, &TaskView> = dash
+        .tasks
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect();
+    let cell_of: HashMap<&str, &Cell> = rows
+        .iter()
+        .flatten()
+        .map(|cell| (cell.id.as_str(), cell))
+        .collect();
+    let max_col = rows
+        .iter()
+        .flatten()
+        .map(|cell| cell.x + cell.width)
+        .max()
+        .unwrap_or(DEFAULT_GRAPH_WIDTH);
+    let last_line = rows
+        .last()
+        .and_then(|cells| cells.iter().map(|cell| cell.line + 1).max())
+        .unwrap_or(HEAD_LINES);
+    let w = (max_col + 2) * SVG_CW;
+    let h = (last_line + 3) * SVG_LH;
+
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" font-family=\"Menlo, Consolas, 'PingFang SC', monospace\" font-size=\"13\">"
+    );
+    out.push_str("<defs><marker id=\"a\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"#616161\"/></marker></defs>\n");
+    let _ = writeln!(out, "<rect width=\"{w}\" height=\"{h}\" fill=\"#FAFAF7\"/>");
+    let title = xml_escape(&format!("{} · DAG", dash.project));
+    let _ = writeln!(
+        out,
+        "<text x=\"8\" y=\"{}\" fill=\"#263238\">{title}</text>",
+        SVG_LH - 6
+    );
+    let rule_y = SVG_LH * 3 / 2;
+    let _ = writeln!(
+        out,
+        "<line x1=\"0\" y1=\"{rule_y}\" x2=\"{w}\" y2=\"{rule_y}\" stroke=\"#CFCFCF\"/>"
+    );
+
+    svg_edges(&mut out, &edges, &cell_of);
+    svg_boxes(&mut out, &rows, &by_id);
+    let bottom = (last_line + 2) * SVG_LH;
+    let _ = writeln!(
+        out,
+        "<line x1=\"0\" y1=\"{bottom}\" x2=\"{w}\" y2=\"{bottom}\" stroke=\"#CFCFCF\"/>"
+    );
+    out.push_str("</svg>\n");
+    out
+}
+
+/// 连线层(W6-002):父框底中 → 汇流行 → 子框顶中,肘形路由;近层/同层
+/// 退化(环保险)为斜直线。箭头嵌子框顶缘。
+fn svg_edges(out: &mut String, edges: &Edges, cell_of: &HashMap<&str, &Cell>) {
+    out.push_str("<g fill=\"none\" stroke=\"#616161\" stroke-width=\"1.5\">\n");
+    for cid in &edges.order {
+        let Some(cell) = cell_of.get(cid.as_str()) else {
+            continue;
+        };
+        for pid in edges.get(cid) {
+            let Some(parent) = cell_of.get(pid.as_str()) else {
+                continue;
+            };
+            let x0 = parent.center() * SVG_CW;
+            let y0 = (parent.line + 2) * SVG_LH;
+            let zy = (cell.line - 2) * SVG_LH + SVG_LH / 2;
+            let x1 = cell.center() * SVG_CW;
+            let y1 = (cell.line - 1) * SVG_LH;
+            if y0 + 2 >= y1 {
+                let _ = writeln!(
+                    out,
+                    "<path d=\"M {x0},{y0} L {x1},{y1}\" marker-end=\"url(#a)\"/>"
+                );
+            } else {
+                let _ = writeln!(
+                    out,
+                    "<path d=\"M {x0},{y0} V {zy} H {x1} V {y1}\" marker-end=\"url(#a)\"/>"
+                );
+            }
+        }
+    }
+    out.push_str("</g>\n");
+}
+
+/// 框层(W6-002):单线框 + 状态色描边与文字(文字经 XML 转义)。
+fn svg_boxes(out: &mut String, rows: &[Vec<Cell>], by_id: &HashMap<&str, &TaskView>) {
+    for cells in rows {
+        for cell in cells {
+            let Some(task) = by_id.get(cell.id.as_str()) else {
+                continue;
+            };
+            let (x, y) = (cell.x * SVG_CW, (cell.line - 1) * SVG_LH);
+            let hex = visual_hex(visual(task.state));
+            let _ = writeln!(
+                out,
+                "<rect x=\"{x}\" y=\"{y}\" width=\"{}\" height=\"{}\" rx=\"6\" fill=\"#FFFFFF\" stroke=\"{hex}\"/>",
+                cell.width * SVG_CW,
+                3 * SVG_LH
+            );
+            let _ = writeln!(
+                out,
+                "<text x=\"{}\" y=\"{}\" fill=\"{hex}\">{}</text>",
+                x + 2 * SVG_CW,
+                y + 2 * SVG_LH - 7,
+                xml_escape(&cell_text(task))
+            );
+        }
     }
 }

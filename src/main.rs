@@ -20,7 +20,9 @@ agentdash - agent progress dashboard
 Usage: agentdash <COMMAND> [ARGS]
 
 Commands:
-  render panel|graph [PATH]       Render the dashboard panel or the task DAG
+  render panel|graph [--format ansi|svg] [PATH]
+                                  Render the dashboard panel or the task DAG
+                                  (--format svg: vector DAG, graph only)
   oneline [PATH]                  Print a one-line status summary
   watch [--once] [SECONDS] [PATH] Watch a plan and refresh live (q/Ctrl-C quits)
   hook <EVENT>                    Consume a host-tool hook payload from stdin
@@ -61,9 +63,54 @@ fn main() -> ExitCode {
     }
 }
 
+/// `render` 输出格式(W6-002):ansi(缺省)/ svg(仅 graph)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderFormat {
+    /// 终端字符输出(承旧路径)。
+    Ansi,
+    /// 矢量 DAG 文档(仅 `render graph`)。
+    Svg,
+}
+
+/// `render` 参数解析(W6-002,纯函数):`--format ansi|svg`(或 `--format=X`,
+/// 缺省 ansi)+ 至多一个 [PATH]。`Err` 为已成型错误消息,调用方打印后退 2。
+fn parse_render_args(rest: &[String]) -> Result<(RenderFormat, Option<PathBuf>), String> {
+    let mut format = RenderFormat::Ansi;
+    let mut path = None;
+    let mut iter = rest.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--format" {
+            format = match iter.next().map(String::as_str) {
+                Some("ansi") => RenderFormat::Ansi,
+                Some("svg") => RenderFormat::Svg,
+                other => {
+                    return Err(format!(
+                        "--format 需要 ansi|svg,得到 {}",
+                        other.unwrap_or("(缺参)")
+                    ));
+                }
+            };
+        } else if let Some(value) = arg.strip_prefix("--format=") {
+            format = match value {
+                "ansi" => RenderFormat::Ansi,
+                "svg" => RenderFormat::Svg,
+                other => return Err(format!("--format 需要 ansi|svg,得到 {other}")),
+            };
+        } else if arg.starts_with('-') {
+            return Err(format!("unexpected flag `{arg}`"));
+        } else if path.is_none() {
+            path = Some(PathBuf::from(arg));
+        } else {
+            return Err(String::from("unexpected extra arguments after [PATH]"));
+        }
+    }
+    Ok((format, path))
+}
+
 /// `render panel|graph [PATH]`:打印对应渲染。宽度非 tty 用默认、tty 读终端
 /// 原始列:低于 40 列退化为 oneline 单行(AD-ERR-004),否则钳 40..120 出
-/// 框化视图;模型走多源合并(损坏降级为警告行,不失败)。
+/// 框化视图;模型走多源合并(损坏降级为警告行,不失败)。`--format svg`
+/// 仅 graph(W6-002):矢量 DAG 文档,其余同旧路径。
 fn cmd_render(rest: &[String]) -> ExitCode {
     let Some(view) = rest.first().map(String::as_str) else {
         eprintln!("error: render needs a view: `render panel|graph [PATH]`\n\n{USAGE}");
@@ -77,19 +124,32 @@ fn cmd_render(rest: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let Some(path) = positional_path(&rest[1..]) else {
-        return ExitCode::from(2);
-    };
-    let dash = model::merge(&path);
-    match tui::output_form(tui::stdout_cols(), default_width) {
-        tui::OutputForm::OneLine => println!("{}", render::render_oneline(&dash)),
-        tui::OutputForm::Framed(width) => {
-            let rendered = match view {
-                "panel" => render::render_panel(&dash, width),
-                _ => render::graph::render_graph(&dash, width),
-            };
-            println!("{rendered}");
+    let (format, path) = match parse_render_args(&rest[1..]) {
+        Ok(parsed) => parsed,
+        Err(msg) => {
+            eprintln!("error: {msg}\n\n{USAGE}");
+            return ExitCode::from(2);
         }
+    };
+    if format == RenderFormat::Svg && view != "graph" {
+        eprintln!("error: --format svg 仅支持 `render graph`\n\n{USAGE}");
+        return ExitCode::from(2);
+    }
+    let path = path.unwrap_or_else(|| PathBuf::from("."));
+    let dash = model::merge(&path);
+    match format {
+        RenderFormat::Svg => println!("{}", render::graph::render_graph_svg(&dash)),
+        RenderFormat::Ansi => match tui::output_form(tui::stdout_cols(), default_width) {
+            tui::OutputForm::OneLine => println!("{}", render::render_oneline(&dash)),
+            tui::OutputForm::Framed(width) => {
+                let rendered = if view == "panel" {
+                    render::render_panel(&dash, width)
+                } else {
+                    render::graph::render_graph(&dash, width)
+                };
+                println!("{rendered}");
+            }
+        },
     }
     ExitCode::SUCCESS
 }

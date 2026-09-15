@@ -23,6 +23,8 @@ mod render;
 #[path = "../src/sources/mod.rs"]
 mod sources;
 
+use std::process::Command;
+
 use contract::TaskState;
 use model::{BarrierEdges as ModelBarrierEdges, Dashboard, MilestoneView, TaskView};
 use render::display_width;
@@ -455,4 +457,62 @@ fn barriers_reach_panel_but_not_oneline() {
         render::render_oneline(&without),
         "oneline 输出不随 barriers 变化"
     );
+}
+
+// ------------------------------------------------------------ svg 输出(W6-002)
+
+#[test]
+fn cli_svg_format_outputs_valid_document_with_all_tasks() {
+    let out = Command::new(env!("CARGO_BIN_EXE_agentdash"))
+        .args(["render", "graph", "--format", "svg"])
+        .output()
+        .expect("run agentdash");
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.starts_with("<svg"), "应输出 SVG 文档根");
+    assert!(text.trim_end().ends_with("</svg>"), "应闭合文档根");
+    // 状态无关断言(任务 mark 随台账状态变化)
+    assert!(text.contains("· DAG"), "svg 应含图题");
+    let boxes = text.matches("<rect").count();
+    assert!(boxes >= 5, "svg 应含任务框(≥5,含背景): {boxes}");
+    assert!(text.contains("01"), "svg 应含任务 id");
+}
+
+#[test]
+fn cli_svg_equals_shorthand_and_default_stays_ansi() {
+    let long = Command::new(env!("CARGO_BIN_EXE_agentdash"))
+        .args(["render", "graph", "--format", "svg"])
+        .output()
+        .expect("run");
+    let short = Command::new(env!("CARGO_BIN_EXE_agentdash"))
+        .args(["render", "graph", "--format=svg"])
+        .output()
+        .expect("run");
+    assert_eq!(long.stdout, short.stdout, "--format X 与 --format=X 同义");
+
+    let ansi = Command::new(env!("CARGO_BIN_EXE_agentdash"))
+        .args(["render", "graph"])
+        .output()
+        .expect("run");
+    assert!(ansi.status.success());
+    let text = String::from_utf8_lossy(&ansi.stdout);
+    assert!(text.contains("· DAG"), "缺省仍为 ansi 字符图");
+    assert!(!text.contains("<svg"), "缺省不得出 svg");
+}
+
+#[test]
+fn cli_svg_error_paths_exit_two() {
+    let cases: &[&[&str]] = &[
+        &["render", "graph", "--format", "bogus"],
+        &["render", "panel", "--format", "svg"],
+        &["render", "graph", "--format"],
+    ];
+    for args in cases {
+        let out = Command::new(env!("CARGO_BIN_EXE_agentdash"))
+            .args(*args)
+            .output()
+            .expect("run");
+        assert_eq!(out.status.code(), Some(2), "args={args:?} 应退 2");
+        assert!(!out.stderr.is_empty(), "args={args:?} 应有错误说明");
+    }
 }

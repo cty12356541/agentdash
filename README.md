@@ -52,7 +52,7 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 | 命令 | 作用 |
 |---|---|
 | `agentdash render panel [PATH]` | 终端面板:页眉统计 → 健康(验证门/警告)→ 轨迹(里程碑进度条)→ 车道任务 |
-| `agentdash render graph [PATH]` | 任务 DAG 字符图(同车道链 + 屏障边,拓扑分层布局) |
+| `agentdash render graph [--format ansi|svg] [PATH]` | 任务 DAG 字符图(同车道链 + 屏障边,拓扑分层布局);`--format svg` 出矢量文档 |
 | `agentdash oneline [PATH]` | 无 ANSI 单行 statusline:`[dash] <project> ✓d▶a·r ⚑s ·nag` |
 | `agentdash watch [--once] [PATH]` | 常驻 TUI(5s 刷新档,git 快照 30s 节流;`q`/Ctrl-C 退出);`--once` 或非 tty stdin 渲染一帧即退 |
 | `agentdash hook <EVENT>` | 消费宿主 hook 载荷(stdin),折叠后追加 `.agentdash/events.jsonl` |
