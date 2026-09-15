@@ -1,21 +1,21 @@
 {
   "$schema": "agentdash.tasklog.v1",
   "wave": "W10",
-  "title": "W10 候选:0.8 产品化(多仓聚合 + digest + 自定义 gate + stats)",
+  "title": "W10 候选:0.8 产品化(多仓聚合 + digest + 自定义 gate)",
   "profile": "sdd",
-  "note": "定位评估已入册(docs/superpowers/reports/2026-09-16-w9-product-review.md):定位升级为「跨宿主 agent 工作契约及其仪表盘」;0.8 主打 01+02,03-05 视进度进退。W9 全清(6/6),余量待验:zcode 失败配对重开复核、cursor 端到端待 cursor-agent login。",
+  "note": "定位评估已入册(docs/superpowers/reports/2026-09-16-w9-product-review.md):定位升级为「跨宿主 agent 工作契约及其仪表盘」;0.8 主打 01+02+03(自定义 gate 经用户决策升格),04-05 视进度进退。W9 全清(6/6),余量待验:zcode 失败配对重开复核、cursor 端到端待 cursor-agent login。",
   "lanes": [
     {
-      "name": "0.8 候选",
+      "name": "0.8 主打",
       "tasks": [
         "01",
-        "02"
+        "02",
+        "03"
       ]
     },
     {
       "name": "候选扩展",
       "tasks": [
-        "03",
         "04",
         "05"
       ]
@@ -35,7 +35,7 @@
     "03": {
       "label": "用户自定义 gate(.agentdash/config 声明词表)",
       "state": "pending",
-      "note": "验证门契约从五个硬编码词(cargo/go/npm/gh)开放为用户可声明词表/正则;hook 与 render 双侧读配置"
+      "note": "已定档 0.8 主打(2026-09-16 用户决策):验证门契约从内置 6 条模式(cargo test/clippy/fmt、go test、npm test、gh pr checks,src/hook.rs gate_name)开放为 .agentdash/config 用户声明词表;钩子按 cwd 读同目录配置与内置合并,损坏按降级铁律静默回退内置(绝不阻塞宿主);渲染侧零改动(gate 字段本为自由字符串);补词边界/连续性性质测试"
     },
     "04": {
       "label": "agentstats 观测面(宿主使用率/gate 通过率/任务周转)",
