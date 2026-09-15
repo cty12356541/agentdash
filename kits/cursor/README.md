@@ -9,6 +9,7 @@ docs §Agent Hooks(1.7 起)。
 | cursor 事件 | agentdash 事件 | 说明 |
 |---|---|---|
 | `afterShellExecution` | `posttooluse` | 载荷顶层 `command`+`output`,二进制归一成 bash 视图(gate 提取/tool 行) |
+| `postToolUseFailure` | `posttoolusefailure` | 失败证据配对:命令可得时与在途 gate 暂存槽顶替,失败侧落真证据(W9-003) |
 | `subagentStart` | `subagentstart` | 在跑 agent 面板 dispatched |
 | `subagentStop` | `subagentstop` | completed(who 取 `subagent_type`) |
 | `stop` | `stop` | 在途 gate 逐槽折叠终态 |
@@ -17,9 +18,12 @@ docs §Agent Hooks(1.7 起)。
 `preToolUse`/`postToolUse` 等其余事件暂不注册:前者与 agentdash 的派发行
 语义重复(subagentStart 原生更准),后者不含 `command` 字段无法归因 gate。
 
-**如实标注**:Cursor 载荷(shell 事件)无退出码证据(`command`/`output`/
-`duration`,无 exit 字段)——gate 折叠按铁律落 `failed (exit unknown)`,
-detail 留 stdout 末行物证,不虚报通过(与 zcode 宿主同辙,台账 W9-03 跟踪)。
+**如实标注**:Cursor shell 载荷(afterShellExecution)无绿门禁退出码证据
+(`command`/`output`/`duration`,无 exit 字段)——`passed` 侧折叠维持
+`failed (exit unknown)`(不臆造 0),detail 留 stdout 末行物证;失败侧经
+`postToolUseFailure` 配对落真证据,但官方词表未载明该载荷是否携带
+`command`(仅 error_message/failure_type/duration/is_interrupt),缺
+command 时不可归因、零写入。
 
 ## 安装
 

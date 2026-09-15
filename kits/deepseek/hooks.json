@@ -1,0 +1,45 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook --host deepseek posttooluse || true"}
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook --host deepseek pretooluse || true"}
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook --host deepseek subagentstart || true"}
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook --host deepseek subagentstop || true"}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command",
+           "command": "agentdash hook --host deepseek stop || true"}
+        ]
+      }
+    ]
+  }
+}

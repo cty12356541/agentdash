@@ -5,8 +5,10 @@
       "PostToolUse": [
         {
           "hooks": [
-            {"type": "command",
-             "command": "agentdash hook --host zcode posttooluse || true"}
+            {
+              "type": "command",
+              "command": "agentdash hook --host zcode posttooluse || true"
+            }
           ]
         }
       ],
@@ -14,16 +16,30 @@
         {
           "matcher": "Task|Agent",
           "hooks": [
-            {"type": "command",
-             "command": "agentdash hook --host zcode pretooluse || true"}
+            {
+              "type": "command",
+              "command": "agentdash hook --host zcode pretooluse || true"
+            }
           ]
         }
       ],
       "Stop": [
         {
           "hooks": [
-            {"type": "command",
-             "command": "agentdash hook --host zcode stop || true"}
+            {
+              "type": "command",
+              "command": "agentdash hook --host zcode stop || true"
+            }
+          ]
+        }
+      ],
+      "PostToolUseFailure": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "agentdash hook --host zcode posttoolusefailure || true"
+            }
           ]
         }
       ]

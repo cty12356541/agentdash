@@ -42,21 +42,21 @@ hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo ins
 | opencode | `kits/opencode` | `.opencode/plugins/agentdash.js`(Bun 插件) | 待宿主子代理事件 |
 | ZCode(公司内部) | `kits/zcode` | `.zcode/config.json` → hooks(`enabled:true`,安装器置位;会话启动加载) | 待宿主子代理事件 |
 | Cursor | `kits/cursor` | `.cursor/hooks.json`(`version:1`;项目级需信任工作区) | ✓(`subagentStart/Stop` 原生) |
+| DeepSeek Harness | `kits/deepseek` | DSH 桥 `dsh-hooks-claude-code` 挂载,`configPath` 指向 `.deepseek/agentdash-hooks.json`(进程级,启动时读取) | ✓(桥原生 `SubagentStart/Stop`) |
 
-**规划中**:DeepSeek Harness(`deepseek-kit`,W9-06 调研入台账)——DSH 经
-`dsh-hooks-claude-code` 桥复用 Claude Code 形制 `hooks.json`,词表全
-(含 `SubagentStart`),hook 二进制零改动,仅出 `--host deepseek` 变体;
-待定 DSH 项目级插件挂载的幂等写法,落地后矩阵加行。
-
-**一致性保证**:五套 kit 写同一 `<repo>/.agentdash/`(同文件、同锁、同事件词表),
+**一致性保证**:六套 kit 写同一 `<repo>/.agentdash/`(同文件、同锁、同事件词表),
 事件带 `host` 字段归因,面板在跑行显示 `▶ <who> [host]`;harness 约定单源
 `kits/shared/AGENTDASH.md`,各安装器以标记段幂等合入宿主指令文件
-(Claude Code → `CLAUDE.md`,codex / opencode / zcode / cursor → `AGENTS.md`)
-——换工具不换契约。Cursor 载荷词表(`afterShellExecution` 顶层
-`command`+`output`)由 hook 二进制归一成 bash 视图;zcode/cursor 载荷均无
-退出码证据,gate 折叠按 `failed (exit unknown)` 落盘(不虚报通过)。
+(Claude Code → `CLAUDE.md`,codex / opencode / zcode / cursor / deepseek →
+`AGENTS.md`)——换工具不换契约。Cursor 载荷词表(`afterShellExecution` 顶层
+`command`+`output`)由 hook 二进制归一成 bash 视图。**gate 终态证据按宿主
+载荷能力如实分级**:claude-code / deepseek(claude 形制回执)折叠出真实
+退出码;zcode/cursor 载荷无绿门禁的退出码证据,`passed` 侧维持
+`failed (exit unknown)` 不臆造;而 `PostToolUseFailure` 失败事件(W9-003,
+zcode/cursor 均注册)与在途 gate 配对后,失败侧升级为真证据(缺码落 1、
+中断 130),不再挂尾注。
 
-**一键巡检**:`bash scripts/verify-kits.sh` 在临时目录对五 kit 各跑一遍安装
+**一键巡检**:`bash scripts/verify-kits.sh` 在临时目录对六 kit 各跑一遍安装
 体验证(全新安装产物 → 已装钩子命令端到端事件落盘与 host 归属 → 二次安装
 幂等 → 既有内容保留:用户键/他人钩子/损坏 JSON 备份重建/粘行防护);
 `--keep` 保留现场供人工检查。jq 缺失时 JSON 类断言自动降级 SKIP,与安装器

@@ -4,6 +4,9 @@
     "afterShellExecution": [
       {"command": "agentdash hook --host cursor posttooluse || true"}
     ],
+    "postToolUseFailure": [
+      {"command": "agentdash hook --host cursor posttoolusefailure || true"}
+    ],
     "subagentStart": [
       {"command": "agentdash hook --host cursor subagentstart || true"}
     ],

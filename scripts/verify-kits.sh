@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # agentdash · kits 宿主安装体验证一键巡检
-# 对 claude-code / codex / opencode / zcode / cursor 五个 kit,在全新临时目标
-# 目录各跑一轮安装体验证:全新安装产物 → 已装钩子命令端到端事件落盘 →
-# 二次安装幂等 → 既有内容保留(用户键/他人钩子/损坏 JSON 备份重建/粘行防护)。
+# 对 claude-code / codex / opencode / zcode / cursor / deepseek 六个 kit,在
+# 全新临时目标目录各跑一轮安装体验证:全新安装产物 → 已装钩子命令端到端
+# 事件落盘 → 二次安装幂等 → 既有内容保留(用户键/他人钩子/损坏 JSON 备份
+# 重建/粘行防护)。
 #
 # 用法:scripts/verify-kits.sh [--keep]  (--keep 保留临时目录供人工检查)
 # 依赖:agentdash 在 PATH(硬前提,缺即整体 FAIL——hook 直调二进制,这正是
@@ -201,7 +202,7 @@ check_instructions "AGENTS.md(二次)" "$t/AGENTS.md"
 assert "插件二次安装仍与 kit 源一致" \
   "$(cmp -s "$t/.opencode/plugins/agentdash.js" "$root/kits/opencode/plugins/agentdash.js" && echo same || echo diff)" "same"
 
-# ---------- zcode:三钩子 config.json(enabled 置位)+ AGENTS.md ----------
+# ---------- zcode:四钩子 config.json(enabled 置位)+ AGENTS.md ----------
 section "zcode kit"
 check_exec_bit zcode
 t="$tmp/zc-main"
@@ -213,6 +214,8 @@ assert_f "config.json 生成" "$c"
 assert_jq "hooks.enabled 置位" "$c" '.hooks.enabled == true'
 assert_jq "PostToolUse 注册(--host zcode)" "$c" \
   '.hooks.events.PostToolUse | length == 1 and (.[0].hooks[0].command | test("agentdash hook --host zcode posttooluse"))'
+assert_jq "PostToolUseFailure 注册(--host zcode)" "$c" \
+  '.hooks.events.PostToolUseFailure | length == 1 and (.[0].hooks[0].command | test("agentdash hook --host zcode posttoolusefailure"))'
 assert_jq "PreToolUse matcher=Task|Agent" "$c" \
   '.hooks.events.PreToolUse | length == 1 and .[0].matcher == "Task|Agent"'
 assert_jq "Stop 注册(--host zcode)" "$c" \
@@ -224,8 +227,8 @@ else
 fi
 if run_installer zcode "$t"; then ok "二次安装退出 0"; else bad "二次安装退出非 0"; fi
 check_instructions "AGENTS.md(二次)" "$t/AGENTS.md"
-assert "config.json 自家注册不翻倍(3 处)" \
-  "$(grep -o 'agentdash hook --host zcode' "$c" | wc -l | tr -d ' ')" "3"
+assert "config.json 自家注册不翻倍(4 处)" \
+  "$(grep -o 'agentdash hook --host zcode' "$c" | wc -l | tr -d ' ')" "4"
 assert_jq "二次安装 enabled 仍置位" "$c" '.hooks.enabled == true'
 # 既有内容保留:用户键 + 用户钩子 + enabled 翻正
 t="$tmp/zc-preserve"; mkdir -p "$t/.zcode"
@@ -243,7 +246,7 @@ if run_installer zcode "$t"; then ok "corrupt 场景安装器退出 0"; else bad
 assert_f "损坏 JSON 备份 .bak-agentdash" "$t/.zcode/config.json.bak-agentdash"
 assert_jq "损坏 JSON 重建且 enabled 置位" "$t/.zcode/config.json" '.hooks.enabled == true'
 
-# ---------- cursor:四钩子 hooks.json(version 1)+ AGENTS.md ----------
+# ---------- cursor:五钩子 hooks.json(version 1)+ AGENTS.md ----------
 # 载荷形制:afterShellExecution 顶层 command+output,无 tool_name —— 探针
 # 用 Cursor 词表,验证二进制归一路径(hook.rs cursor_shell_payload)。
 section "cursor kit"
@@ -255,7 +258,7 @@ check_gitignore "$t"
 h="$t/.cursor/hooks.json"
 assert_f "hooks.json 生成" "$h"
 assert_jq "version 置 1" "$h" '.version == 1'
-for ev in afterShellExecution subagentStart subagentStop stop; do
+for ev in afterShellExecution postToolUseFailure subagentStart subagentStop stop; do
   assert_jq "$ev 注册(--host cursor)" "$h" \
     ".hooks.$ev | length == 1 and (.[0].command | test(\"agentdash hook --host cursor\"))"
 done
@@ -268,8 +271,8 @@ else
 fi
 if run_installer cursor "$t"; then ok "二次安装退出 0"; else bad "二次安装退出非 0"; fi
 check_instructions "AGENTS.md(二次)" "$t/AGENTS.md"
-assert "hooks.json 自家注册不翻倍(4 处)" \
-  "$(grep -o 'agentdash hook --host cursor' "$h" | wc -l | tr -d ' ')" "4"
+assert "hooks.json 自家注册不翻倍(5 处)" \
+  "$(grep -o 'agentdash hook --host cursor' "$h" | wc -l | tr -d ' ')" "5"
 assert_jq "二次安装 version 仍为 1" "$h" '.version == 1'
 # 既有内容保留:用户键 + 用户事件块不吞,version 不回改
 t="$tmp/cu-preserve"; mkdir -p "$t/.cursor"
@@ -287,10 +290,50 @@ if run_installer cursor "$t"; then ok "corrupt 场景安装器退出 0"; else ba
 assert_f "损坏 JSON 备份 .bak-agentdash" "$t/.cursor/hooks.json.bak-agentdash"
 assert_jq "损坏 JSON 重建且 version 置 1" "$t/.cursor/hooks.json" '.version == 1'
 
+# ---------- deepseek:DSH 桥接形制(Claude 形制五钩子)+ AGENTS.md ----------
+# 桥消费 Claude Code 形制 hooks.json,命令带 --host deepseek;探针走
+# claude 词表载荷,验证桥将消费的同一文件形态。
+section "deepseek kit"
+check_exec_bit deepseek
+t="$tmp/ds-main"
+if run_installer deepseek "$t"; then ok "全新目录安装器退出 0"; else bad "全新目录安装器退出非 0"; fi
+check_instructions "AGENTS.md" "$t/AGENTS.md"
+check_gitignore "$t"
+h="$t/.deepseek/agentdash-hooks.json"
+assert_f "agentdash-hooks.json 生成" "$h"
+for ev in PostToolUse PreToolUse SubagentStart SubagentStop Stop; do
+  assert_jq "$ev 注册(--host deepseek)" "$h" \
+    ".hooks.$ev | length == 1 and (.[0].hooks[0].command | test(\"agentdash hook --host deepseek\"))"
+done
+assert_jq "PreToolUse matcher=Task|Agent" "$h" \
+  '.hooks.PreToolUse[0].matcher == "Task|Agent"'
+if [ "$HAVE_JQ" = yes ]; then
+  probe_event deepseek "$t" "$(tooluse_payload "$t")" "$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$h")"
+else
+  na "[deepseek] 已装命令端到端事件落盘(无 jq)"
+fi
+if run_installer deepseek "$t"; then ok "二次安装退出 0"; else bad "二次安装退出非 0"; fi
+check_instructions "AGENTS.md(二次)" "$t/AGENTS.md"
+assert "hooks.json 自家注册不翻倍(5 处)" \
+  "$(grep -o 'agentdash hook --host deepseek' "$h" | wc -l | tr -d ' ')" "5"
+# 他人内容在场:备份 + 不吞
+t="$tmp/ds-foreign"; mkdir -p "$t/.deepseek"
+printf '%s\n' '{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"echo user-dsh"}]}]}}' \
+  > "$t/.deepseek/agentdash-hooks.json"
+if run_installer deepseek "$t"; then ok "foreign 场景安装器退出 0"; else bad "foreign 场景安装器退出非 0"; fi
+assert "他人 hooks 文件原样未动" \
+  "$(cmp -s "$t/.deepseek/agentdash-hooks.json" "$t/.deepseek/agentdash-hooks.json.bak-agentdash" && echo same || echo diff)" "same"
+assert_f "他人内容备份 .bak-agentdash" "$t/.deepseek/agentdash-hooks.json.bak-agentdash"
+# 损坏 JSON:grep 形制安装器无从判定归属,按他人内容保守处理(备份 + 不动)
+t="$tmp/ds-corrupt"; mkdir -p "$t/.deepseek"; printf '{broken' > "$t/.deepseek/agentdash-hooks.json"
+if run_installer deepseek "$t"; then ok "corrupt 场景安装器退出 0"; else bad "corrupt 场景安装器退出非 0"; fi
+assert "损坏文件原样未动(保守策略)" \
+  "$(cmp -s "$t/.deepseek/agentdash-hooks.json" "$t/.deepseek/agentdash-hooks.json.bak-agentdash" && echo same || echo diff)" "same"
+
 section "汇总"
 echo "PASS $pass / FAIL $fail / SKIP $skip(临时目录: $tmp)"
 if [ "$fail" -gt 0 ]; then
-  echo "[verify-kits] 存在 FAIL,五宿主安装体验证未过"
+  echo "[verify-kits] 存在 FAIL,六宿主安装体验证未过"
   exit 1
 fi
-echo "[verify-kits] 五宿主 kit 安装体验证全部通过"
+echo "[verify-kits] 六宿主 kit 安装体验证全部通过"

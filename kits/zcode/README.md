@@ -7,20 +7,22 @@
 ## 机制(ZCode 官方 configuration-guide / diagnosing-hooks,2026-09)
 
 工作台级钩子:`<repo>/.zcode/config.json` → `hooks`(配置文件钩子默认禁用,
-安装器已置 `enabled: true`;插件钩子则自动启用 runner)。七事件中映射三个:
+安装器已置 `enabled: true`;插件钩子则自动启用 runner)。七事件中映射四个:
 
 | zcode 事件 | agentdash 事件 | 说明 |
 |---|---|---|
 | PostToolUse(全工具) | `posttooluse` | bash 命中验证门 → gate;其余 → tool 行 |
+| PostToolUseFailure | `posttoolusefailure` | 失败证据配对:与在途 gate 暂存槽顶替,失败侧落真证据(W9-003) |
 | PreToolUse(matcher `Task\|Agent`) | `pretooluse` | agent dispatched(Task↔Agent 别名互通) |
 | Stop | `stop` | 在途 gate 折叠 passed/failed |
 
 所有命令带 `--host zcode` 归属,混用时面板在跑行显示 `[zcode]`。
 
 **如实标注**:zcode 无 SubagentStart/SubagentStop 事件,在跑 agent 面板
-(dispatched/completed)对本宿主不可见;`PostToolUseFailure` 暂不映射
-(failed 语义已由 turn 末折叠承载)。工作台钩子于**会话启动加载**,安装后
-已运行的会话需重开生效。
+(dispatched/completed)对本宿主不可见;PostToolUse 载荷无绿门禁退出码
+证据,`passed` 侧折叠维持 `failed (exit unknown)`(不臆造 0),失败侧经
+Failure 配对落真证据。工作台钩子于**会话启动加载**,安装后已运行的会话
+需重开生效(Failure 配对路径同理)。
 
 ## 安装
 

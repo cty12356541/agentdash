@@ -69,6 +69,8 @@ merge_with_jq() {
     | def ours: (.command // "") | test("agentdash hook");
     .hooks.afterShellExecution = (((.hooks.afterShellExecution // []) | map(select((.command // "") | test("agentdash hook") | not))))
       + [{"command": "agentdash hook --host cursor posttooluse || true"}]
+    | .hooks.postToolUseFailure = (((.hooks.postToolUseFailure // []) | map(select((.command // "") | test("agentdash hook") | not))))
+      + [{"command": "agentdash hook --host cursor posttoolusefailure || true"}]
     | .hooks.subagentStart = (((.hooks.subagentStart // []) | map(select((.command // "") | test("agentdash hook") | not))))
       + [{"command": "agentdash hook --host cursor subagentstart || true"}]
     | .hooks.subagentStop = (((.hooks.subagentStop // []) | map(select((.command // "") | test("agentdash hook") | not))))

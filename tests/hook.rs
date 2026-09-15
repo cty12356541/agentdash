@@ -1285,9 +1285,10 @@ fn cursor_hooks_template_registers_four_events() {
             .expect("hooks.template.json 合法 JSON");
     assert_eq!(manifest["version"], 1, "Cursor hooks schema version 1");
     let hooks = manifest["hooks"].as_object().expect("hooks 对象");
-    assert_eq!(hooks.len(), 4, "恰注册四事件");
+    assert_eq!(hooks.len(), 5, "恰注册五事件");
     for event in [
         "afterShellExecution",
+        "postToolUseFailure",
         "subagentStart",
         "subagentStop",
         "stop",
@@ -1319,4 +1320,238 @@ fn cursor_hooks_template_registers_four_events() {
             .contains(" posttooluse"),
         "afterShellExecution 应映射 posttooluse"
     );
+    // postToolUseFailure 映射 agentdash posttoolusefailure(失败证据配对,W9-003)
+    assert!(
+        hooks["postToolUseFailure"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains(" posttoolusefailure"),
+        "postToolUseFailure 应映射 posttoolusefailure"
+    );
+}
+
+#[test]
+fn deepseek_hooks_registers_claude_form_five_events() {
+    // DSH 桥消费 Claude Code 形制;五事件含 SubagentStart(桥原生支持),
+    // 命令全部 --host deepseek 归属
+    let path = Path::new(MANIFEST).join("kits/deepseek/hooks.json");
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("hooks.json readable"))
+            .expect("hooks.json 合法 JSON");
+    let hooks = manifest["hooks"].as_object().expect("hooks 对象");
+    assert_eq!(hooks.len(), 5, "恰注册五事件");
+    for event in [
+        "PostToolUse",
+        "PreToolUse",
+        "SubagentStart",
+        "SubagentStop",
+        "Stop",
+    ] {
+        let blocks = hooks[event]
+            .as_array()
+            .unwrap_or_else(|| panic!("{event} 无注册块"));
+        assert_eq!(blocks.len(), 1, "{event} 恰一块");
+        let hook_entry = &blocks[0]["hooks"][0];
+        let cmd = hook_entry["command"].as_str().expect("command");
+        assert!(
+            cmd.contains("agentdash hook --host deepseek"),
+            "{event} 非二进制直调或缺宿主归属: {cmd}"
+        );
+        assert!(
+            cmd.ends_with("|| true"),
+            "{event} 缺 || true 静默保险: {cmd}"
+        );
+    }
+    assert_eq!(
+        hooks["PreToolUse"][0]["matcher"].as_str(),
+        Some("Task|Agent"),
+        "PreToolUse 应限定派发工具"
+    );
+}
+
+// ------------------------------------------------------------ PostToolUseFailure 失败证据配对(W9-003)
+
+#[test]
+fn failure_event_supersedes_pending_gate_with_real_exit() {
+    // zcode 形制:posttooluse 先落 exit=null 暂存,failure 事件顶替为真证据
+    // (exit=1),Stop 折叠 failed 且不再带 `(exit unknown)` 尾注
+    let t = TempDir::new("failpair");
+    let payload = json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "go test ./..."},
+        "tool_response": {"stdout": "ok\n"},
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &payload, t.path()),
+        "posttooluse 回执",
+    );
+    let failure = json!({
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "go test ./..."},
+        "tool_response": {"stderr": "FAIL ./pkg\nexit status 2\n", "status": 2},
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "zcode", "posttoolusefailure"],
+            &in_cwd(&failure, t.path()).to_string(),
+            t.path(),
+        ),
+        "failure 回执",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "zcode", "stop"],
+            &in_cwd(&stop_payload(), t.path()).to_string(),
+            t.path(),
+        ),
+        "stop(折叠行 host 戳取自 stop 调用)",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2, "running + 折叠,顶替不加行");
+    assert_eq!(evs[1]["state"], "failed");
+    assert_eq!(evs[1]["exit"], 2, "载荷显式退出码优先");
+    assert_eq!(
+        evs[1]["detail"], "exit status 2",
+        "无 (exit unknown) 尾注——真证据在案"
+    );
+    assert_eq!(evs[1]["host"], "zcode");
+}
+
+#[test]
+fn failure_event_without_prior_posttooluse_emits_running_pair() {
+    // 宿主失败路径未先发 posttooluse:failure 臂补 running+暂存原子对,
+    // Stop 折叠仍有源;缺退出码字段落 1(失败事件在场即非零证据)
+    let t = TempDir::new("failsolo");
+    let failure = json!({
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo clippy -- -D warnings"},
+        "error_message": "one or more warnings produced",
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "zcode", "posttoolusefailure"],
+            &failure.to_string(),
+            t.path(),
+        ),
+        "failure 单发",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[0]["state"], "running");
+    assert_eq!(evs[1]["state"], "failed");
+    assert_eq!(evs[1]["exit"], 1, "缺码落 1 不落 0/unknown");
+    assert_eq!(evs[1]["detail"], "one or more warnings produced");
+}
+
+#[test]
+fn failure_event_interrupted_maps_130() {
+    let t = TempDir::new("failint");
+    let failure = json!({
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "npm test"},
+        "is_interrupt": true,
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "posttoolusefailure"],
+            &in_cwd(&failure, t.path()).to_string(),
+            t.path(),
+        ),
+        "中断失败",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(
+        evs[1]["exit"], 130,
+        "is_interrupt 映射 130(承 interrupted 约定)"
+    );
+}
+
+#[test]
+fn failure_event_cursor_vocab_attributes_via_top_level_command() {
+    let t = TempDir::new("failcursor");
+    let failure = json!({
+        "hook_event_name": "postToolUseFailure",
+        "command": "cargo test",
+        "error_message": "1 test failed",
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "cursor", "posttoolusefailure"],
+            &failure.to_string(),
+            t.path(),
+        ),
+        "cursor failure",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "cursor", "stop"],
+            &in_cwd(&stop_payload(), t.path()).to_string(),
+            t.path(),
+        ),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[0]["gate"], "cargo-test");
+    assert_eq!(evs[1]["state"], "failed");
+    assert_eq!(evs[1]["exit"], 1);
+    assert_eq!(evs[1]["host"], "cursor");
+}
+
+#[test]
+fn failure_event_without_command_writes_nothing() {
+    // cursor error 载荷无 command 字段(官方词表仅 error_message/failure_type/
+    // duration/is_interrupt):不可归因,零写入——宁缺毋造
+    let t = TempDir::new("failnocmd");
+    let failure = json!({
+        "hook_event_name": "postToolUseFailure",
+        "error_message": "boom",
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "cursor", "posttoolusefailure"],
+            &failure.to_string(),
+            t.path(),
+        ),
+        "无 command 失败载荷",
+    );
+    assert!(!events_path(t.path()).exists(), "不可归因不得落盘");
+}
+
+#[test]
+fn failure_event_non_gate_command_writes_nothing() {
+    let t = TempDir::new("failnongate");
+    let failure = json!({
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo boom"},
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "posttoolusefailure"],
+            &in_cwd(&failure, t.path()).to_string(),
+            t.path(),
+        ),
+        "非验证门失败",
+    );
+    assert!(!events_path(t.path()).exists(), "非验证门零写入");
 }

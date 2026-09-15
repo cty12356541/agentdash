@@ -67,6 +67,8 @@ merge_with_jq() {
     | def ours: (.hooks // []) | map(.command // "") | any(test("agentdash hook"));
     .hooks.events.PostToolUse = (((.hooks.events.PostToolUse // []) | map(.hooks |= map(select((.command // "") | test("agentdash hook") | not)))) | map(select(.hooks | length > 0)))
       + [{"hooks": [{"type": "command", "command": "agentdash hook --host zcode posttooluse || true"}]}]
+    | .hooks.events.PostToolUseFailure = (((.hooks.events.PostToolUseFailure // []) | map(.hooks |= map(select((.command // "") | test("agentdash hook") | not)))) | map(select(.hooks | length > 0)))
+      + [{"hooks": [{"type": "command", "command": "agentdash hook --host zcode posttoolusefailure || true"}]}]
     | .hooks.events.PreToolUse = (((.hooks.events.PreToolUse // []) | map(.hooks |= map(select((.command // "") | test("agentdash hook") | not)))) | map(select(.hooks | length > 0)))
       + [{"matcher": "Task|Agent",
           "hooks": [{"type": "command", "command": "agentdash hook --host zcode pretooluse || true"}]}]

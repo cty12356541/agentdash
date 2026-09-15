@@ -7,6 +7,8 @@
 //!   否则 `tool` phase=end + exit + summary。载荷词表两家:Claude/ZCode 系
 //!   `tool_name`+`tool_input`/`tool_response`;Cursor 系 `afterShellExecution`
 //!   顶层 `command`+`output`(W9,归一成 bash 视图)
+//! - posttoolusefailure(zcode/cursor,W9-003):工具失败事件与在途 gate 配对,
+//!   暂存槽顶替为真失败证据(缺码落 1、中断 130);无在途槽补 running+暂存对
 //! - stop:把在途 gate 逐槽折叠为各自 passed/failed(exit + detail 摘要行),消费后删除暂存;
 //!   退出码不可知(暂存 exit 为 `null`)记 `failed` + detail 尾注 `(exit unknown)`——
 //!   不虚报通过(W4-001 D1)
@@ -79,6 +81,7 @@ pub fn run(rest: &[String]) -> ExitCode {
     };
     match resolve_event(event.as_deref(), obj).as_deref() {
         Some("posttooluse") => on_post_tool_use(obj, host),
+        Some("posttoolusefailure") => on_post_tool_use_failure(obj, host),
         Some("pretooluse") => on_pre_tool_use(obj, host),
         Some("subagentstart") => on_agent_dispatched(obj, host),
         Some("stop") => on_stop(obj, host),
@@ -218,6 +221,95 @@ fn bash_receipt(dir: &Path, command: &str, response: Option<&Value>, host: Optio
         return;
     }
     append_tool_event(dir, "bash", response, command, host);
+}
+
+/// PostToolUseFailure(zcode/cursor 宿主,W9-003):工具失败事件与在途 gate
+/// 配对,把失败从 `exit unknown` 升级为真证据。命令可归因出验证门时,顶替
+/// 该 gate 的既有暂存槽(位置不变);无在途槽(宿主失败路径未先发
+/// posttooluse)则补 running+暂存原子对,保证 Stop 折叠有源。命令不可得
+/// (如 cursor error 载荷无 command 字段)或非验证门:零写入——宁缺毋造。
+fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
+    let Some((_, gate)) = failure_command(payload).and_then(|c| gate_name(&c).map(|g| (c, g)))
+    else {
+        return;
+    };
+    let dir = events_dir(payload);
+    let response = payload.get("tool_response");
+    // 失败证据:显式退出码优先;中断 130;失败事件在场即非零证据,缺码落 1
+    // (承 exit_code 的 is_error→1 约定,绝不落 0)
+    let exit = exit_code(response).unwrap_or_else(|| {
+        if payload.get("is_interrupt").and_then(Value::as_bool) == Some(true) {
+            130
+        } else {
+            1
+        }
+    });
+    let mut detail = summary_line(response);
+    if detail.is_empty() {
+        if let Some(msg) = payload.get("error_message").and_then(Value::as_str) {
+            detail = clip(msg);
+        }
+    }
+    with_lock(&dir, || {
+        if supersede_pending_slot(&dir, gate, exit, &detail) {
+            return; // 既有槽已换上新证据,running 行在案
+        }
+        append_line(
+            &dir,
+            &stamp(
+                json!({ "ts": ts_now(), "kind": "gate", "gate": gate, "state": "running" }),
+                host,
+            ),
+        );
+        append_pending_slot(
+            &dir,
+            &json!({ "gate": gate, "exit": exit, "detail": detail }),
+        );
+    });
+}
+
+/// 失败载荷的命令归因(W9-003):claude/zcode 词表走 `tool_input.command`,
+/// cursor 词表走顶层 `command`。皆无或空白 → 不可归因。
+fn failure_command(payload: &Map<String, Value>) -> Option<String> {
+    for key in ["tool_input", "command"] {
+        let value = match key {
+            "tool_input" => payload
+                .get("tool_input")
+                .and_then(|i| i.get("command"))
+                .and_then(Value::as_str),
+            _ => payload.get("command").and_then(Value::as_str),
+        };
+        if let Some(c) = value.filter(|c| !c.trim().is_empty()) {
+            return Some(c.to_owned());
+        }
+    }
+    None
+}
+
+/// 顶替在途暂存槽(W9-003):同 gate 的槽换上新证据(位置不变)并写回,
+/// 返回 true;无该 gate 的槽返回 false(调用方补原子对)。锁内调用。
+fn supersede_pending_slot(dir: &Path, gate: &str, exit: i64, detail: &str) -> bool {
+    let path = dir.join(PENDING_NAME);
+    let existing = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let mut slots = pending_slots(existing);
+    let mut hit = false;
+    for slot in slots.iter_mut() {
+        if slot.get("gate").and_then(Value::as_str) == Some(gate) {
+            slot["exit"] = json!(exit);
+            slot["detail"] = json!(clip(detail));
+            hit = true;
+        }
+    }
+    if !hit {
+        return false;
+    }
+    let Ok(mut file) = File::create(&path) else {
+        return false; // 写不回:按无顶替处理,调用方补原子对(旧槽随读随弃)
+    };
+    let _ = file.write_all(serde_json::to_string(&slots).unwrap_or_default().as_bytes());
+    true
 }
 
 /// PreToolUse:子代理派发工具(`Task`/`Agent` 新旧名)→ `agent` dispatched 行,

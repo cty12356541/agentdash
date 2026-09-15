@@ -10,6 +10,14 @@
           ]
         }
       ],
+      "PostToolUseFailure": [
+        {
+          "hooks": [
+            {"type": "command",
+             "command": "agentdash hook --host zcode posttoolusefailure || true"}
+          ]
+        }
+      ],
       "PreToolUse": [
         {
           "matcher": "Task|Agent",
