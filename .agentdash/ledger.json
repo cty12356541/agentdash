@@ -51,11 +51,13 @@
     },
     "03": {
       "label": "渲染截断收敛",
-      "state": "pending"
+      "state": "done",
+      "note": "W4-003:panel 私有副本并入公共版"
     },
     "04": {
       "label": "子进程执行器合一",
-      "state": "pending"
+      "state": "done",
+      "note": "W4-004:sources::run_capture 收口,测试挂载点随迁"
     },
     "05": {
       "label": "解析器 property 测试(proptest dev-dep)",
