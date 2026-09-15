@@ -434,7 +434,8 @@ fn append_pending_slot(dir: &Path, slot: &Value) {
 /// `&&`/`;` 分隔符,不得跨任意中间 token——`npm run test` 不匹配 npm-test、
 /// `go build ./... && test` 不匹配 go-test,而 `cargo build && cargo test`
 /// (后段连续)与 `cd x && cargo clippy -- -D warnings` 匹配;按序首中即返。
-fn gate_name(command: &str) -> Option<&'static str> {
+/// `pub(crate)` 供 W4-005 性质测试(词边界不变式需直连纯函数)。
+pub(crate) fn gate_name(command: &str) -> Option<&'static str> {
     const PATTERNS: [&[&str]; 6] = [
         &["cargo", "test"],
         &["cargo", "clippy"],

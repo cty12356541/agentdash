@@ -650,7 +650,8 @@ fn format_ts(local_secs: i64, offset_secs: i64) -> String {
 }
 
 /// 天序数(1970-01-01 = 0)→ (年, 月, 日)。Hinnant 算法,常规日期域内无溢出。
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
+/// `pub(crate)` 供 W4-005 性质测试(与 [`days_from_civil`] 互逆)。
+pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097; // [0, 146096]
@@ -665,7 +666,8 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 
 #[cfg(windows)]
 /// (年, 月, 日) → 天序数。仅 Windows 偏移差分(GetLocalTime/GetSystemTime)使用。
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+/// `pub(crate)` 供 W4-005 性质测试(与 [`civil_from_days`] 互逆)。
+pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
