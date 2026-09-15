@@ -1,46 +1,28 @@
 {
   "$schema": "agentdash.tasklog.v1",
-  "wave": "W3",
-  "title": "W3 收口:验证清偿 + 模型扩展",
+  "wave": "W4",
+  "title": "W4 评估清偿:保守化 + 债收敛 + 分发自动化",
   "profile": "sdd",
-  "note": "速度线如实注:纯契约场景任务 since 同源(恒台账 mtime)跨度为 0 不显示,W3-006 测试已钉;本仓 .agentdash/events.jsonl 有 ≥2 条不同 ts 真实事件,render panel 速度行点亮(见 docs/superpowers/reports/2026-09-14-w3-closeout-frames/w3-close-panel.txt)。",
+  "note": "W4 开工换血(承 8942f42 惯例)。速度行注:仅会话期 events.jsonl 在场且 ≥2 条不同 ts 才点亮,新 clone 无事件产物属预期降级,不视为损坏。",
   "lanes": [
-    {"name": "批一-信息接线", "tasks": ["01", "02"]},
-    {"name": "批二-交互跃迁", "tasks": ["03", "04", "05"]},
-    {"name": "批三-边界扩展", "tasks": ["06", "07", "08"]},
-    {"name": "推广-验证", "tasks": ["09", "10", "11", "12"]},
-    {"name": "W3-清偿扩展", "tasks": ["13", "14", "15"]}
+    {"name": "批一-行为修正", "tasks": ["01", "02"]},
+    {"name": "批二-债清偿", "tasks": ["03", "04"]},
+    {"name": "批三-加固", "tasks": ["05"]},
+    {"name": "批四-分发", "tasks": ["06"]},
+    {"name": "收口", "tasks": ["07"]}
   ],
   "tasks": {
-    "01": {"label": "agents+gates 上板", "state": "done"},
-    "02": {"label": "fix-round/⚑/warnings/速度线", "state": "done"},
-    "03": {"label": "任务详情面板", "state": "done"},
-    "04": {"label": "多波次滚动+help", "state": "done"},
-    "05": {"label": "过滤与车道折叠", "state": "done"},
-    "06": {"label": "台账写回 d/b/m", "state": "done"},
-    "07": {"label": "gh 远程源(缓存120s)", "state": "done"},
-    "08": {"label": "债收尾:轮转/多槽位/收敛", "state": "done"},
-    "09": {"label": "本机级安装+fixture验证", "state": "done"},
-    "10": {"label": "插件市场全生态链路", "state": "done"},
-    "11": {"label": "双场景帧验证+对账报告", "state": "done"},
-    "12": {"label": "验证发现修复批 F1/F3/F6", "state": "done"},
-    "13": {"label": "多里程碑模型+速度线", "state": "done", "note": "W3-004/006:D1 分组,事件窗点亮速度行"},
-    "14": {"label": "面板屏障行", "state": "done", "note": "W3-002:after→unlocks 紧凑行"},
-    "15": {"label": "hook dispatched 入口", "state": "done", "note": "W3-003:PreToolUse matcher Task|Agent"}
+    "01": {"label": "gate 折叠保守化(exit 不可知→failed)", "state": "active"},
+    "02": {"label": "详情事件尾+过滤一致性", "state": "pending"},
+    "03": {"label": "渲染截断收敛", "state": "pending"},
+    "04": {"label": "子进程执行器合一", "state": "pending"},
+    "05": {"label": "解析器 property 测试(proptest dev-dep)", "state": "pending"},
+    "06": {"label": "Release workflow(tag 触发三平台)", "state": "pending"},
+    "07": {"label": "0.3.0 收口+帧证据+tag", "state": "pending"}
   },
   "barriers": [
-    {"id": "B1", "after": ["12"], "unlocks": ["13", "14", "15"]}
-  ],
-  "milestones": [
-    {
-      "id": "M1",
-      "title": "W2 交互跃迁",
-      "tasks": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
-    },
-    {
-      "id": "M2",
-      "title": "W3 验证清偿与模型扩展",
-      "tasks": ["13", "14", "15"]
-    }
+    {"id": "B1", "after": ["02"], "unlocks": ["03", "04"]},
+    {"id": "B2", "after": ["04"], "unlocks": ["05", "06"]},
+    {"id": "B3", "after": ["05", "06"], "unlocks": ["07"]}
   ]
 }
