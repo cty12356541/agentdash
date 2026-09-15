@@ -12,11 +12,9 @@
 //! Option<String>`),真 gh 不进单测;[`fetch`] 恒用真实执行器。
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,8 +26,6 @@ const CACHE_NAME: &str = "gh.json";
 const CACHE_TTL: Duration = Duration::from_mins(2);
 /// 单条 gh 命令的超时上限;超时按"不可用"处理,不拖住仪表盘。
 const GH_TIMEOUT: Duration = Duration::from_secs(5);
-/// 子进程退出状态的轮询间隔。
-const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// 一次远程探测的全部观测结果。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,45 +150,8 @@ fn parse_checks(value: serde_json::Value) -> Vec<(String, String)> {
 }
 
 /// 在 `repo` 目录运行 `gh <args>`:退出码为 0 时返回 UTF-8 解码后的 stdout,
-/// 否则(spawn 失败即无 gh、超时、非零退出)返回 `None`。
+/// 否则(spawn 失败即无 gh、超时、非零退出)返回 `None`。执行器收口
+/// `super::run_capture`(W4-004,承 git.rs 同形)。
 fn run_gh(repo: &Path, args: &[&str]) -> Option<String> {
-    let mut child = Command::new("gh")
-        .args(args)
-        .current_dir(repo)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    // 独立线程读 stdout:输出超过管道缓冲时进程也能退出,主线程不在
-    // try_wait 轮询里假死到超时(承 git.rs 同形)。
-    let mut stdout = child.stdout.take();
-    let reader = thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(handle) = stdout.as_mut() {
-            let _ = handle.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let bytes = reader.join().unwrap_or_default();
-                if !status.success() {
-                    return None;
-                }
-                return Some(String::from_utf8_lossy(&bytes).into_owned());
-            }
-            Ok(None) => {
-                if started.elapsed() >= GH_TIMEOUT {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                thread::sleep(POLL_INTERVAL);
-            }
-            Err(_) => return None,
-        }
-    }
+    super::run_capture(repo, "gh", args, GH_TIMEOUT)
 }

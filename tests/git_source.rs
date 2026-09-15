@@ -3,8 +3,12 @@
 //! agentdash 当前是纯二进制 crate(无 lib 目标),集成测试用 `#[path]`
 //! 直接挂载 `src/sources/git.rs`,以进程内方式验证公开接口。
 
-#[path = "../src/sources/git.rs"]
-mod git;
+// W4-004:git.rs 经 super::run_capture 消费公共执行器,挂载点收口 sources/mod.rs
+#[path = "../src/sources/mod.rs"]
+#[allow(dead_code)]
+mod sources;
+
+use sources::git;
 
 use std::fs;
 use std::path::{Path, PathBuf};

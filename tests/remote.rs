@@ -4,10 +4,13 @@
 //! 探测命令经 [`remote::fetch_with`] 注入,真 gh 不进单测。缓存语义
 //! (命中 / 过期 / 损坏跳过 / gh 缺失)逐一路径覆盖。
 
-#[path = "../src/sources/remote.rs"]
-// 单测只走 fetch_with 注入面:fetch/run_gh 及其超时常量在本挂载下无调用方
+// W4-004:remote.rs 经 super::run_capture 消费公共执行器,挂载点收口
+// sources/mod.rs;单测只走 fetch_with 注入面:git 侧 pub 项在本挂载下无调用方
+#[path = "../src/sources/mod.rs"]
 #[allow(dead_code)]
-mod remote;
+mod sources;
+
+use sources::remote;
 
 use std::cell::RefCell;
 use std::fs;

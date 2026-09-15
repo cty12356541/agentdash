@@ -154,7 +154,7 @@ pub fn display_width(text: &str) -> usize {
 }
 
 /// 按显示宽截断到 `budget` 列内的最长前缀(panel 与详情栏同一算法;
-/// W2-003 起上收为渲染层公共助手,批三双轨收敛时 panel 私有副本并入)。
+/// W4-003:panel 私有副本已并入本公共版,双轨收敛完成)。
 pub(crate) fn truncate_width(text: &str, budget: usize) -> String {
     for cut in (0..=text.chars().count()).rev() {
         let prefix: String = text.chars().take(cut).collect();

@@ -4,16 +4,11 @@
 //! 约定:目录无 `.git`、git 不可用、命令非零退出或单命令超时,一律降级为
 //! 空值(`GitFacts::absent()` / 字段空),绝不 panic、绝不阻塞渲染。
 
-use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// 单条 git 命令的超时上限;超时按"不可用"处理,不拖住仪表盘。
 const GIT_TIMEOUT: Duration = Duration::from_secs(3);
-/// 子进程退出状态的轮询间隔。
-const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// 一次快照的全部观测结果;`present == false` 时其余字段均为空值。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -103,45 +98,8 @@ fn rev_count(repo: &Path, range: &str) -> u32 {
 }
 
 /// 在 `repo` 目录运行 `git <args>`:退出码为 0 时返回 UTF-8 解码后的 stdout,
-/// 否则(spawn 失败即无 git、超时、非零退出)返回 `None`。
+/// 否则(spawn 失败即无 git、超时、非零退出)返回 `None`。执行器收口
+/// `super::run_capture`(W4-004)。
 fn run_git(repo: &Path, args: &[&str]) -> Option<String> {
-    let mut child = Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    // 独立线程读 stdout:git 输出超过管道缓冲(如海量脏文件)时进程也能退出,
-    // 主线程不会在 try_wait 轮询里假死到超时。
-    let mut stdout = child.stdout.take();
-    let reader = thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(handle) = stdout.as_mut() {
-            let _ = handle.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let bytes = reader.join().unwrap_or_default();
-                if !status.success() {
-                    return None;
-                }
-                return Some(String::from_utf8_lossy(&bytes).into_owned());
-            }
-            Ok(None) => {
-                if started.elapsed() >= GIT_TIMEOUT {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                thread::sleep(POLL_INTERVAL);
-            }
-            Err(_) => return None,
-        }
-    }
+    super::run_capture(repo, "git", args, GIT_TIMEOUT)
 }

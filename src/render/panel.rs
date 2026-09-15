@@ -5,7 +5,8 @@ use std::fmt::Write as _;
 
 use super::{
     C_ACTIVE, C_BOLD, C_DONE, C_END, C_PENDING, C_STALLED, C_WARN, Visual, active_milestone,
-    clamp_width, display_width, is_lane_marker, milestone_state, round_half_even, visual,
+    clamp_width, display_width, elide, is_lane_marker, milestone_state, round_half_even,
+    truncate_width, visual,
 };
 use crate::contract::TaskState;
 use crate::model::{
@@ -308,30 +309,6 @@ fn check_line(name: &str, state: &str, width: usize) -> String {
     };
     let body = format!("  {mark} {name} {state}");
     format!("{color}{}{C_END}", elide(&body, width))
-}
-
-/// 按显示宽截断到 `budget` 列内的最长前缀(与里程碑标题同一算法)。
-fn truncate_width(text: &str, budget: usize) -> String {
-    for cut in (0..=text.chars().count()).rev() {
-        let prefix: String = text.chars().take(cut).collect();
-        if display_width(&prefix) <= budget {
-            return prefix;
-        }
-    }
-    String::new()
-}
-
-/// 截断并在发生截断时以 `…`(1 列)收尾;总宽仍不超 `budget`。
-fn elide(text: &str, budget: usize) -> String {
-    let cut = truncate_width(text, budget);
-    if cut.chars().count() == text.chars().count() {
-        return cut;
-    }
-    let mut out = truncate_width(text, budget.saturating_sub(1));
-    if display_width(&out) < budget {
-        out.push('…');
-    }
-    out
 }
 
 /// 里程碑行:`  <id> <标题按显示宽截断> <▓░ x/n> <state>`——窄侧栏下不折行错位。
