@@ -1,110 +1,21 @@
 {
   "$schema": "agentdash.tasklog.v1",
-  "wave": "W4",
-  "title": "W4 评估清偿:保守化 + 债收敛 + 分发自动化",
+  "wave": "W5",
+  "title": "W5 信任锚落地:done_at 物证交叉核对",
   "profile": "sdd",
-  "note": "W4 开工换血(承 8942f42 惯例)。速度行注:仅会话期 events.jsonl 在场且 ≥2 条不同 ts 才点亮,新 clone 无事件产物属预期降级,不视为损坏。",
+  "note": "W5 开工换血。速度行注:仅会话期 events.jsonl 在场且 ≥2 条不同 ts 才点亮,新 clone 属预期降级。物证 ? 注:正常来源应为写回 d 键自动盖章;dogfood 回填样例会在台账注明。",
   "lanes": [
-    {
-      "name": "批一-行为修正",
-      "tasks": [
-        "01",
-        "02"
-      ]
-    },
-    {
-      "name": "批二-债清偿",
-      "tasks": [
-        "03",
-        "04"
-      ]
-    },
-    {
-      "name": "批三-加固",
-      "tasks": [
-        "05"
-      ]
-    },
-    {
-      "name": "批四-分发",
-      "tasks": [
-        "06"
-      ]
-    },
-    {
-      "name": "收口",
-      "tasks": [
-        "07"
-      ]
-    }
+    {"name": "批一-快速清偿", "tasks": ["01", "02"]},
+    {"name": "批二-信任锚", "tasks": ["03"]},
+    {"name": "收口", "tasks": ["04"]}
   ],
   "tasks": {
-    "01": {
-      "label": "gate 折叠保守化(exit 不可知→failed)",
-      "state": "done",
-      "note": "W4-001:exit 不可知→failed+尾注,改判清单入 commit"
-    },
-    "02": {
-      "label": "详情事件尾+过滤一致性",
-      "state": "done",
-      "note": "W4-002:event_tail 直投影,占位行退役"
-    },
-    "03": {
-      "label": "渲染截断收敛",
-      "state": "done",
-      "note": "W4-003:panel 私有副本并入公共版"
-    },
-    "04": {
-      "label": "子进程执行器合一",
-      "state": "done",
-      "note": "W4-004:sources::run_capture 收口,测试挂载点随迁"
-    },
-    "05": {
-      "label": "解析器 property 测试(proptest dev-dep)",
-      "state": "done",
-      "note": "W4-005:6 性质×256 案例,Windows 民法互逆随 CI"
-    },
-    "06": {
-      "label": "Release workflow(tag 触发三平台)",
-      "state": "done",
-      "note": "W4-006:tag 触发四 triple,文档-资产口径对齐 msvc"
-    },
-    "07": {
-      "label": "0.3.0 收口+帧证据+tag",
-      "state": "done",
-      "note": "0.3.0 三处版本 + 帧证据入册 + tag v0.3.0"
-    }
+    "01": {"label": "MSRV 文档修正(≥1.88)", "state": "active"},
+    "02": {"label": "clock_slice 收敛", "state": "pending"},
+    "03": {"label": "done_at 契约+写回盖章+? 物证标记", "state": "pending"},
+    "04": {"label": "0.4.0 收口+帧证据+tag", "state": "pending"}
   },
   "barriers": [
-    {
-      "id": "B1",
-      "after": [
-        "02"
-      ],
-      "unlocks": [
-        "03",
-        "04"
-      ]
-    },
-    {
-      "id": "B2",
-      "after": [
-        "04"
-      ],
-      "unlocks": [
-        "05",
-        "06"
-      ]
-    },
-    {
-      "id": "B3",
-      "after": [
-        "05",
-        "06"
-      ],
-      "unlocks": [
-        "07"
-      ]
-    }
+    {"id": "B1", "after": ["01", "02", "03"], "unlocks": ["04"]}
   ]
 }
