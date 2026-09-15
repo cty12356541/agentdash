@@ -401,19 +401,10 @@ fn tail_line(entry: &EventTailView, width: usize) -> String {
             "  {mark} {} {} · {}",
             entry.name,
             entry.state,
-            clock_slice(&entry.ts)
+            render::clock_slice(&entry.ts)
         )
     };
     format!("{color}{}{C_END}", elide(&body, width))
-}
-
-/// `MM-DDTHH:MM` 段切片(与 panel 同位语义;此处本地窄助手防跨模块依赖)。
-fn clock_slice(rfc3339: &str) -> String {
-    if rfc3339.chars().count() >= 16 {
-        rfc3339.chars().skip(5).take(11).collect()
-    } else {
-        rfc3339.to_owned()
-    }
 }
 
 /// `键  值` 行,按显示宽截断(详情栏窄侧板防顶穿)。

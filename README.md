@@ -3,8 +3,8 @@
 agent 进度仪表盘:从任务台账、会话事件流与 git 快照三个数据源投影出任务 DAG、
 验证门状态与里程碑进度——纯只读、降级不失败、零 Python/Node 运行时前置。
 
-Rust 单 crate 实现(ratatui + crossterm / serde_json,stable ≥1.85,见
-`rust-toolchain.toml`),通用任务契约 v1 见 `schema/agentdash.tasklog.v1.json`。
+Rust 单 crate 实现(ratatui + crossterm / serde_json,stable ≥**1.88**——源码使用
+let-chains,见 `rust-toolchain.toml`),通用任务契约 v1 见 `schema/agentdash.tasklog.v1.json`。
 
 ## 安装
 

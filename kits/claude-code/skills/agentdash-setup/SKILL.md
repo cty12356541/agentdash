@@ -18,7 +18,8 @@ description: Install and verify the agentdash binary that this plugin's hooks ca
      自动挂载,triple 与之一致),解压 `agentdash.exe` 放入 PATH 目录
      (如 `%LOCALAPPDATA%\Programs\agentdash`,或在 PowerShell 里:
      `New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\agentdash"; Expand-Archive <zip> -DestinationPath 上述目录 -Force`,再把该目录加入用户 PATH 后重开终端)
-   - **macOS / Linux**:`cargo install --path <仓库根>`(Rust ≥1.85),或 Releases 对应
+   - **macOS / Linux**:`cargo install --path <仓库根>`(Rust ≥1.88,源码用
+     let-chains),或 Releases 对应
      target triple 压缩包解压入 `/usr/local/bin`
    - 仓库地址:https://github.com/cty12356541/agentdash
 3. **自检(必过)**:`agentdash --version` 退 0;失败则检查 PATH 与解压完整性,勿继续

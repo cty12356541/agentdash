@@ -133,6 +133,16 @@ pub(crate) fn active_milestone(dash: &Dashboard) -> Option<&MilestoneView> {
         .find(|milestone| milestone_state(milestone) == "active")
 }
 
+/// `now_iso[5:16]` 同位切片(panel 与 tui 详情栏同一算法;W5-003 双份收敛):
+/// UTC/本地时刻的 `MM-DDTHH:MM` 段(不足则原样返回)。
+pub(crate) fn clock_slice(rfc3339: &str) -> String {
+    if rfc3339.chars().count() >= 16 {
+        rfc3339.chars().skip(5).take(11).collect()
+    } else {
+        rfc3339.to_owned()
+    }
+}
+
 /// 银行家舍入(承 Python `round` 的五成双语义):`numer / denom` 四舍六入。
 pub(crate) fn round_half_even(numer: usize, denom: usize) -> usize {
     let (quotient, remainder) = (numer / denom, numer % denom);

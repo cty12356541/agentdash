@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use super::{
     C_ACTIVE, C_BOLD, C_DONE, C_END, C_PENDING, C_STALLED, C_WARN, Visual, active_milestone,
-    clamp_width, display_width, elide, is_lane_marker, milestone_state, round_half_even,
-    truncate_width, visual,
+    clamp_width, clock_slice, display_width, elide, is_lane_marker, milestone_state,
+    round_half_even, truncate_width, visual,
 };
 use crate::contract::TaskState;
 use crate::model::{
@@ -206,15 +206,6 @@ fn push_lane_lines(
 /// 里程碑显示 id(台账 wave;未声明时占位 `-`)。
 fn ms_id(milestone: &MilestoneView) -> &str {
     milestone.wave.as_deref().unwrap_or("-")
-}
-
-/// `now_iso[5:16]` 同位切片:UTC 时刻的 `MM-DDTHH:MM` 段(不足则原样返回)。
-fn clock_slice(rfc3339: &str) -> String {
-    if rfc3339.chars().count() >= 16 {
-        rfc3339.chars().skip(5).take(11).collect()
-    } else {
-        rfc3339.to_owned()
-    }
 }
 
 /// 速度线(W3-006 会话活动窗吞吐):`速度 <done/活动窗小时> tasks/h`——
