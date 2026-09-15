@@ -33,7 +33,13 @@ use model::rfc3339_to_secs;
 const MAX_SECS: u64 = 253_402_300_799;
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig {
+        // W6-004:失败案例落 crate 根 proptest-regressions/(可提交回放)
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions"),
+        )),
+        ..ProptestConfig::with_cases(256)
+    })]
 
     /// P1:自有输出往返——`utc_timestamp(secs)` 重解析必须还原 `secs`。
     #[test]
@@ -135,7 +141,13 @@ mod windows_only {
     use super::model;
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+        #![proptest_config(ProptestConfig {
+        // W6-004:失败案例落 crate 根 proptest-regressions/(可提交回放)
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions"),
+        )),
+        ..ProptestConfig::with_cases(256)
+    })]
 
         /// P6:`days_from_civil(civil_from_days(d)) == d`(9999 年域内互逆)。
         #[test]

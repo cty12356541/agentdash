@@ -764,9 +764,9 @@ fn local_utc_offset(_utc: i64) -> i64 {
 }
 
 /// 纯函数:RFC 3339 串 → Unix 纪元秒(Hinnant civil 逆变换,与
-/// [`utc_timestamp`] / [`format_ts`] 互逆)。兼容两种形态:`…Z`(UTC)与
-/// `…±HH:MM`(本地偏移,发现 9 后与 `Z` 并存,偏移按绝对时刻折算)。
-/// 形态不符、字段越界或年份为 0 返回 [`None`]。
+/// [`utc_timestamp`] / [`format_ts`] 互逆)。兼容三形态:`…Z`(UTC)、
+/// `…±HH:MM`(本地偏移)与 `…±HHMM`(基本格式,`date +%z` 等,W6-001),
+/// 偏移按绝对时刻折算。形态不符、字段越界或年份为 0 返回 [`None`]。
 #[must_use]
 pub(crate) fn rfc3339_to_secs(text: &str) -> Option<u64> {
     // 前缀 `YYYY-MM-DDTHH:MM:SS` 逐字段解析(两形态共用)
@@ -792,24 +792,18 @@ pub(crate) fn rfc3339_to_secs(text: &str) -> Option<u64> {
     {
         return None;
     }
-    // 尾缀:`Z`(UTC)或 `±HH:MM`(本地偏移,折算为绝对时刻)
+    // 尾缀:`Z`(UTC)、`±HH:MM`(扩展)或 `±HH:MM` 无冒号的 `±HHMM`(基本
+    // 格式,date +%z 等,W6-001),偏移折算为绝对时刻
     let tail = text.get(19..)?;
     let offset_secs = match tail.as_bytes() {
         [b'Z'] => 0,
-        [sign, h1, h2, b':', m1, m2] => {
-            let parse = |pair: [u8; 2]| {
-                std::str::from_utf8(&pair)
-                    .ok()?
-                    .parse::<i64>()
-                    .ok()
-                    .filter(|value| (0..=99).contains(value))
+        [sign, rest @ ..] if rest.len() == 4 || (rest.len() == 5 && rest[2] == b':') => {
+            let (h1, h2, m1, m2) = if rest.len() == 5 {
+                (rest[0], rest[1], rest[3], rest[4])
+            } else {
+                (rest[0], rest[1], rest[2], rest[3])
             };
-            let (off_hour, off_min) = (parse([*h1, *h2])?, parse([*m1, *m2])?);
-            if !(0..=23).contains(&off_hour) || !(0..=59).contains(&off_min) {
-                return None; // 越界偏移拒解析(不臆造)
-            }
-            let magnitude = off_hour * 3_600 + off_min * 60;
-            if *sign == b'-' { -magnitude } else { magnitude }
+            offset_seconds(*sign, h1, h2, m1, m2)?
         }
         _ => return None,
     };
@@ -825,6 +819,24 @@ pub(crate) fn rfc3339_to_secs(text: &str) -> Option<u64> {
     let days = era * 146_097 + doe - 719_468;
     let secs = days * 86_400 + hour * 3_600 + minute * 60 + second - offset_secs;
     u64::try_from(secs).ok()
+}
+
+/// 偏移尾缀折算(W6-001):(符号, 时 hh, 分 mm)→ 偏移秒;越界(时>23 /
+/// 分>59)拒解析(不臆造)。
+fn offset_seconds(sign: u8, h1: u8, h2: u8, m1: u8, m2: u8) -> Option<i64> {
+    let parse = |pair: [u8; 2]| {
+        std::str::from_utf8(&pair)
+            .ok()?
+            .parse::<i64>()
+            .ok()
+            .filter(|value| (0..=99).contains(value))
+    };
+    let (off_hour, off_min) = (parse([h1, h2])?, parse([m1, m2])?);
+    if !(0..=23).contains(&off_hour) || !(0..=59).contains(&off_min) {
+        return None;
+    }
+    let magnitude = off_hour * 3_600 + off_min * 60;
+    Some(if sign == b'-' { -magnitude } else { magnitude })
 }
 
 /// 纯函数:Unix 纪元秒 → RFC 3339 UTC 串(`YYYY-MM-DDTHH:MM:SSZ`)。

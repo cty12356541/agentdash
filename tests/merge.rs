@@ -1033,3 +1033,40 @@ fn event_fact_fields_project_for_attestation() {
     assert_eq!(dash.last_gate_passed, None);
     cleanup(&repo);
 }
+
+// ------------------------------------------------------------ ±HHMM 容忍(W6-001)
+
+#[test]
+fn rfc3339_accepts_basic_offset_format() {
+    let with_colon = model::rfc3339_to_secs("2026-09-15T20:25:56+08:00").unwrap();
+    assert_eq!(
+        model::rfc3339_to_secs("2026-09-15T20:25:56+0800"),
+        Some(with_colon),
+        "±HHMM 与 ±HH:MM 同折算"
+    );
+    assert_eq!(
+        model::rfc3339_to_secs("2026-09-15T20:25:56-0530"),
+        Some(with_colon + 13 * 3_600 + 30 * 60),
+        "西半球负偏移"
+    );
+    assert_eq!(
+        model::rfc3339_to_secs("2026-09-15T20:25:56+080"),
+        None,
+        "长度不符拒解析"
+    );
+    assert_eq!(
+        model::rfc3339_to_secs("2026-09-15T20:25:56+08000"),
+        None,
+        "六字节既非 ±HH:MM 也非 ±HHMM,拒"
+    );
+    assert_eq!(
+        model::rfc3339_to_secs("2026-09-15T20:25:56+2400"),
+        None,
+        "时越界拒解析"
+    );
+    assert_eq!(
+        model::rfc3339_to_secs("2026-09-15T20:25:56+0860"),
+        None,
+        "分越界拒解析"
+    );
+}
