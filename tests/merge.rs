@@ -131,6 +131,7 @@ fn three_sources_merge_into_dashboard() {
             note: Some("fix round 2/5".to_owned()),
             fix_round: Some((2, 5)),
             since: Some(expected_since.clone()),
+            done_at: None,
         },
         "note `fix round 2/5` 解析为 fix_round;since 取台账 mtime"
     );
@@ -717,6 +718,7 @@ fn velocity_needs_two_milestones_and_positive_span() {
         note: None,
         fix_round: None,
         since: since.map(str::to_owned),
+        done_at: None,
     };
     let ms = |done: usize, total: usize| MilestoneView {
         wave: None,
@@ -777,6 +779,7 @@ fn velocity_prefers_qualifying_event_window() {
         note: None,
         fix_round: None,
         since: since.map(str::to_owned),
+        done_at: None,
     };
     let ms = |done: usize, total: usize| MilestoneView {
         wave: None,
@@ -1004,5 +1007,29 @@ fn event_tail_projects_agent_and_gate_in_arrival_order() {
         "直投影保持到达序(agents/gates 投影的字典序不适用于尾)"
     );
     assert_eq!(dash.event_tail[0].ts, "2026-09-13T09:00:00Z", "ts 原串保留");
+    cleanup(&repo);
+}
+
+// ------------------------------------------------------------ 物证事实字段(W5-001)
+
+#[test]
+fn event_fact_fields_project_for_attestation() {
+    let repo = fixture_repo("anchor");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("events.jsonl"), EVENTS_WINDOW).expect("write events.jsonl");
+    let dash = model::merge(&repo);
+    assert!(dash.events_present, "events 文件在场");
+    assert_eq!(
+        dash.last_gate_passed.as_deref(),
+        Some("2026-09-14T13:13:38+08:00"),
+        "对账锚 = 最近 passed gate 的 ts 原串"
+    );
+    cleanup(&repo);
+
+    let repo = fixture_repo("noanchor");
+    let dash = model::merge(&repo);
+    assert!(!dash.events_present, "无 events 文件 = 源不在场");
+    assert_eq!(dash.last_gate_passed, None);
     cleanup(&repo);
 }

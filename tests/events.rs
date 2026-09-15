@@ -314,3 +314,25 @@ fn tail_caps_at_ten_dropping_oldest() {
     assert_eq!(model.tail[0].name, "a02", "最旧两条(a00/a01)被截");
     assert_eq!(model.tail[9].name, "a11", "最新在尾");
 }
+
+// ------------------------------------------------------------ 对账锚(W5-001)
+
+#[test]
+fn last_gate_passed_tracks_latest_pass_only() {
+    let model = replay_strs(&[
+        r#"{"kind":"gate","gate":"g","state":"running","ts":"2026-09-15T10:00:00+08:00"}"#,
+        r#"{"kind":"gate","gate":"g","state":"failed","ts":"2026-09-15T10:01:00+08:00"}"#,
+    ]);
+    assert_eq!(model.last_gate_passed, None, "无 passed 不设锚");
+
+    let model = replay_strs(&[
+        r#"{"kind":"gate","gate":"g","state":"passed","ts":"2026-09-15T10:00:00+08:00"}"#,
+        r#"{"kind":"gate","gate":"g","state":"failed","ts":"2026-09-15T10:01:00+08:00"}"#,
+        r#"{"kind":"gate","gate":"g","state":"passed","ts":"2026-09-15T10:02:00+08:00"}"#,
+    ]);
+    assert_eq!(
+        model.last_gate_passed.as_deref(),
+        Some("2026-09-15T10:02:00+08:00"),
+        "后到 passed 覆盖(failed 不动锚)"
+    );
+}

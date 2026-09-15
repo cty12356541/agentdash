@@ -12,7 +12,9 @@
 //!
 //! 自包含设计:不引 crate 其他模块(不依赖 `crate::` 路径),因为本文件被
 //! `tui.rs` 以相对 `#[path]` 挂为子模块(见 tui.rs 挂载注释),同时
-//! `tests/writeback.rs` 也独立挂载本文件跑 apply 与锁测试。
+//! `tests/writeback.rs` 也独立挂载本文件跑 apply 与锁测试。W5-001 起放宽为
+//! 仅依赖 `crate::model::ts_now` 盖 `done_at` 物证戳——`tests/writeback.rs`
+//! 挂载树随之补齐 model 及其依赖。
 
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -105,6 +107,18 @@ fn mutate(obj: &mut Map<String, Value>, task_id: &str, action: Action) -> Result
                 return Err(format!("任务 {task_id} 已是 {label}(未改动)"));
             }
             spec.insert(String::from("state"), Value::String(String::from(label)));
+            if label == "done" {
+                // 物证自报戳(W5-001):写回 `d` 键即盖章 done_at,供渲染层与
+                // 事件窗交叉核对;真伪不作判定。
+                spec.insert(
+                    String::from("done_at"),
+                    Value::String(crate::model::ts_now()),
+                );
+            } else if spec.get("done_at").is_some() {
+                // D4:离开 done 终态即摘自家戳(只动写回盖的章,人手写的外来
+                // done_at 同键同权,一并摘除——键语义由写回定义)。
+                spec.remove("done_at");
+            }
         }
         Action::SetNote(text) => set_note(spec, task_id, text)?,
     }

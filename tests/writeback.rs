@@ -331,3 +331,26 @@ fn help_lists_writeback_keys() {
         "详情入口标注仍在(⏎ 独占)"
     );
 }
+
+// ------------------------------------------------------------ done_at 盖章(W5-001)
+
+#[test]
+fn mark_done_stamps_done_at_and_leaving_done_removes_it() {
+    let t = repo_with_ledger("stamp");
+    tui::writeback::apply(t.path(), "T2", WriteAction::MarkDone).expect("apply ok");
+    let ledger = ledger_value(&t);
+    let stamp = ledger["tasks"]["T2"]["done_at"]
+        .as_str()
+        .expect("done_at 应随 d 键盖章");
+    assert!(!stamp.is_empty(), "done_at 应为非空 RFC 3339 串");
+
+    // done → blocked:离开 done 终态,摘自家戳
+    tui::writeback::apply(t.path(), "T2", WriteAction::MarkBlocked).expect("apply ok");
+    let ledger = ledger_value(&t);
+    assert_eq!(ledger["tasks"]["T2"]["state"], "blocked");
+    assert!(
+        ledger["tasks"]["T2"].get("done_at").is_none(),
+        "离开 done 应摘除 done_at: {:?}",
+        ledger["tasks"]["T2"]
+    );
+}

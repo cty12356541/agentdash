@@ -47,6 +47,9 @@ pub struct TaskView {
     /// 任务时刻的 RFC 3339 串:契约任务 = `ledger.json` 文件 mtime
     /// (台账整体最后一次落盘时刻);git 伪任务不设([`None`],无逐任务时刻)。
     pub since: Option<String>,
+    /// 完成自报时刻(W5-001,可选):契约任务的 `done_at` 原样穿透;git 伪
+    /// 任务与折叠伪任务为 [`None`]。真伪不作判定,仅供物证交叉核对。
+    pub done_at: Option<String>,
 }
 
 /// 屏障边视图(W1-007 起随模型携带;与 `render::graph` 的图侧类型同构,
@@ -137,6 +140,12 @@ pub struct Dashboard {
     /// 详情面板事件尾(W4-002;取自 [`events::EventModel::tail`] 直投影,
     /// 到达序,最近 10 条,agent+gate 生效行)。
     pub event_tail: Vec<EventTailView>,
+    /// 详情面板事件尾(W5-001 起 `events.jsonl` 文件在场与否的事实字段):
+    /// `true` = events.jsonl 存在(哪怕空文件)。
+    pub events_present: bool,
+    /// 对账锚(W5-001):事件层最近 passed gate 的 ts 原串;无事件/从未有
+    /// passed → [`None`]。物证交叉核对的数据源(全窗有效,非 tail 视窗)。
+    pub last_gate_passed: Option<String>,
     /// 事件流活动窗跨度(秒,W3-006):events.jsonl ≥2 条不同 `ts` 时取
     /// `max(ts) − min(ts)`(全部 gate/agent/tool 事件按绝对时刻折算);
     /// 无事件 / 单条 / 全同刻为 [`None`]。速度线 span 首选数据源——
@@ -223,15 +232,15 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
     let mut event_span_secs = None;
     let events_path = repo.join(".agentdash").join("events.jsonl");
     let (events_text, events_present) = read_source(&events_path, "events.jsonl", &mut warnings);
-    let (agents, gates, event_tail) = match events_text {
+    let (agents, gates, event_tail, last_gate_passed) = match events_text {
         Some(text) => {
             let model = events::replay(text.lines().map(str::to_owned));
             event_span_secs = event_span_of(&model);
-            let (agents, gates, tail, model_warnings) = event_views(model);
+            let (agents, gates, tail, anchor, model_warnings) = event_views(model);
             warnings.extend(model_warnings);
-            (agents, gates, tail)
+            (agents, gates, tail, anchor)
         }
-        None => (Vec::new(), Vec::new(), Vec::new()),
+        None => (Vec::new(), Vec::new(), Vec::new(), None),
     };
 
     // AD-ERR-001:契约**缺失**(文件不存在,非损坏)同样降级为警告行,措辞
@@ -264,6 +273,9 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         agents,
         gates,
         event_tail,
+        // 物证交叉核对事实字段(W5-001):events.jsonl 在场与否 + 最近通过门
+        events_present,
+        last_gate_passed,
         event_span_secs,
         git,
         // 远程层(120s 档):失败静默为 None——远程是增强不是依赖,
@@ -286,17 +298,20 @@ fn event_span_of(model: &events::EventModel) -> Option<u64> {
     }
 }
 
-/// 事件重放模型 → 渲染视图四元组:agents 按 `who` 字典序、gates 按门名字典序
-/// (投影时就地排序,渲染层免排序即得确定性输出);事件尾保持到达序不排序
-/// (W4-002:重放序即叙事序);重放警告随行透传。
-fn event_views(
-    model: events::EventModel,
-) -> (
+/// 事件层投影五元组(agents / gates / 事件尾 / 对账锚 / 重放警告)。
+type EventViews = (
     Vec<AgentView>,
     Vec<GateView>,
     Vec<EventTailView>,
+    Option<String>,
     Vec<String>,
-) {
+);
+
+/// 事件重放模型 → 渲染视图五元组:agents 按 `who` 字典序、gates 按门名字典序
+/// (投影时就地排序,渲染层免排序即得确定性输出);事件尾保持到达序不排序
+/// (W4-002:重放序即叙事序);`last_gate_passed` 对账锚随行(W5-001);
+/// 重放警告随行透传。
+fn event_views(model: events::EventModel) -> EventViews {
     let mut agents: Vec<AgentView> = model
         .agents
         .into_iter()
@@ -334,7 +349,7 @@ fn event_views(
             ts: entry.ts,
         })
         .collect();
-    (agents, gates, tail, model.warnings)
+    (agents, gates, tail, model.last_gate_passed, model.warnings)
 }
 
 /// 读一个源文件,返回 `(内容, 文件是否存在)`:不存在(NotFound)静默返回
@@ -376,6 +391,7 @@ fn contract_tasks(ledger: &contract::Ledger, since: Option<&str>) -> Vec<TaskVie
                         .and_then(parse_fix_round)
                         .map(|(round, _)| round),
                     since: since.map(str::to_owned),
+                    done_at: spec.done_at.clone(),
                 });
             }
         }
@@ -400,6 +416,7 @@ fn contract_tasks(ledger: &contract::Ledger, since: Option<&str>) -> Vec<TaskVie
                 .and_then(parse_fix_round)
                 .map(|(round, _)| round),
             since: since.map(str::to_owned),
+            done_at: spec.done_at.clone(),
         });
     }
     tasks
@@ -612,6 +629,7 @@ fn git_tasks(git: &GitFacts) -> Vec<TaskView> {
                 note: None,
                 fix_round: None,
                 since: None,
+                done_at: None,
             }
         })
         .collect()

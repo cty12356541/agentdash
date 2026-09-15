@@ -109,6 +109,10 @@ pub struct TaskSpec {
     /// 附加说明(如 `fix round 2/5`)。
     #[serde(default)]
     pub note: Option<String>,
+    /// 完成自报时刻(W5-001,可选):RFC 3339 串;写回 `d` 键自动盖章。
+    /// 内核不作真伪判定,仅供渲染层与事件窗交叉核对(物证 `?` 标记)。
+    #[serde(default)]
+    pub done_at: Option<String>,
 }
 
 /// 任务台账(spec §4.1)。

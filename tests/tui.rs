@@ -61,6 +61,7 @@ fn task(id: &str, label: &str, lane: &str) -> TaskView {
         note: None,
         fix_round: None,
         since: None,
+        done_at: None,
     }
 }
 
@@ -98,6 +99,8 @@ fn w25_dash() -> Dashboard {
         event_span_secs: None,       // W3-006:速度线事件活动窗;TUI 样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         event_tail: Vec::new(),
+        events_present: false, // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -116,6 +119,8 @@ fn empty_dash() -> Dashboard {
         event_span_secs: None,       // W3-006:速度线事件活动窗;TUI 样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         event_tail: Vec::new(),
+        events_present: false, // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -537,6 +542,7 @@ fn detail_dash() -> Dashboard {
             note: Some("fix round 2/5".into()),
             fix_round: Some((2, 5)),
             since: Some("2026-09-13T08:30:00Z".into()),
+            done_at: None,
         }],
         milestones: Vec::new(),
         warnings: Vec::new(),
@@ -573,6 +579,8 @@ fn detail_dash() -> Dashboard {
                 ts: "2026-09-13T09:00:00Z".into(),
             },
         ],
+        events_present: false, // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -590,17 +598,18 @@ fn detail_lines_snapshot_fields_complete() {
     assert_eq!(lines[3], "备注  fix round 2/5");
     assert_eq!(lines[4], "轮次  R2/5");
     assert_eq!(lines[5], "时刻  2026-09-13T08:30:00Z");
-    assert_eq!(lines[6], "验证门");
-    assert_eq!(lines[7], "  ✓ pre-merge passed · test+clippy");
-    assert_eq!(lines[8], "  ✗ ship failed · 1 red");
-    assert_eq!(lines[9], "事件");
+    assert_eq!(lines[6], "物证  -", "非 done 任务物证不可断言(W5-001)");
+    assert_eq!(lines[7], "验证门");
+    assert_eq!(lines[8], "  ✓ pre-merge passed · test+clippy");
+    assert_eq!(lines[9], "  ✗ ship failed · 1 red");
+    assert_eq!(lines[10], "事件");
     // W4-002:事件尾真数据(agent 派发 ▶ + gate 通过 ✓,到达序,ts 切 MM-DDTHH:MM)
-    assert_eq!(lines[10], "  ▶ explore dispatched · 09-13T08:30");
-    assert_eq!(lines[11], "  ✓ test passed · 09-13T09:00");
+    assert_eq!(lines[11], "  ▶ explore dispatched · 09-13T08:30");
+    assert_eq!(lines[12], "  ✓ test passed · 09-13T09:00");
     assert_eq!(
         lines.len(),
-        12,
-        "字段齐:7 字段 + 门区块 + 事件区块(尾 2 条)"
+        13,
+        "字段齐:8 字段 + 门区块 + 事件区块(尾 2 条)"
     );
 }
 
@@ -617,7 +626,7 @@ fn detail_lines_absent_fields_show_dash_placeholder() {
     assert_eq!(lines[3], "备注  -");
     assert_eq!(lines[4], "轮次  -");
     assert_eq!(lines[5], "时刻  -");
-    assert_eq!(lines[7], "  -", "无 gate 时显示占位,整段不消失");
+    assert_eq!(lines[8], "  -", "无 gate 时显示占位,整段不消失");
 }
 
 #[test]
@@ -629,9 +638,9 @@ fn detail_empty_tail_shows_dash_placeholder() {
         .iter()
         .map(|line| strip_ansi(line))
         .collect();
-    // w25 样例无 gates:验证门段只占 6/7 两行,事件段自 8 起
-    assert_eq!(lines[8], "事件");
-    assert_eq!(lines[9], "  -", "无事件尾时空态占位");
+    // w25 样例无 gates:验证门段只占 7/8 两行,事件段自 9 起(物证字段占 6)
+    assert_eq!(lines[9], "事件");
+    assert_eq!(lines[10], "  -", "无事件尾时空态占位");
     assert!(
         !lines.iter().any(|l| l.contains("W2-008")),
         "旧占位行必须消失: {lines:?}"
@@ -642,7 +651,7 @@ fn detail_empty_tail_shows_dash_placeholder() {
 fn detail_lines_elide_to_budget() {
     let dash = detail_dash();
     let lines = tui::detail_lines(&dash.tasks[0], &dash, 20);
-    assert_eq!(lines.len(), 12, "截断只裁行宽,不裁行数");
+    assert_eq!(lines.len(), 13, "截断只裁行宽,不裁行数");
     for line in &lines {
         let plain = strip_ansi(line);
         assert!(
@@ -720,6 +729,8 @@ fn wave_dash() -> Dashboard {
         event_span_secs: None,       // W3-006:速度线事件活动窗;TUI 样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         event_tail: Vec::new(),
+        events_present: false, // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -828,6 +839,7 @@ fn filter_dash() -> Dashboard {
         note: None,
         fix_round: None,
         since: None,
+        done_at: None,
     };
     Dashboard {
         tasks: vec![t1, t2, t3, t4, t5],
@@ -841,6 +853,8 @@ fn filter_dash() -> Dashboard {
         event_span_secs: None,       // W3-006:速度线事件活动窗;TUI 样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         event_tail: Vec::new(),
+        events_present: false, // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -1068,5 +1082,64 @@ fn parse_watch_args_rejects_bad_input() {
     assert!(
         tui::parse_watch_args(&args(&["plan", "30"])).is_err(),
         "PATH 之后再跟位置参数不合两形态"
+    );
+}
+
+// ------------------------------------------------------------ 物证(W5-001)
+
+#[test]
+fn detail_attestation_lines_cover_all_states() {
+    // done + done_at + 事件窗在场:四种物证文案逐一核对(✓/?/无通过门/无事件窗)
+    let mut dash = detail_dash();
+    dash.events_present = true;
+    dash.tasks[0].state = TaskState::Done;
+    dash.tasks[0].done_at = Some("2026-09-13T10:00:00Z".into());
+    dash.last_gate_passed = Some("2026-09-13T09:00:00Z".into());
+
+    let lines: Vec<String> = tui::detail_lines(&dash.tasks[0], &dash, 80)
+        .iter()
+        .map(|line| strip_ansi(line))
+        .collect();
+    assert!(
+        lines[6].starts_with("物证  ? 晚于最近通过门(09-13T09:00)"),
+        "自报晚于通过门 → ?: {}",
+        lines[6]
+    );
+
+    // 自报早于通过门 → ✓
+    dash.tasks[0].done_at = Some("2026-09-13T08:00:00Z".into());
+    let lines: Vec<String> = tui::detail_lines(&dash.tasks[0], &dash, 80)
+        .iter()
+        .map(|line| strip_ansi(line))
+        .collect();
+    assert!(
+        lines[6].starts_with("物证  ✓ 早于最近通过门(09-13T09:00)"),
+        "自报早于通过门 → ✓: {}",
+        lines[6]
+    );
+
+    // 事件窗在场但从未有通过门 → ?(无物证)
+    dash.tasks[0].done_at = Some("2026-09-13T08:00:00Z".into());
+    dash.last_gate_passed = None;
+    let lines: Vec<String> = tui::detail_lines(&dash.tasks[0], &dash, 80)
+        .iter()
+        .map(|line| strip_ansi(line))
+        .collect();
+    assert!(
+        lines[6].starts_with("物证  ? 自报无物证"),
+        "事件在场无通过门 → ?: {}",
+        lines[6]
+    );
+
+    // 无事件窗:done_at 在场也只能挂起(无证可查不作怀疑)
+    dash.events_present = false;
+    let lines: Vec<String> = tui::detail_lines(&dash.tasks[0], &dash, 80)
+        .iter()
+        .map(|line| strip_ansi(line))
+        .collect();
+    assert!(
+        lines[6].starts_with("物证  done_at 2026-09-13T08:00:00Z(无事件窗可核)"),
+        "无事件窗 → 挂起不怀疑: {}",
+        lines[6]
     );
 }

@@ -37,6 +37,7 @@ fn task(id: &str, label: &str, lane: &str) -> TaskView {
         note: None,
         fix_round: None,
         since: None,
+        done_at: None,
     }
 }
 
@@ -75,6 +76,8 @@ fn w25_dash() -> Dashboard {
         // W3-004 D3:项目名上模型,渲染层只读不猜
         project: "agentdash".into(),
         event_tail: Vec::new(), // W4-002:详情事件尾;渲染组样例默认无
+        events_present: false,  // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -93,6 +96,8 @@ fn dash_with(tasks: Vec<TaskView>) -> Dashboard {
         event_span_secs: None, // W3-006:速度线事件活动窗;样例默认无
         project: "agentdash".into(),
         event_tail: Vec::new(), // W4-002:详情事件尾;渲染组样例默认无
+        events_present: false,  // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -210,6 +215,7 @@ fn rich_states_map_to_visual_marks() {
             note: Some("fix round 2/5".into()),
             fix_round: Some((2, 5)),
             since: None,
+            done_at: None,
         },
         TaskView {
             id: "T3".into(),
@@ -219,6 +225,7 @@ fn rich_states_map_to_visual_marks() {
             note: None,
             fix_round: None,
             since: None,
+            done_at: None,
         },
         TaskView {
             id: "T4".into(),
@@ -228,6 +235,7 @@ fn rich_states_map_to_visual_marks() {
             note: None,
             fix_round: None,
             since: None,
+            done_at: None,
         },
     ];
     let dash = dash_with(tasks);
@@ -671,6 +679,7 @@ fn collapsed_lane_renders_single_marker_line() {
             note: None,
             fix_round: None,
             since: None,
+            done_at: None,
         },
         task("T9", "进行中任务", "beta"),
     ];
@@ -866,6 +875,7 @@ fn fix_round_note_not_duplicated_on_task_row() {
         note: Some("fix round 2/5".into()),
         fix_round: Some((2, 5)),
         since: None,
+        done_at: None,
     }];
     let plain = strip_ansi(&render_panel(&dash_with(tasks), DEFAULT_PANEL_WIDTH));
 
@@ -907,6 +917,7 @@ fn fix_round_suppresses_only_matched_prefix_and_keeps_residual() {
         note: Some("fix round 2/5 auth bug".into()),
         fix_round: Some((2, 5)),
         since: None,
+        done_at: None,
     }];
     let plain = strip_ansi(&render_panel(&dash_with(tasks), DEFAULT_PANEL_WIDTH));
 
@@ -1180,4 +1191,42 @@ fn v1_ledger_without_milestones_renders_byte_identical() {
         "v1 台账 graph 必须与扩展前逐字节一致"
     );
     let _ = fs::remove_dir_all(&repo);
+}
+
+// ------------------------------------------------------------ 物证 ? 标记(W5-001)
+
+#[test]
+fn unattested_done_marks_question_only_in_witness_window() {
+    let done = |done_at: Option<&str>| TaskView {
+        id: "T1".into(),
+        label: "x".into(),
+        state: TaskState::Done,
+        lane: None,
+        note: None,
+        fix_round: None,
+        since: None,
+        done_at: done_at.map(str::to_owned),
+    };
+    // 自报晚于通过门 → ?
+    let mut dash = dash_with(vec![done(Some("2026-09-13T12:00:00Z"))]);
+    dash.events_present = true;
+    dash.last_gate_passed = Some("2026-09-13T09:00:00Z".into());
+    let out = strip_ansi(&render::render_panel(&dash, 64));
+    assert!(out.contains("✓ T1 x ?"), "自报无物证应打 ?: {out}");
+
+    // 自报早于通过门 → 不打
+    dash.tasks[0].done_at = Some("2026-09-13T08:00:00Z".into());
+    let out = strip_ansi(&render::render_panel(&dash, 64));
+    assert!(!out.contains("T1 x ?"), "有物证不打 ?: {out}");
+
+    // 无 done_at(人工维护,不可断言)→ 不打
+    dash.tasks[0].done_at = None;
+    let out = strip_ansi(&render::render_panel(&dash, 64));
+    assert!(!out.contains("T1 x ?"), "无自报戳不打 ?: {out}");
+
+    // 无事件窗(纯契约)→ 不打(无证可查不作怀疑)
+    dash.tasks[0].done_at = Some("2026-09-13T12:00:00Z".into());
+    dash.events_present = false;
+    let out = strip_ansi(&render::render_panel(&dash, 64));
+    assert!(!out.contains("T1 x ?"), "无事件窗不打 ?: {out}");
 }

@@ -59,6 +59,9 @@ pub struct EventModel {
     /// 详情面板事件尾(W4-002):已生效 agent/gate 事件紧凑行,到达序,
     /// 最近 [`TAIL_CAP`] 条(超限截旧);`tool` 事件与残缺行不入尾。
     pub tail: Vec<TailEntry>,
+    /// 对账锚(W5-001):最近一次 passed gate 的 `ts` 原串(每次 passed 覆盖,
+    /// 全窗有效——不走 tail,容量会滚掉旧门);从未有 passed → [`None`]。
+    pub last_gate_passed: Option<String>,
     /// 事件流活动窗 ts 极值(W3-006,纪元秒):全部已知 kind(gate/agent/
     /// tool)事件的可解析 `ts` 最小/最大值;合格窗判定(max > min)收口在
     /// model 侧,这里只存极值事实。
@@ -150,6 +153,7 @@ fn apply_gate(model: &mut EventModel, raw: RawEvent, line_no: usize) {
             return;
         }
     };
+    let ts = raw.ts;
     // 后态覆盖前态;生效行入事件尾(W4-002)
     model.gates.insert(gate.clone(), state);
     push_tail(
@@ -157,8 +161,13 @@ fn apply_gate(model: &mut EventModel, raw: RawEvent, line_no: usize) {
         "gate",
         gate,
         label,
-        raw.ts.unwrap_or_default(),
+        ts.clone().unwrap_or_default(),
     );
+    // 对账锚(W5-001):最近 passed gate 的 ts(无 ts 的 passed 销毁既有锚——
+    // 当前证据说不了谎,也不借旧证)
+    if label == "passed" {
+        model.last_gate_passed = ts;
+    }
 }
 
 /// 事件尾追加(W4-002):到达序 push,超 [`TAIL_CAP`] 截最旧。

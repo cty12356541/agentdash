@@ -361,3 +361,22 @@ fn schema_example_parses_clean() {
         ledger.warnings
     );
 }
+
+// ------------------------------------------------------------ done_at(W5-001)
+
+#[test]
+fn done_at_passthrough_and_absent() {
+    let ledger = parse_ledger(
+        r#"{"title":"t","tasks":{
+            "1":{"label":"a","state":"done","done_at":"2026-09-15T10:00:00+08:00"},
+            "2":{"label":"b","state":"pending"}
+        }}"#,
+    )
+    .expect("合法台账");
+    assert_eq!(
+        ledger.tasks["1"].done_at.as_deref(),
+        Some("2026-09-15T10:00:00+08:00"),
+        "done_at 原样穿透"
+    );
+    assert_eq!(ledger.tasks["2"].done_at, None, "缺省为 None(加法兼容)");
+}

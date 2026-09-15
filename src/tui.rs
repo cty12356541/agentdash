@@ -366,6 +366,7 @@ pub fn detail_lines(task: &TaskView, dash: &Dashboard, width: usize) -> Vec<Stri
             width,
         ),
         field_line("时刻", task.since.as_deref().unwrap_or("-"), width),
+        field_line("物证", &attestation_line(task, dash), width),
     ];
     lines.push(String::from("验证门"));
     if dash.gates.is_empty() {
@@ -410,6 +411,29 @@ fn tail_line(entry: &EventTailView, width: usize) -> String {
 /// `键  值` 行,按显示宽截断(详情栏窄侧板防顶穿)。
 fn field_line(label: &str, value: &str, width: usize) -> String {
     elide(&format!("{label}  {value}"), width)
+}
+
+/// 物证行(W5-001):done 任务的自报 `done_at` 与事件窗对账——
+/// `✓ 早于最近通过门` / `? 晚于最近通过门` / `? 自报无物证(事件窗无通过门)` /
+/// `done_at <ts>(无事件窗可核)`;非 done 或无自报戳 → `-`(不可断言)。
+fn attestation_line(task: &TaskView, dash: &Dashboard) -> String {
+    if task.state != TaskState::Done {
+        return String::from("-");
+    }
+    let Some(stamp) = task.done_at.as_deref() else {
+        return String::from("-");
+    };
+    if !dash.events_present {
+        return format!("done_at {stamp}(无事件窗可核)");
+    }
+    let suspect = render::unattested_done(task, dash);
+    match dash.last_gate_passed.as_deref() {
+        None => String::from("? 自报无物证(事件窗无通过门)"),
+        Some(anchor) if suspect => {
+            format!("? 晚于最近通过门({})", render::clock_slice(anchor))
+        }
+        Some(anchor) => format!("✓ 早于最近通过门({})", render::clock_slice(anchor)),
+    }
 }
 
 /// 详情栏 gate 行(三态映射承 panel):`  <mark> <name> <state>[ · <detail>]`。
@@ -611,6 +635,7 @@ pub fn collapse_view(dash: &Dashboard, mode: LaneCollapse) -> Dashboard {
             note: None,
             fix_round: None,
             since: None,
+            done_at: None,
         });
     }
     view.tasks = tasks;

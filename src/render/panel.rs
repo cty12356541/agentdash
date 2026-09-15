@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use super::{
     C_ACTIVE, C_BOLD, C_DONE, C_END, C_PENDING, C_STALLED, C_WARN, Visual, active_milestone,
     clamp_width, clock_slice, display_width, elide, is_lane_marker, milestone_state,
-    round_half_even, truncate_width, visual,
+    round_half_even, truncate_width, unattested_done, visual,
 };
 use crate::contract::TaskState;
 use crate::model::{
@@ -129,7 +129,7 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     if !dash.tasks.is_empty() {
         lines.push(format!("{C_BOLD}车道 / 任务{C_END}"));
         let lane_groups = lane_groups(&dash.tasks);
-        push_lane_lines(&mut lines, &lane_groups, &dash.generated_at);
+        push_lane_lines(&mut lines, &lane_groups, dash);
     }
     // 区块 C′:屏障行(W3-002;claude-dash `  {barrier}`)——车道区之后按
     // 台账声明序直出,语义与 graph 的 after→unlocks 边同向
@@ -186,11 +186,7 @@ fn lane_groups(tasks: &[TaskView]) -> Vec<(String, Vec<&TaskView>)> {
 
 /// 车道行输出:折叠车道(W2-005,视图层发空 id 伪任务)出
 /// `▸ 车道名 (N done)` 单行;其余车道头 + 逐任务行照旧。
-fn push_lane_lines(
-    lines: &mut Vec<String>,
-    groups: &[(String, Vec<&TaskView>)],
-    generated_at: &str,
-) {
+fn push_lane_lines(lines: &mut Vec<String>, groups: &[(String, Vec<&TaskView>)], dash: &Dashboard) {
     for (name, members) in groups {
         if members.len() == 1 && is_lane_marker(members[0]) {
             lines.push(format!("{C_BOLD}▸ {name} {}{C_END}", members[0].label));
@@ -198,7 +194,7 @@ fn push_lane_lines(
         }
         lines.push(format!("{C_BOLD}{name}{C_END}"));
         for task in members {
-            lines.push(task_line(task, generated_at));
+            lines.push(task_line(task, dash));
         }
     }
 }
@@ -217,15 +213,16 @@ fn speed_line(dash: &Dashboard) -> Option<String> {
     Some(format!("  速度 {rate:.1} tasks/h"))
 }
 
-/// 任务行:`<mark> <id> <label>[ R<N>/<M>[ <残余 note>]][ · <note>][ ⚑]`——
+/// 任务行:`<mark> <id> <label>[ R<N>/<M>[ <残余 note>]][ · <note>][ ⚑][ ?]`——
 /// R 尾缀出自 `fix_round`(W2-002);W3-001 起仅抑**匹配前缀**:note 为
 /// `fix round N/M <残余>` 时残余折到尾缀之后(`R2/5 auth bug`),解析不出
 /// 残余(纯 `fix round N/M`)只出尾缀,解析不了 `fix_round` 才回退整段
 /// note 原文;since 距 `generated_at` 超过 2 小时([`STALE_THRESHOLD_SECS`])
-/// 打停滞 ⚑,无戳/坏戳/时刻在未来一律不打(不虚报);两种 RFC 3339 形态
-/// (`…Z` UTC / `…±HH:MM` 本地偏移,发现 9)统一按绝对时刻折算比较
+/// 打停滞 ⚑,无戳/坏戳/时刻在未来一律不打(不虚报);done 且自报无物证
+/// ([`unattested_done`],W5-001)打 `?`;两种 RFC 3339 形态(`…Z` UTC /
+/// `…±HH:MM` 本地偏移,发现 9)统一按绝对时刻折算比较
 /// ([`rfc3339_to_secs`] 出自 model,W3-004)。
-fn task_line(task: &TaskView, generated_at: &str) -> String {
+fn task_line(task: &TaskView, dash: &Dashboard) -> String {
     let state = visual(task.state);
     let residual = task
         .note
@@ -248,11 +245,18 @@ fn task_line(task: &TaskView, generated_at: &str) -> String {
             .since
             .as_deref()
             .and_then(rfc3339_to_secs)
-            .zip(rfc3339_to_secs(generated_at))
+            .zip(rfc3339_to_secs(&dash.generated_at))
             .is_some_and(|(since, now)| now.saturating_sub(since) > STALE_THRESHOLD_SECS);
     let stale_flag = if is_stale { " ⚑" } else { "" };
+    // 物证怀疑标记(W5-001):done 且自报时刻晚于最近通过门(或事件在场而无
+    // 通过门)→ `?`;判定细节(无 done_at/无事件窗不标)收口 unattested_done
+    let suspect_flag = if unattested_done(task, dash) {
+        " ?"
+    } else {
+        ""
+    };
     format!(
-        "{}{} {} {}{}{}{}{}",
+        "{}{} {} {}{}{}{}{}{}",
         state.color(),
         state.mark(),
         task.id,
@@ -260,6 +264,7 @@ fn task_line(task: &TaskView, generated_at: &str) -> String {
         fix_round,
         note,
         stale_flag,
+        suspect_flag,
         C_END
     )
 }

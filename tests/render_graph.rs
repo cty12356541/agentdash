@@ -43,6 +43,7 @@ fn task(id: &str, label: &str, lane: &str) -> TaskView {
         note: None,
         fix_round: None,
         since: None,
+        done_at: None,
     }
 }
 
@@ -76,6 +77,8 @@ fn w25_dash() -> Dashboard {
         event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         event_tail: Vec::new(),      // W4-002:详情事件尾;渲染组样例默认无
+        events_present: false,       // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -263,6 +266,8 @@ fn cjk_label_fits_box() {
         event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         event_tail: Vec::new(),      // W4-002:详情事件尾;渲染组样例默认无
+        events_present: false,       // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let layers = layout_layers(&dash, &[]);
@@ -293,6 +298,7 @@ fn cycle_remaining_merges_into_last_layer() {
         note: None,
         fix_round: None,
         since: None,
+        done_at: None,
     };
     let dash = Dashboard {
         tasks: vec![
@@ -310,6 +316,8 @@ fn cycle_remaining_merges_into_last_layer() {
         event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         event_tail: Vec::new(),      // W4-002:详情事件尾;渲染组样例默认无
+        events_present: false,       // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let barriers = vec![BarrierEdges {
@@ -342,6 +350,8 @@ fn lane_chain_forms_layers() {
         event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
         event_tail: Vec::new(),      // W4-002:详情事件尾;渲染组样例默认无
+        events_present: false,       // W5-001:物证窗;渲染组样例默认无
+        last_gate_passed: None,
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let layers = layout_layers(&dash, &[]);

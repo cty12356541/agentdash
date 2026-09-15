@@ -21,7 +21,7 @@ pub use oneline::render_oneline;
 pub use panel::{DEFAULT_PANEL_WIDTH, render_panel};
 
 use crate::contract::TaskState;
-use crate::model::{Dashboard, MilestoneView, TaskView};
+use crate::model::{Dashboard, MilestoneView, TaskView, rfc3339_to_secs};
 
 // ANSI 调色(承 Python `C` 表;oneline 视图不用)。
 pub(crate) const C_DONE: &str = "\x1b[32m";
@@ -53,6 +53,26 @@ pub(crate) const fn clamp_width(width: usize) -> usize {
 // 上收 `model`(git 仓根名 → cwd 目录名 → `"agentdash"`),合并时算好进
 // `Dashboard::project`,渲染层只读字段不再自猜。原 `project_label` /
 // `dir_name` 已删,消费方一律读 `dash.project`。
+
+/// 物证交叉核对(W5-001):done 且自带 `done_at`、事件源在场,且(**无任何
+/// 通过门**或 **`done_at` 晚于最近通过门**)→ `true`(自报无物证,任务行
+/// `?`)。无 `done_at`(人工维护,不可断言)、事件源不在场(无证可查不作
+/// 怀疑,承 W3 速度线同款克制)或时刻不可解析 → `false`。
+pub(crate) fn unattested_done(task: &TaskView, dash: &Dashboard) -> bool {
+    if task.state != TaskState::Done {
+        return false;
+    }
+    let Some(done_at) = task.done_at.as_deref().and_then(rfc3339_to_secs) else {
+        return false;
+    };
+    if !dash.events_present {
+        return false;
+    }
+    match dash.last_gate_passed.as_deref().and_then(rfc3339_to_secs) {
+        Some(passed) => done_at > passed,
+        None => true,
+    }
+}
 
 /// 折叠车道伪任务判别(W2-005):tui 折叠视图把完成车道折叠成单条伪任务,
 /// 以**空 id** 为哨兵——合法台账 id 与 git 短 SHA 均非空,空 id 唯一标识
