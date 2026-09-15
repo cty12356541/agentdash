@@ -105,12 +105,26 @@ proptest! {
     }
 
     /// P5b:粘连(`cargoxtest`)与插词(`cargo x test`)必拒——词边界完整性。
+    /// g1 排除独立词 `go`:`cargo go test` 文本上确含合法 `go test` 门(承
+    /// Python 参考的文本匹配语义,非缺陷,真值由下方点断言钉住);该例由
+    /// CI macOS 种子首抓,本机 256 案例未及(regex 策略下 `go` 低频)。
     #[test]
-    fn gate_rejects_glued_or_interrupted_words(g1 in "[a-z]{1,3}", g2 in "[a-z]{1,3}") {
+    fn gate_rejects_glued_or_interrupted_words(
+        g1 in "[a-z]{1,3}".prop_filter("exclude standalone `go`", |w| *w != "go"),
+        g2 in "[a-z]{1,3}",
+    ) {
         prop_assert_eq!(hook::gate_name(&format!("cargo{g1}test")), None);
         prop_assert_eq!(hook::gate_name(&format!("cargo {g1} test")), None);
         prop_assert_eq!(hook::gate_name(&format!("go {g1}build{g2} test")), None);
     }
+}
+
+#[test]
+fn gate_textual_match_cargo_go_test_is_go_test() {
+    // W4-005 CI 发现的词边界真值钉版:门匹配是文本级的——`cargo go test`
+    // 中段独立词 `go` 与尾词 `test` 构成合法 `go-test` 门(生产语义正确,
+    // 首版 P5b 过宽断言误判为必拒)。
+    assert_eq!(hook::gate_name("cargo go test"), Some("go-test"));
 }
 
 // Windows 专属:民法互逆对只有该目标编译(days_from_civil 为 cfg(windows))。
