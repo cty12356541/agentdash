@@ -45,16 +45,18 @@ jobs:
           case "$VER" in v*) ;; *) VER="v0.0.0-dev" ;; esac
           NAME="agentdash-${VER}-${{ matrix.target }}"
           mkdir -p dist
+          # 压缩包内文件恒名 agentdash[.exe](v0.3.0 首跑抽验修正):解压即得
+          # 可直接放入 PATH 的二进制,无需按 tag-triple 长名手工改名
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/agentdash.exe" "dist/${NAME}.exe"
+            cp "target/${{ matrix.target }}/release/agentdash.exe" "dist/agentdash.exe"
             # Windows 10+ 自带 bsdtar:-a 按扩展名出 zip
-            tar -a -cf "dist/${NAME}.zip" -C dist "${NAME}.exe"
-            rm "dist/${NAME}.exe"
+            tar -a -cf "dist/${NAME}.zip" -C dist "agentdash.exe"
+            rm "dist/agentdash.exe"
           else
-            cp "target/${{ matrix.target }}/release/agentdash" "dist/${NAME}"
-            strip "dist/${NAME}"
-            tar -czf "dist/${NAME}.tar.gz" -C dist "${NAME}"
-            rm "dist/${NAME}"
+            cp "target/${{ matrix.target }}/release/agentdash" "dist/agentdash"
+            strip "dist/agentdash"
+            tar -czf "dist/${NAME}.tar.gz" -C dist "agentdash"
+            rm "dist/agentdash"
           fi
 
       - uses: actions/upload-artifact@v4
