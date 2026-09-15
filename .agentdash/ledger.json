@@ -49,7 +49,7 @@
       "label": "发现:zcode/cursor 载荷均无退出码证据(gate 折叠恒 exit unknown)",
       "state": "done",
       "done_at": "2026-09-16T00:36:42+08:00",
-      "note": "失败侧修复:posttoolusefailure 事件臂(hook.rs)与在途 gate 暂存槽配对顶替,失败落真证据(载荷码优先,缺码 1,中断 130;无在途槽补 running+暂存对);zcode/cursor 均注册 Failure 钩子;zcode 失败载荷字段未见于官方文档,路径实测待重开复核。绿侧维持 unknown:PostToolUse 成功语义无官方明证,0 证据不臆造(铁律)。另:复合命令多门禁只登记按序首中一 gate(设计如此)"
+      "note": "失败侧修复:posttoolusefailure 事件臂(hook.rs)与在途 gate 暂存槽配对顶替,失败落真证据(载荷码优先,缺码 1,中断 130;无在途槽补 running+暂存对);zcode/cursor 均注册 Failure 钩子。字符串 response 新证据源:DSH 桥实测 tool_response 为文本,dsh-shell 渲染契约尾部标记 [exit code: N]/[killed by signal: X]/皆无=0(官方 parseExitStatus),hook.rs 已解析——deepseek 实测绿门禁 passed exit 0、失败 exit 101,全真证据。绿侧 zcode/cursor 维持 unknown(无成功语义官方明证,不臆造);zcode 失败路径重开复核;cursor 待 cursor-agent login 后实测。另:复合命令多门禁只登记按序首中一 gate(设计如此)"
     },
     "04": {
       "label": "cursor-kit(安装器+hooks+载荷归一)",
@@ -67,7 +67,7 @@
       "label": "deepseek-kit(第六宿主:DeepSeek Harness,桥接形制)",
       "state": "done",
       "done_at": "2026-09-16T00:36:42+08:00",
-      "note": "kits/deepseek 落地:hooks.json(Claude 形制五钩子含 SubagentStart,--host deepseek)+ install.sh(AGENTS.md 合入+.deepseek/agentdash-hooks.json 独占文件写入+cordis.yml 挂载指引)+ README;hook.rs 零改动(桥消费 claude 命令钩子子集);巡检六 kit 130 断言全过;DSH 真机端到端待环境可用后补验"
+      "note": "kits/deepseek 落地:hooks.json(Claude 形制五钩子含 SubagentStart,--host deepseek)+ install.sh(AGENTS.md 合入+.deepseek/agentdash-hooks.json 独占文件写入+cordis.yml 挂载指引)+ README;hook.rs 零改动(桥消费 claude 命令钩子子集);巡检六 kit 130 断言全过。真机端到端已通(2026-09-16,headless profile + dsh plugin add 桥包 + --patch insert 挂载 + 单发):tool/gate 事件落盘,绿门禁 passed exit 0、失败 failed exit 101 全真证据;挂载要点=桥依赖需 dsh plugin add 进 profile,configPath 用绝对路径,DSH 进程级启动读取"
     }
   },
   "barriers": []

@@ -731,10 +731,16 @@ fn is_ws_byte(b: u8) -> bool {
     b.is_ascii_whitespace() || b == 0x0B // \v:Python \s 亦匹配
 }
 
-/// 退出码证据:Bash 的 `status`/`exit_code`/`exit`;`interrupted` → 130;`is_error` → 1。
-/// 无任何证据(response 缺失/非对象/无退出码字段)→ [`None`]——落盘为 `null`,
+/// 退出码证据:字符串 response 走 dsh-shell 渲染契约(见 [`split_string_response`]);
+/// 对象 response 读 Bash 的 `status`/`exit_code`/`exit`;`interrupted` → 130;`is_error` → 1。
+/// 无任何证据(response 缺失/无退出码字段)→ [`None`]——落盘为 `null`,
 /// 不臆造 0;Stop 折叠按失败处理(W4-001 D1,不虚报)。
 fn exit_code(response: Option<&Value>) -> Option<i64> {
+    if let Some(text) = response.and_then(Value::as_str) {
+        let (_, status) = split_string_response(text);
+        // 无尾标记 = 干净退出 0——dsh-shell 官方契约,非臆造
+        return Some(status.unwrap_or(0));
+    }
     let obj = response.and_then(Value::as_object)?;
     if obj.get("interrupted").and_then(Value::as_bool) == Some(true) {
         return Some(130);
@@ -747,8 +753,14 @@ fn exit_code(response: Option<&Value>) -> Option<i64> {
     (obj.get("is_error").and_then(Value::as_bool) == Some(true)).then_some(1)
 }
 
-/// 一行摘要:stdout(空则 stderr)最后一条非空行,截 `MAX_SUMMARY`。
+/// 一行摘要:字符串 response 取去尾标记后的正文末行;对象 response 取
+/// stdout(空则 stderr)最后一条非空行,截 `MAX_SUMMARY`。
 fn summary_line(response: Option<&Value>) -> String {
+    if let Some(text) = response.and_then(Value::as_str) {
+        let (body, _) = split_string_response(text);
+        let last = body.lines().map(str::trim).rfind(|l| !l.is_empty());
+        return clip(last.unwrap_or_default());
+    }
     let Some(obj) = response.and_then(Value::as_object) else {
         return String::new();
     };
@@ -762,6 +774,32 @@ fn summary_line(response: Option<&Value>) -> String {
         }
     }
     String::new()
+}
+
+/// 字符串 response 拆解(W9-003 实测 + dsh-shell 渲染契约):DSH 桥的 bash
+/// 回执是纯文本,尾部标记 `[exit code: N]`(非零失败)或 `[killed by signal:
+/// X]`(信号杀死)由 dsh-tool-bash 渲染器追加;**两者皆无 = 干净退出 0**
+/// (dsh-shell `parseExitStatus` 官方语义)。返回 (去标记正文, 终态:
+/// Some(N)/Some(130)/None=干净 0)。正文中段的同形文本不受影响(锚定 \n 前缀
+/// + 整串尾)。
+fn split_string_response(text: &str) -> (&str, Option<i64>) {
+    let trimmed = text.trim_end_matches('\n');
+    if let Some(idx) = trimmed.rfind("\n[killed by signal: ") {
+        return (&trimmed[..idx], Some(130));
+    }
+    if let Some(idx) = trimmed.rfind("\n[exit code: ") {
+        let digits = &trimmed[idx + "\n[exit code: ".len()..];
+        if let Some(n) = digits.strip_suffix(']').and_then(|d| d.parse::<i64>().ok()) {
+            return (&trimmed[..idx], Some(n));
+        }
+    }
+    // 标记独占全串的退化形(正文为空):"\n[exit code: N]" 去掉首 \n 后即头锚
+    if let Some(rest) = trimmed.strip_prefix("[exit code: ") {
+        if let Some(n) = rest.strip_suffix(']').and_then(|d| d.parse::<i64>().ok()) {
+            return ("", Some(n));
+        }
+    }
+    (trimmed, None)
 }
 
 /// 按字符数截断(非字节;承 Python 切片语义)。

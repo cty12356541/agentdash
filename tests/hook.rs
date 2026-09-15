@@ -403,9 +403,13 @@ fn exit_code_variants() {
         (json!({"exit_code": 3}), json!(3)),
         (json!({"interrupted": true, "status": 0}), json!(130)),
         (json!({"is_error": true}), json!(1)),
-        // W4-001 改判:无退出码证据(缺字段/非对象/载荷缺失)记 null,不臆造 0
+        // W4-001 改判:无退出码证据(缺字段/载荷缺失)记 null,不臆造 0
         (json!({"ok": true}), Value::Null),
-        (json!("plain string response"), Value::Null),
+        // W9-003:字符串 response 走 dsh-shell 渲染契约——尾部标记即退出码,
+        // 皆无标记 = 干净退出 0(官方语义,DSH 桥实测)
+        (json!("plain string response"), json!(0)),
+        (json!("boom\n[exit code: 3]"), json!(3)),
+        (json!("\n[killed by signal: SIGKILL]"), json!(130)),
         (Value::Null, Value::Null),
     ];
     for (response, expected) in cases {
@@ -442,8 +446,14 @@ fn summary_line_variants() {
             "boom",
         ),
         (json!({"stdout": "", "status": 0}), ""),
-        // 非对象 response:摘要为空,折叠走不可知 failed 路径
-        (json!("not-a-dict"), "(exit unknown)"),
+        // W9-003:字符串 response 摘要取去尾标记后的正文末行
+        (json!("not-a-dict"), "not-a-dict"),
+        (
+            json!("error: no manifest\n[exit code: 101]"),
+            "error: no manifest",
+        ),
+        // 无标记且正文空:摘要为空(该形制的折叠终态由 dsh_string_* 用例覆盖)
+        (json!(""), ""),
     ];
     for (response, expected) in cases {
         let t = TempDir::new("summary");
@@ -1554,4 +1564,111 @@ fn failure_event_non_gate_command_writes_nothing() {
         "非验证门失败",
     );
     assert!(!events_path(t.path()).exists(), "非验证门零写入");
+}
+
+// ------------------------------------------------------------ 字符串 response(DSH 桥,W9-003 实测)
+
+/// DSH 桥载荷形制:`tool_response` 是纯文本,bash 渲染器对失败追加尾部标记
+/// (dsh-shell 渲染契约:`[exit code: N]` / `[killed by signal: X]`,皆无 =
+/// 干净退出 0)。
+fn dsh_string_post(command: &str, response: &str, cwd: &Path) -> Value {
+    json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "bash",
+        "tool_input": {"command": command},
+        "tool_response": response,
+        "cwd": cwd.to_string_lossy()
+    })
+}
+
+#[test]
+fn dsh_string_success_marker_free_folds_passed() {
+    // 皆无标记 = 干净退出 0(dsh-shell parseExitStatus 官方语义):
+    // deepseek 宿主的绿门禁折叠为真 passed
+    let t = TempDir::new("dshpass");
+    let payload = dsh_string_post(
+        "cargo test --quiet",
+        "running 9 tests\ntest result: ok. 9 passed\n",
+        t.path(),
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "deepseek", "posttooluse"],
+            &in_cwd(&payload, t.path()).to_string(),
+            t.path(),
+        ),
+        "dsh 绿门禁回执",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "deepseek", "stop"],
+            &in_cwd(&stop_payload(), t.path()).to_string(),
+            t.path(),
+        ),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[1]["state"], "passed", "无标记=退出 0,官方契约");
+    assert_eq!(evs[1]["exit"], 0);
+    assert_eq!(evs[1]["detail"], "test result: ok. 9 passed");
+    assert_eq!(evs[1]["host"], "deepseek");
+}
+
+#[test]
+fn dsh_string_failure_marker_folds_failed_with_real_exit() {
+    let t = TempDir::new("dshfail");
+    let payload = dsh_string_post(
+        "cargo test",
+        "error: could not find Cargo.toml\n[exit code: 101]",
+        t.path(),
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "deepseek", "posttooluse"],
+            &in_cwd(&payload, t.path()).to_string(),
+            t.path(),
+        ),
+        "dsh 失败回执",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "deepseek", "stop"],
+            &in_cwd(&stop_payload(), t.path()).to_string(),
+            t.path(),
+        ),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs[1]["state"], "failed");
+    assert_eq!(evs[1]["exit"], 101, "尾部标记即真退出码");
+    assert_eq!(
+        evs[1]["detail"], "error: could not find Cargo.toml",
+        "detail 不含标记行"
+    );
+}
+
+#[test]
+fn dsh_string_killed_by_signal_maps_130() {
+    let t = TempDir::new("dshkill");
+    let payload = dsh_string_post("npm test", "\n[killed by signal: SIGKILL]", t.path());
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "deepseek", "posttooluse"],
+            &in_cwd(&payload, t.path()).to_string(),
+            t.path(),
+        ),
+        "信号杀死回执",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "deepseek", "stop"],
+            &in_cwd(&stop_payload(), t.path()).to_string(),
+            t.path(),
+        ),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs[1]["state"], "failed");
+    assert_eq!(evs[1]["exit"], 130, "信号杀死承 interrupted 的 130 约定");
 }

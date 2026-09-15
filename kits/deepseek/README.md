@@ -45,5 +45,7 @@ DSH 的 hooks 体系是桥接架构(官方 `packages/hooks`):`dsh-hooks-claude-c
 ## 如实标注
 
 - 桥未注册 failure 类事件:claude 形制 `PostToolUse` 回执本就带
-  工具回执(退出码证据在案),gate 折叠不落 `exit unknown`。
+  工具回执。真机实测(2026-09-16):回执为文本,尾部 `[exit code: N]`
+  标记即真退出码、无标记=干净 0(dsh-shell 渲染契约)——绿门禁折叠
+  `passed exit 0`、失败折叠 `failed exit 101`,全真证据。
 - 一键巡检六 kit:`bash scripts/verify-kits.sh`(仓库根)。
