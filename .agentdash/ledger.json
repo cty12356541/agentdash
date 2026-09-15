@@ -1,54 +1,49 @@
 {
   "$schema": "agentdash.tasklog.v1",
-  "wave": "W8",
-  "title": "W8 zcode-kit(公司内部宿主)",
+  "wave": "W9",
+  "title": "W9 dogfood 闭环实测 + 宿主巡检 + cursor-kit(第五宿主)",
   "profile": "sdd",
-  "note": "API 依据 ZCode 官方 configuration-guide/diagnosing-hooks 技能;一致性三支柱与 W7 同构。",
+  "note": "W8-02 遗留待验项收口 + kits 巡检工具化 + cursor-kit;结论一律取自 events.jsonl 实测,不预记。",
   "lanes": [
     {
-      "name": "实现",
+      "name": "dogfood 与巡检",
       "tasks": [
         "01",
-        "02"
+        "02",
+        "03"
       ]
     },
     {
-      "name": "dogfood 与收口",
+      "name": "cursor-kit",
       "tasks": [
-        "03"
+        "04"
       ]
     }
   ],
   "tasks": {
     "01": {
-      "label": "zcode-kit(安装器+hooks 配置)",
+      "label": "ZCode 重开会话闭环实测",
       "state": "done",
-      "done_at": "2026-09-15T22:58:51+08:00",
-      "note": "W8-001:安装器只动 hooks 键+enabled 置位+模板;README 矩阵加行"
+      "done_at": "2026-09-15T23:21:44+08:00",
+      "note": "重开会话后 events.jsonl 实测落盘 host=zcode 的 tool 与 gate 事件;根因:钩子在触发但 agentdash 不在 PATH(cargo install --path . 前静默失效),装后闭环"
     },
     "02": {
-      "label": "本仓实装 dogfood(hooks 真实生效)",
+      "label": "scripts/verify-kits.sh 一键巡检",
       "state": "done",
-      "done_at": "2026-09-15T22:58:51+08:00",
-      "note": "本仓实装:AGENTS.md 创建+config.json 就位;本会话早于配置,重开生效(待验)"
+      "done_at": "2026-09-15T23:21:44+08:00",
+      "note": "四 kit 安装/幂等/保留/事件落盘断言全过;jq 缺失降级 SKIP 与安装器语义对齐;README 宿主矩阵补一键巡检说明"
     },
     "03": {
-      "label": "0.7.0 收口+报告+tag",
+      "label": "发现:zcode/cursor 载荷均无退出码证据(gate 折叠恒 exit unknown)",
+      "state": "pending",
+      "note": "实测 zcode tool_response 有 stdout 但无 status/exit_code/exit/is_error;cursor afterShellExecution 官方词表仅 command/output/duration(有 postToolUseFailure 但无 command 无法归因 gate)。绿门禁折叠为 failed(exit unknown);候选:双事件配对出终态。另:复合命令多门禁只登记按序首中一 gate(设计如此)"
+    },
+    "04": {
+      "label": "cursor-kit(安装器+hooks+载荷归一)",
       "state": "done",
-      "done_at": "2026-09-15T22:58:51+08:00",
-      "note": "0.7.0 三处+marketplace+tag v0.7.0"
+      "done_at": "2026-09-15T23:43:31+08:00",
+      "note": "W9-004:.cursor/hooks.json(version 1,只动 hooks 键)+ afterShellExecution 归一 bash 视图 + subagent_type 透传;AGENTS.md 原生读取;hook 测试 38 全过,巡检五 kit 106 断言全过;README 矩阵加行"
     }
   },
-  "barriers": [
-    {
-      "id": "B1",
-      "after": [
-        "01",
-        "02"
-      ],
-      "unlocks": [
-        "03"
-      ]
-    }
-  ]
+  "barriers": []
 }
