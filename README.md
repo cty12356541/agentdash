@@ -27,6 +27,19 @@ hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo ins
 或从 GitHub Releases 下载放入 PATH,Windows release 资产后续手动挂)。预构建
 分发策略见 `bin/README.md`,集成包细节见 `kits/claude-code/README.md`。
 
+### 宿主矩阵(多工具混用,0.6.0 起)
+
+| 宿主 | kit | 机制 | 在跑 agent 面板 |
+|---|---|---|---|
+| Claude Code | `kits/claude-code`(插件市场) | hooks.json 四事件 | ✓ |
+| Codex CLI | `kits/codex` | `.codex/hooks.json`(repo 级;需 trust + `/hooks` 一次性审查) | ✓ |
+| opencode | `kits/opencode` | `.opencode/plugins/agentdash.js`(Bun 插件) | 待宿主子代理事件 |
+
+**一致性保证**:三套 kit 写同一 `<repo>/.agentdash/`(同文件、同锁、同事件词表),
+事件带 `host` 字段归因,面板在跑行显示 `▶ <who> [host]`;harness 约定单源
+`kits/shared/AGENTDASH.md`,各安装器以标记段幂等合入宿主指令文件
+(Claude Code → `CLAUDE.md`,codex / opencode → `AGENTS.md`)——换工具不换契约。
+
 ### claude-code 集成包(可选)
 
 把 Claude Code 会话事件接进 agentdash:

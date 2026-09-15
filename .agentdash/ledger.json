@@ -30,27 +30,39 @@
   "tasks": {
     "01": {
       "label": "--host 旗标+subagentstart+agent 表 host",
-      "state": "active"
+      "state": "done",
+      "done_at": "2026-09-15T22:45:00+08:00",
+      "note": "W7-001:--host 旗标+subagentstart+agent 表归属,6 新测试"
     },
     "02": {
       "label": "共享 AGENTDASH.md 单源",
-      "state": "pending"
+      "state": "done",
+      "done_at": "2026-09-15T22:45:00+08:00",
+      "note": "W7-002:AGENTDASH.md 标记段单源"
     },
     "03": {
       "label": "codex-kit(hooks.json+安装器)",
-      "state": "pending"
+      "state": "done",
+      "done_at": "2026-09-15T22:45:00+08:00",
+      "note": "W7-003:codex-kit 保守安装器+README"
     },
     "04": {
       "label": "opencode-kit(插件+安装器)",
-      "state": "pending"
+      "state": "done",
+      "done_at": "2026-09-15T22:45:00+08:00",
+      "note": "W7-004:opencode 插件(Bun.spawn 降级铁律)+安装器"
     },
     "05": {
       "label": "claude-code kit 归属补齐",
-      "state": "pending"
+      "state": "done",
+      "done_at": "2026-09-15T22:45:00+08:00",
+      "note": "W7-005:四钩子 --host claude+CLAUDE.md 合入"
     },
     "06": {
       "label": "双宿主交错 dogfood+0.6.0 收口",
-      "state": "pending"
+      "state": "done",
+      "done_at": "2026-09-15T22:45:00+08:00",
+      "note": "双宿主交错 dogfood 实证+0.6.0+tag v0.6.0"
     }
   },
   "barriers": [

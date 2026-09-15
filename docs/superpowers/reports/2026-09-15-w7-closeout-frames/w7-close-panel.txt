@@ -1,0 +1,24 @@
+agentdash
+✓6 ▶0 ·0 ⚑0 ⊘0 · 0 agents · 09-15T22:47
+════════════════════════════════════════════════════════════════
+在跑 / 健康
+· 无活跃
+✓ cargo-clippy · clean
+✓ cargo-test · 205 passed
+────────────────────────────────────────────────────────────────
+轨迹 · 1 里程碑
+  W7 W7 多宿主 kit 与跨宿主一致性 ▓▓▓▓▓▓▓▓▓▓ 6/6 done
+  —
+────────────────────────────────────────────────────────────────
+车道 / 任务
+批一-内核地基
+✓ 01 --host 旗标+subagentstart+agent 表 host · W7-001:--host 旗标+subagentstart+agent 表归属,6 新测试
+批二-kit 全家
+✓ 02 共享 AGENTDASH.md 单源 · W7-002:AGENTDASH.md 标记段单源
+✓ 03 codex-kit(hooks.json+安装器) · W7-003:codex-kit 保守安装器+README
+✓ 04 opencode-kit(插件+安装器) · W7-004:opencode 插件(Bun.spawn 降级铁律)+安装器
+✓ 05 claude-code kit 归属补齐 · W7-005:四钩子 --host claude+CLAUDE.md 合入
+收口
+✓ 06 双宿主交错 dogfood+0.6.0 收口 · 双宿主交错 dogfood 实证+0.6.0+tag v0.6.0
+  ⇕ 01 → 02,03,04,05
+  ⇕ 02,03,04,05 → 06

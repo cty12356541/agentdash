@@ -768,8 +768,8 @@ fn hooks_json_registers_four_events_with_binary_command() {
     for hook_entry in blocks[0]["hooks"].as_array().expect("hook 列表") {
         let cmd = hook_entry["command"].as_str().expect("command");
         assert!(
-            cmd.contains("agentdash hook pretooluse"),
-            "PreToolUse 非二进制直调: {cmd}"
+            cmd.contains("agentdash hook --host claude pretooluse"),
+            "PreToolUse 非二进制直调或缺宿主归属: {cmd}"
         );
         assert!(
             cmd.ends_with("|| true"),

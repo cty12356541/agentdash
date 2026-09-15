@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="768" viewBox="0 0 256 768" font-family="Menlo, Consolas, 'PingFang SC', monospace" font-size="13">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#616161"/></marker></defs>
+<rect width="256" height="768" fill="#FAFAF7"/>
+<text x="8" y="18" fill="#263238">agentdash · DAG</text>
+<line x1="0" y1="36" x2="256" y2="36" stroke="#CFCFCF"/>
+<g fill="none" stroke="#616161" stroke-width="1.5">
+<path d="M 104,240 V 276 H 96 V 288" marker-end="url(#a)"/>
+<path d="M 104,120 V 276 H 96 V 288" marker-end="url(#a)"/>
+<path d="M 96,360 V 396 H 104 V 408" marker-end="url(#a)"/>
+<path d="M 104,120 V 396 H 104 V 408" marker-end="url(#a)"/>
+<path d="M 104,480 V 516 H 96 V 528" marker-end="url(#a)"/>
+<path d="M 104,120 V 516 H 96 V 528" marker-end="url(#a)"/>
+<path d="M 104,120 V 156 H 104 V 168" marker-end="url(#a)"/>
+<path d="M 104,240 V 636 H 120 V 648" marker-end="url(#a)"/>
+<path d="M 96,360 V 636 H 120 V 648" marker-end="url(#a)"/>
+<path d="M 104,480 V 636 H 120 V 648" marker-end="url(#a)"/>
+<path d="M 96,600 V 636 H 120 V 648" marker-end="url(#a)"/>
+</g>
+<rect x="0" y="48" width="216" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="16" y="89" fill="#2E7D32">✓ 01 --host 旗标+subage</text>
+<rect x="0" y="168" width="216" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="16" y="209" fill="#2E7D32">✓ 02 共享 AGENTDASH.md </text>
+<rect x="0" y="288" width="200" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="16" y="329" fill="#2E7D32">✓ 03 codex-kit(hooks.</text>
+<rect x="0" y="408" width="216" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="16" y="449" fill="#2E7D32">✓ 04 opencode-kit(插件+</text>
+<rect x="0" y="528" width="200" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="16" y="569" fill="#2E7D32">✓ 05 claude-code kit </text>
+<rect x="0" y="648" width="240" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="16" y="689" fill="#2E7D32">✓ 06 双宿主交错 dogfood+0.</text>
+<line x1="0" y1="744" x2="256" y2="744" stroke="#CFCFCF"/>
+</svg>
+
