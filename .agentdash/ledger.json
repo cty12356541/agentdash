@@ -1,73 +1,51 @@
 {
   "$schema": "agentdash.tasklog.v1",
-  "wave": "W9",
-  "title": "W9 dogfood 闭环实测 + 宿主扩展(cursor-kit 已落 + deepseek 规划)+ 巡检 + CLI 双语",
+  "wave": "W10",
+  "title": "W10 候选:0.8 产品化(多仓聚合 + digest + 自定义 gate + stats)",
   "profile": "sdd",
-  "note": "W8-02 遗留待验项收口 + kits 巡检工具化 + cursor-kit;结论一律取自 events.jsonl 实测,不预记。",
+  "note": "定位评估已入册(docs/superpowers/reports/2026-09-16-w9-product-review.md):定位升级为「跨宿主 agent 工作契约及其仪表盘」;0.8 主打 01+02,03-05 视进度进退。W9 全清(6/6),余量待验:zcode 失败配对重开复核、cursor 端到端待 cursor-agent login。",
   "lanes": [
     {
-      "name": "dogfood 与巡检",
+      "name": "0.8 候选",
       "tasks": [
         "01",
-        "02",
-        "03"
+        "02"
       ]
     },
     {
-      "name": "cursor-kit",
+      "name": "候选扩展",
       "tasks": [
-        "04"
-      ]
-    },
-    {
-      "name": "CLI 双语",
-      "tasks": [
+        "03",
+        "04",
         "05"
-      ]
-    },
-    {
-      "name": "deepseek-kit(规划)",
-      "tasks": [
-        "06"
       ]
     }
   ],
   "tasks": {
     "01": {
-      "label": "ZCode 重开会话闭环实测",
-      "state": "done",
-      "done_at": "2026-09-15T23:21:44+08:00",
-      "note": "重开会话后 events.jsonl 实测落盘 host=zcode 的 tool 与 gate 事件;根因:钩子在触发但 agentdash 不在 PATH(cargo install --path . 前静默失效),装后闭环"
+      "label": "多仓聚合:render panel 支持 PATH glob",
+      "state": "pending",
+      "note": "render panel ~/projects/*/ 一屏看全部仓的在跑/失败/阻塞;纯渲染层,数据已就位;0.8 主打"
     },
     "02": {
-      "label": "scripts/verify-kits.sh 一键巡检",
-      "state": "done",
-      "done_at": "2026-09-15T23:21:44+08:00",
-      "note": "四 kit 安装/幂等/保留/事件落盘断言全过;jq 缺失降级 SKIP 与安装器语义对齐;README 宿主矩阵补一键巡检说明"
+      "label": "离场摘要:render digest",
+      "state": "pending",
+      "note": "你不在时发生了什么——折叠失败的门/done 任务/亮 ? 物证;配合 cron 即夜间监控;0.8 主打"
     },
     "03": {
-      "label": "发现:zcode/cursor 载荷均无退出码证据(gate 折叠恒 exit unknown)",
-      "state": "done",
-      "done_at": "2026-09-16T00:36:42+08:00",
-      "note": "失败侧修复:posttoolusefailure 事件臂(hook.rs)与在途 gate 暂存槽配对顶替,失败落真证据(载荷码优先,缺码 1,中断 130;无在途槽补 running+暂存对);zcode/cursor 均注册 Failure 钩子。字符串 response 新证据源:DSH 桥实测 tool_response 为文本,dsh-shell 渲染契约尾部标记 [exit code: N]/[killed by signal: X]/皆无=0(官方 parseExitStatus),hook.rs 已解析——deepseek 实测绿门禁 passed exit 0、失败 exit 101,全真证据。绿侧 zcode/cursor 维持 unknown(无成功语义官方明证,不臆造);zcode 失败路径重开复核;cursor 待 cursor-agent login 后实测。另:复合命令多门禁只登记按序首中一 gate(设计如此)"
+      "label": "用户自定义 gate(.agentdash/config 声明词表)",
+      "state": "pending",
+      "note": "验证门契约从五个硬编码词(cargo/go/npm/gh)开放为用户可声明词表/正则;hook 与 render 双侧读配置"
     },
     "04": {
-      "label": "cursor-kit(安装器+hooks+载荷归一)",
-      "state": "done",
-      "done_at": "2026-09-15T23:43:31+08:00",
-      "note": "W9-004:.cursor/hooks.json(version 1,只动 hooks 键)+ afterShellExecution 归一 bash 视图 + subagent_type 透传;AGENTS.md 原生读取;hook 测试 38 全过,巡检五 kit 106 断言全过;README 矩阵加行"
+      "label": "agentstats 观测面(宿主使用率/gate 通过率/任务周转)",
+      "state": "pending",
+      "note": "events.jsonl 已躺着的数据,低成本观测面;向契约标准叙事靠近"
     },
     "05": {
-      "label": "CLI 中英双语(缺省中文,AGENTDASH_LANG 切换)",
-      "state": "done",
-      "done_at": "2026-09-16T00:09:19+08:00",
-      "note": "W9-005:lang.rs 双语文案表;--help/参数错误全走 lang,watch 错误改结构化枚举(#[path] 测试 crate 不牵 lang);缺省 zh,en/en-US/en_US 切英文;帮助尾部互附切换提示;测试 214 全过(含 4 语言用例);README 补 CLI 语言段"
-    },
-    "06": {
-      "label": "deepseek-kit(第六宿主:DeepSeek Harness,桥接形制)",
-      "state": "done",
-      "done_at": "2026-09-16T00:36:42+08:00",
-      "note": "kits/deepseek 落地:hooks.json(Claude 形制五钩子含 SubagentStart,--host deepseek)+ install.sh(AGENTS.md 合入+.deepseek/agentdash-hooks.json 独占文件写入+cordis.yml 挂载指引)+ README;hook.rs 零改动(桥消费 claude 命令钩子子集);巡检六 kit 130 断言全过。真机端到端已通(2026-09-16,headless profile + dsh plugin add 桥包 + --patch insert 挂载 + 单发):tool/gate 事件落盘,绿门禁 passed exit 0、失败 failed exit 101 全真证据;挂载要点=桥依赖需 dsh plugin add 进 profile,configPath 用绝对路径,DSH 进程级启动读取"
+      "label": "契约文档化:schema/事件词表公开版本化",
+      "state": "pending",
+      "note": ".agentdash/ 契约(事件词表/ledger/门语义)文档化版本化,第三方宿主可照写——防御性最强的一步(对标 .editorconfig)"
     }
   },
   "barriers": []
