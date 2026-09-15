@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterShellExecution": [
+      {"command": "agentdash hook --host cursor posttooluse || true"}
+    ],
+    "subagentStart": [
+      {"command": "agentdash hook --host cursor subagentstart || true"}
+    ],
+    "subagentStop": [
+      {"command": "agentdash hook --host cursor subagentstop || true"}
+    ],
+    "stop": [
+      {"command": "agentdash hook --host cursor stop || true"}
+    ]
+  }
+}

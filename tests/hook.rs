@@ -1155,3 +1155,168 @@ fn subagentstart_maps_to_dispatched_with_host() {
     assert_eq!(evs[0]["who"], "explore", "who 取 agent_type");
     assert_eq!(evs[0]["host"], "codex");
 }
+
+// ------------------------------------------------------------ Cursor 载荷词表(W9)
+
+/// Cursor `afterShellExecution` 载荷形制:顶层 `command`+`output`,无
+/// `tool_name`/`tool_input`;`hook_event_name` 保留宿主原名(官方 docs §Hooks)。
+fn cursor_shell_payload(command: &str, output: &str, cwd: &Path) -> Value {
+    json!({
+        "conversation_id": "c-w9",
+        "hook_event_name": "afterShellExecution",
+        "command": command,
+        "output": output,
+        "workspace_roots": [cwd.to_string_lossy()],
+        "cwd": cwd.to_string_lossy()
+    })
+}
+
+#[test]
+fn cursor_shell_gate_runs_then_folds_failed_exit_unknown() {
+    // afterShellExecution 载荷无退出码证据:running 照发,折叠按铁律
+    // failed + `(exit unknown)`——detail 里留 stdout 末行物证,不虚报通过
+    let t = TempDir::new("cursorgate");
+    let payload = cursor_shell_payload(
+        "cargo test --quiet",
+        "test result: ok. 9 passed\n",
+        t.path(),
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "cursor", "posttooluse"],
+            &in_cwd(&payload, t.path()).to_string(),
+            t.path(),
+        ),
+        "cursor gate posttooluse",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "cursor", "stop"],
+            &in_cwd(&stop_payload(), t.path()).to_string(),
+            t.path(),
+        ),
+        "cursor stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2, "running + 折叠恰两行");
+    assert_eq!(evs[0]["kind"], "gate");
+    assert_eq!(evs[0]["gate"], "cargo-test");
+    assert_eq!(evs[0]["state"], "running");
+    assert_eq!(evs[0]["host"], "cursor");
+    assert_eq!(evs[1]["state"], "failed", "无退出证据不得虚报 passed");
+    assert_eq!(evs[1]["exit"], Value::Null, "exit 落 null 不臆造 0");
+    assert_eq!(
+        evs[1]["detail"], "test result: ok. 9 passed (exit unknown)",
+        "detail 留 stdout 末行 + exit unknown 尾注"
+    );
+}
+
+#[test]
+fn cursor_shell_non_gate_is_bash_tool_event() {
+    let t = TempDir::new("cursortool");
+    let payload = cursor_shell_payload("echo 仪表盘", "仪表盘\n", t.path());
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "cursor", "posttooluse"],
+            &in_cwd(&payload, t.path()).to_string(),
+            t.path(),
+        ),
+        "cursor 非 gate 回放",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["kind"], "tool");
+    assert_eq!(evs[0]["tool"], "bash", "归一成 bash 工具行");
+    assert_eq!(evs[0]["phase"], "end");
+    assert_eq!(evs[0]["summary"], "echo 仪表盘");
+    assert_eq!(evs[0]["exit"], Value::Null);
+    assert_eq!(evs[0]["host"], "cursor");
+}
+
+#[test]
+fn cursor_shape_requires_host_event_name_marker() {
+    // 防御:顶层 command+output 但 hook_event_name 非 afterShellExecution
+    // (亦无 tool_name)——不得凭形状误撞归一,静默零写入
+    let t = TempDir::new("cursorguard");
+    let payload = json!({
+        "hook_event_name": "PostToolUse",
+        "command": "cargo test",
+        "output": "ok",
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &payload, t.path()),
+        "形状误撞防御",
+    );
+    assert!(!events_path(t.path()).exists(), "非 Cursor 词表不得落盘");
+}
+
+#[test]
+fn subagentstop_who_falls_back_to_subagent_type() {
+    // Cursor SubagentStop 载荷带 `subagent_type`(官方 docs §Hooks):agent_name
+    // 缺席时回退取之;Claude 系 agent_name 优先序不变
+    let t = TempDir::new("cursorsubstop");
+    let payload = json!({
+        "hook_event_name": "SubagentStop",
+        "subagent_type": "generalPurpose",
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "cursor", "subagentstop"],
+            &payload.to_string(),
+            t.path(),
+        ),
+        "cursor subagentstop 回放",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["kind"], "agent");
+    assert_eq!(evs[0]["event"], "completed");
+    assert_eq!(evs[0]["who"], "generalPurpose");
+    assert_eq!(evs[0]["host"], "cursor");
+}
+
+#[test]
+fn cursor_hooks_template_registers_four_events() {
+    let path = Path::new(MANIFEST).join("kits/cursor/hooks.template.json");
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("hooks.template.json readable"))
+            .expect("hooks.template.json 合法 JSON");
+    assert_eq!(manifest["version"], 1, "Cursor hooks schema version 1");
+    let hooks = manifest["hooks"].as_object().expect("hooks 对象");
+    assert_eq!(hooks.len(), 4, "恰注册四事件");
+    for event in [
+        "afterShellExecution",
+        "subagentStart",
+        "subagentStop",
+        "stop",
+    ] {
+        let blocks = hooks[event]
+            .as_array()
+            .unwrap_or_else(|| panic!("{event} 无注册块"));
+        assert_eq!(blocks.len(), 1, "{event} 恰一块");
+        // Cursor 形制:定义直接平铺(无 Claude 系内层 hooks 数组)
+        assert!(
+            blocks[0].get("hooks").is_none(),
+            "{event} 应为平铺定义,非 Claude 形制"
+        );
+        let cmd = blocks[0]["command"].as_str().expect("command");
+        assert!(
+            cmd.contains("agentdash hook --host cursor"),
+            "{event} 非二进制直调或缺宿主归属: {cmd}"
+        );
+        assert!(
+            cmd.ends_with("|| true"),
+            "{event} 缺 || true 静默保险: {cmd}"
+        );
+    }
+    // afterShellExecution 归一为 agentdash posttooluse;stop/subagent* 同名直映
+    assert!(
+        hooks["afterShellExecution"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains(" posttooluse"),
+        "afterShellExecution 应映射 posttooluse"
+    );
+}

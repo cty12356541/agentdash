@@ -35,11 +35,22 @@ hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo ins
 | Codex CLI | `kits/codex` | `.codex/hooks.json`(repo 级;需 trust + `/hooks` 一次性审查) | ✓ |
 | opencode | `kits/opencode` | `.opencode/plugins/agentdash.js`(Bun 插件) | 待宿主子代理事件 |
 | ZCode(公司内部) | `kits/zcode` | `.zcode/config.json` → hooks(`enabled:true`,安装器置位;会话启动加载) | 待宿主子代理事件 |
+| Cursor | `kits/cursor` | `.cursor/hooks.json`(`version:1`;项目级需信任工作区) | ✓(`subagentStart/Stop` 原生) |
 
-**一致性保证**:四套 kit 写同一 `<repo>/.agentdash/`(同文件、同锁、同事件词表),
+**一致性保证**:五套 kit 写同一 `<repo>/.agentdash/`(同文件、同锁、同事件词表),
 事件带 `host` 字段归因,面板在跑行显示 `▶ <who> [host]`;harness 约定单源
 `kits/shared/AGENTDASH.md`,各安装器以标记段幂等合入宿主指令文件
-(Claude Code → `CLAUDE.md`,codex / opencode → `AGENTS.md`)——换工具不换契约。
+(Claude Code → `CLAUDE.md`,codex / opencode / zcode / cursor → `AGENTS.md`)
+——换工具不换契约。Cursor 载荷词表(`afterShellExecution` 顶层
+`command`+`output`)由 hook 二进制归一成 bash 视图;zcode/cursor 载荷均无
+退出码证据,gate 折叠按 `failed (exit unknown)` 落盘(不虚报通过)。
+
+**一键巡检**:`bash scripts/verify-kits.sh` 在临时目录对五 kit 各跑一遍安装
+体验证(全新安装产物 → 已装钩子命令端到端事件落盘与 host 归属 → 二次安装
+幂等 → 既有内容保留:用户键/他人钩子/损坏 JSON 备份重建/粘行防护);
+`--keep` 保留现场供人工检查。jq 缺失时 JSON 类断言自动降级 SKIP,与安装器
+的无-jq 降级语义一致。改动 `src/` 后先 `cargo install --path .` 重装再巡检
+(巡检的是 PATH 上已装二进制)。
 
 ### claude-code 集成包(可选)
 

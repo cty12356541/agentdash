@@ -4,7 +4,9 @@
 //! - posttooluse:bash 命中验证门(cargo test/clippy/fmt、go test、npm test、gh pr checks)
 //!   → `gate` running 行 + 退出码/一行摘要暂存 `pending_gate.json` **槽位数组**
 //!   (同刻多个在途 gate 各占一槽,Stop 折叠须经落盘交接;旧单对象格式读入兼容);
-//!   否则 `tool` phase=end + exit + summary
+//!   否则 `tool` phase=end + exit + summary。载荷词表两家:Claude/ZCode 系
+//!   `tool_name`+`tool_input`/`tool_response`;Cursor 系 `afterShellExecution`
+//!   顶层 `command`+`output`(W9,归一成 bash 视图)
 //! - stop:把在途 gate 逐槽折叠为各自 passed/failed(exit + detail 摘要行),消费后删除暂存;
 //!   退出码不可知(暂存 exit 为 `null`)记 `failed` + detail 尾注 `(exit unknown)`——
 //!   不虚报通过(W4-001 D1)
@@ -127,8 +129,18 @@ fn events_dir(payload: &Map<String, Value>) -> PathBuf {
     base.join(".agentdash")
 }
 
-/// PostToolUse:gate 提取或 tool 行。
+/// PostToolUse:gate 提取或 tool 行。载荷词表两家:Claude/ZCode 系(`tool_name`
+/// + `tool_input`/`tool_response`)与 Cursor 系(`afterShellExecution` 顶层
+///   `command`+`output`,W9),后者归一成 bash 视图走同一条路。
 fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
+    let dir = events_dir(payload);
+    // Cursor 宿主:`afterShellExecution` 无 tool_name,顶层 command 即 shell
+    // 命令、output 即合并输出;合成 stdout 视图,退出码证据缺失恒 None(不臆造)。
+    if let Some((command, output)) = cursor_shell_payload(payload) {
+        let view = json!({ "stdout": output });
+        bash_receipt(&dir, &command, Some(&view), host);
+        return;
+    }
     let Some(tool) = payload
         .get("tool_name")
         .and_then(Value::as_str)
@@ -139,35 +151,13 @@ fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
     let tool = tool.to_ascii_lowercase();
     let input = payload.get("tool_input").and_then(Value::as_object);
     let response = payload.get("tool_response");
-    let dir = events_dir(payload);
 
     if tool == "bash" {
         let command = input
             .and_then(|i| i.get("command"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if let Some(gate) = gate_name(command) {
-            // running 行与暂存同临界区:保证 Stop 折叠读到的暂存与 running 行配对
-            with_lock(&dir, || {
-                append_line(
-                    &dir,
-                    &stamp(
-                        json!({ "ts": ts_now(), "kind": "gate", "gate": gate, "state": "running" }),
-                        host,
-                    ),
-                );
-                append_pending_slot(
-                    &dir,
-                    &json!({
-                        "gate": gate,
-                        "exit": exit_code(response),
-                        "detail": summary_line(response),
-                    }),
-                );
-            });
-            return;
-        }
-        append_tool_event(&dir, &tool, response, command, host);
+        bash_receipt(&dir, command, response, host);
         return;
     }
     let summary = input
@@ -182,6 +172,52 @@ fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
         })
         .unwrap_or_default();
     append_tool_event(&dir, &tool, response, summary, host);
+}
+
+/// Cursor `afterShellExecution` 载荷识别(W9):CLI 事件名归一为 posttooluse 后,
+/// 载荷 `hook_event_name` 保留宿主原名,据此 + 顶层非空 `command` 判定——不靠
+/// "顶层恰好有 command"的宽松形状,避免与未来其他宿主的同名词段误撞。
+fn cursor_shell_payload(payload: &Map<String, Value>) -> Option<(String, String)> {
+    if payload.get("hook_event_name").and_then(Value::as_str) != Some("afterShellExecution") {
+        return None;
+    }
+    let command = payload.get("command").and_then(Value::as_str)?;
+    if command.trim().is_empty() {
+        return None;
+    }
+    let output = payload
+        .get("output")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Some((command.to_owned(), output.to_owned()))
+}
+
+/// bash 工具回执统一入口:命中验证门 → gate running 行 + 暂存槽位(同临界区
+/// 配对);否则 tool 行(摘要把命令本身交回)。退出码/摘要证据统一由 `response`
+/// 视图提取,Cursor 合成视图缺失退出码即自然落 None。
+fn bash_receipt(dir: &Path, command: &str, response: Option<&Value>, host: Option<&str>) {
+    if let Some(gate) = gate_name(command) {
+        // running 行与暂存同临界区:保证 Stop 折叠读到的暂存与 running 行配对
+        with_lock(dir, || {
+            append_line(
+                dir,
+                &stamp(
+                    json!({ "ts": ts_now(), "kind": "gate", "gate": gate, "state": "running" }),
+                    host,
+                ),
+            );
+            append_pending_slot(
+                dir,
+                &json!({
+                    "gate": gate,
+                    "exit": exit_code(response),
+                    "detail": summary_line(response),
+                }),
+            );
+        });
+        return;
+    }
+    append_tool_event(dir, "bash", response, command, host);
 }
 
 /// PreToolUse:子代理派发工具(`Task`/`Agent` 新旧名)→ `agent` dispatched 行,
@@ -312,14 +348,17 @@ fn on_stop(payload: &Map<String, Value>, host: Option<&str>) {
     });
 }
 
-/// `SubagentStop`:`agent` completed 行;载荷带 `agent_name`/`who` 则透传。
+/// `SubagentStop`:`agent` completed 行;载荷带 `agent_name`/`subagent_type`/`who`
+/// 则透传(第三键为 Cursor 宿主词表,W9;前键缺席时回退,老宿主不受影响)。
 fn on_subagent_stop(payload: &Map<String, Value>, host: Option<&str>) {
-    let who = ["agent_name", "who"].iter().find_map(|key| {
-        payload
-            .get(*key)
-            .and_then(Value::as_str)
-            .filter(|w| !w.is_empty())
-    });
+    let who = ["agent_name", "subagent_type", "who"]
+        .iter()
+        .find_map(|key| {
+            payload
+                .get(*key)
+                .and_then(Value::as_str)
+                .filter(|w| !w.is_empty())
+        });
     let dir = events_dir(payload);
     let mut event = json!({ "ts": ts_now(), "kind": "agent", "event": "completed" });
     if let Some(who) = who {
