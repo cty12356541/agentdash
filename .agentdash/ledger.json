@@ -5,17 +5,60 @@
   "profile": "sdd",
   "note": "W5 开工换血。速度行注:仅会话期 events.jsonl 在场且 ≥2 条不同 ts 才点亮,新 clone 属预期降级。物证 ? 注:正常来源应为写回 d 键自动盖章;dogfood 回填样例会在台账注明。",
   "lanes": [
-    {"name": "批一-快速清偿", "tasks": ["01", "02"]},
-    {"name": "批二-信任锚", "tasks": ["03"]},
-    {"name": "收口", "tasks": ["04"]}
+    {
+      "name": "批一-快速清偿",
+      "tasks": [
+        "01",
+        "02"
+      ]
+    },
+    {
+      "name": "批二-信任锚",
+      "tasks": [
+        "03"
+      ]
+    },
+    {
+      "name": "收口",
+      "tasks": [
+        "04"
+      ]
+    }
   ],
   "tasks": {
-    "01": {"label": "MSRV 文档修正(≥1.88)", "state": "active"},
-    "02": {"label": "clock_slice 收敛", "state": "pending"},
-    "03": {"label": "done_at 契约+写回盖章+? 物证标记", "state": "pending"},
-    "04": {"label": "0.4.0 收口+帧证据+tag", "state": "pending"}
+    "01": {
+      "label": "MSRV 文档修正(≥1.88)",
+      "state": "done",
+      "done_at": "2026-09-15T20:25:56+08:00"
+    },
+    "02": {
+      "label": "clock_slice 收敛",
+      "state": "done",
+      "done_at": "2026-09-15T20:25:56+08:00"
+    },
+    "03": {
+      "label": "done_at 契约+写回盖章+? 物证标记",
+      "state": "done",
+      "done_at": "2026-09-15T20:25:56+08:00"
+    },
+    "04": {
+      "label": "0.4.0 收口+帧证据+tag",
+      "state": "done",
+      "done_at": "2026-09-15T20:26:47+08:00",
+      "note": "0.4.0 三处版本 + 物证环双向实证 + tag v0.4.0"
+    }
   },
   "barriers": [
-    {"id": "B1", "after": ["01", "02", "03"], "unlocks": ["04"]}
+    {
+      "id": "B1",
+      "after": [
+        "01",
+        "02",
+        "03"
+      ],
+      "unlocks": [
+        "04"
+      ]
+    }
   ]
 }
