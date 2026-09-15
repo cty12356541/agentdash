@@ -61,15 +61,18 @@
     },
     "05": {
       "label": "解析器 property 测试(proptest dev-dep)",
-      "state": "pending"
+      "state": "done",
+      "note": "W4-005:6 性质×256 案例,Windows 民法互逆随 CI"
     },
     "06": {
       "label": "Release workflow(tag 触发三平台)",
-      "state": "pending"
+      "state": "done",
+      "note": "W4-006:tag 触发四 triple,文档-资产口径对齐 msvc"
     },
     "07": {
       "label": "0.3.0 收口+帧证据+tag",
-      "state": "pending"
+      "state": "done",
+      "note": "0.3.0 三处版本 + 帧证据入册 + tag v0.3.0"
     }
   },
   "barriers": [
