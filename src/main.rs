@@ -50,8 +50,9 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("hook") => {
-            // 集成包钩子:agentdash hook <event>,payload 从 stdin 读(W1-008b)
-            hook::run(args.get(1).map(String::as_str))
+            // 集成包钩子:agentdash hook [--host <name>] <event>,payload 从
+            // stdin 读(W1-008b;--host 多宿主归属,W7-001)
+            hook::run(&args[1..])
         }
         Some("render") => cmd_render(&args[1..]),
         Some("oneline") => cmd_oneline(&args[1..]),

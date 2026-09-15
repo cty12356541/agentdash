@@ -42,10 +42,15 @@ fn task(id: &str, label: &str, lane: &str) -> TaskView {
 }
 
 fn agent(who: &str, task: Option<&str>, since: &str) -> AgentView {
+    agent_host(who, task, since, None)
+}
+
+fn agent_host(who: &str, task: Option<&str>, since: &str, host: Option<&str>) -> AgentView {
     AgentView {
         who: who.into(),
         task: task.map(str::to_owned),
         since: since.into(),
+        host: host.map(str::to_owned),
     }
 }
 
@@ -1229,4 +1234,21 @@ fn unattested_done_marks_question_only_in_witness_window() {
     dash.events_present = false;
     let out = strip_ansi(&render::render_panel(&dash, 64));
     assert!(!out.contains("T1 x ?"), "无事件窗不打 ?: {out}");
+}
+
+#[test]
+fn agent_line_shows_host_tag() {
+    // W7-001:在跑行显示宿主归属 [host]
+    let mut dash = dash_with(vec![]);
+    dash.agents = vec![agent_host(
+        "explore",
+        Some("摸底"),
+        "2026-09-13T08:30:00Z",
+        Some("codex"),
+    )];
+    let out = strip_ansi(&render::render_panel(&dash, 64));
+    assert!(
+        out.contains("▶ explore [codex] · 摸底"),
+        "在跑行应含宿主标: {out}"
+    );
 }

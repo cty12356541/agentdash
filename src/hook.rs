@@ -46,13 +46,26 @@ const LOCK_SLEEP: Duration = Duration::from_millis(2);
 /// 是毫秒级单行写入),可摘除自愈——否则此后每个 hook 都要白等 `LOCK_MAX_WAIT`。
 const LOCK_STALE: Duration = Duration::from_secs(10);
 
-/// hook 子命令入口。事件名来自 CLI 参数(如 `agentdash hook posttooluse`),
-/// 缺省时回退载荷 `hook_event_name`(老版本宿主防御;载荷只有 `tool_name` 时视为
-/// PostToolUse)。恒退 0。
+/// hook 子命令入口(W7-001):`agentdash hook [--host <name>] <event>`——旗标
+/// 与事件名顺序容忍;`host` 显式传入时盖到本进程产出的每条事件上(多宿主
+/// 归属,未传则字段省略,向后兼容)。恒退 0。
 #[must_use]
-pub fn run(event: Option<&str>) -> ExitCode {
-    let mut bytes = Vec::new();
+pub fn run(rest: &[String]) -> ExitCode {
+    let mut host: Option<String> = None;
+    let mut event: Option<String> = None;
+    let mut iter = rest.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--host" {
+            host = iter.next().cloned().filter(|h| !h.trim().is_empty());
+        } else if let Some(value) = arg.strip_prefix("--host=") {
+            host = Some(value.to_owned()).filter(|h| !h.trim().is_empty());
+        } else if event.is_none() {
+            event = Some(arg.clone());
+        }
+    }
+    let host = host.as_deref();
     // 读失败不退出:按空载荷降级,后面 JSON 解析自然跳过
+    let mut bytes = Vec::new();
     let _ = std::io::stdin().read_to_end(&mut bytes);
     // 非 UTF-8 字节按 replacement 降级(承 Python 版 stdio errors=replace),保住可解析部分
     let raw = String::from_utf8_lossy(&bytes);
@@ -62,14 +75,23 @@ pub fn run(event: Option<&str>) -> ExitCode {
     let Some(obj) = payload.as_object() else {
         return ExitCode::SUCCESS; // 非对象载荷:静默
     };
-    match resolve_event(event, obj).as_deref() {
-        Some("posttooluse") => on_post_tool_use(obj),
-        Some("pretooluse") => on_pre_tool_use(obj),
-        Some("stop") => on_stop(obj),
-        Some("subagentstop") => on_subagent_stop(obj),
+    match resolve_event(event.as_deref(), obj).as_deref() {
+        Some("posttooluse") => on_post_tool_use(obj, host),
+        Some("pretooluse") => on_pre_tool_use(obj, host),
+        Some("subagentstart") => on_agent_dispatched(obj, host),
+        Some("stop") => on_stop(obj, host),
+        Some("subagentstop") => on_subagent_stop(obj, host),
         _ => {} // 未知事件名:静默
     }
     ExitCode::SUCCESS
+}
+
+/// 宿主归属戳(W7-001):host 显式传入时写入事件,未传字段省略(向后兼容)。
+fn stamp(mut event: Value, host: Option<&str>) -> Value {
+    if let Some(h) = host {
+        event["host"] = Value::String(h.to_owned());
+    }
+    event
 }
 
 /// 事件名解析:CLI 参数优先(trim + 小写归一),其次载荷 `hook_event_name`,
@@ -106,7 +128,7 @@ fn events_dir(payload: &Map<String, Value>) -> PathBuf {
 }
 
 /// PostToolUse:gate 提取或 tool 行。
-fn on_post_tool_use(payload: &Map<String, Value>) {
+fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
     let Some(tool) = payload
         .get("tool_name")
         .and_then(Value::as_str)
@@ -129,7 +151,10 @@ fn on_post_tool_use(payload: &Map<String, Value>) {
             with_lock(&dir, || {
                 append_line(
                     &dir,
-                    &json!({ "ts": ts_now(), "kind": "gate", "gate": gate, "state": "running" }),
+                    &stamp(
+                        json!({ "ts": ts_now(), "kind": "gate", "gate": gate, "state": "running" }),
+                        host,
+                    ),
                 );
                 append_pending_slot(
                     &dir,
@@ -142,7 +167,7 @@ fn on_post_tool_use(payload: &Map<String, Value>) {
             });
             return;
         }
-        append_tool_event(&dir, &tool, response, command);
+        append_tool_event(&dir, &tool, response, command, host);
         return;
     }
     let summary = input
@@ -156,7 +181,7 @@ fn on_post_tool_use(payload: &Map<String, Value>) {
                 })
         })
         .unwrap_or_default();
-    append_tool_event(&dir, &tool, response, summary);
+    append_tool_event(&dir, &tool, response, summary, host);
 }
 
 /// PreToolUse:子代理派发工具(`Task`/`Agent` 新旧名)→ `agent` dispatched 行,
@@ -164,7 +189,7 @@ fn on_post_tool_use(payload: &Map<String, Value>) {
 /// `name`,皆无回退 `agent`;task 取 `description` 截 80,缺省整字段省略。其余工具
 /// 零写入静默(matcher 只由宿主兜着,此处防御 matcher 之外直调也不产事件)。
 /// 复用既有文件锁/追加/降级铁律,零新依赖。
-fn on_pre_tool_use(payload: &Map<String, Value>) {
+fn on_pre_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
     let tool = payload
         .get("tool_name")
         .and_then(Value::as_str)
@@ -201,29 +226,38 @@ fn on_pre_tool_use(payload: &Map<String, Value>) {
         event["task"] = json!(clip(task));
     }
     let dir = events_dir(payload);
-    with_lock(&dir, || append_line(&dir, &event));
+    with_lock(&dir, || append_line(&dir, &stamp(event, host)));
 }
 
 /// `tool` 事件:phase=end + exit + 一行摘要(截 80)。
-fn append_tool_event(dir: &Path, tool: &str, response: Option<&Value>, summary: &str) {
+fn append_tool_event(
+    dir: &Path,
+    tool: &str,
+    response: Option<&Value>,
+    summary: &str,
+    host: Option<&str>,
+) {
     with_lock(dir, || {
         append_line(
             dir,
-            &json!({
-                "ts": ts_now(),
-                "kind": "tool",
-                "tool": tool,
-                "phase": "end",
-                "exit": exit_code(response),
-                "summary": clip(summary),
-            }),
+            &stamp(
+                json!({
+                    "ts": ts_now(),
+                    "kind": "tool",
+                    "tool": tool,
+                    "phase": "end",
+                    "exit": exit_code(response),
+                    "summary": clip(summary),
+                }),
+                host,
+            ),
         );
     });
 }
 
 /// Stop:把暂存的每个在途 gate 逐槽折叠为各自 passed/failed;暂存无论解析
 /// 成败都消费删除(折叠只做一次)。槽缺 `gate` 字段跳过,不产生幽灵事件。
-fn on_stop(payload: &Map<String, Value>) {
+fn on_stop(payload: &Map<String, Value>, host: Option<&str>) {
     let dir = events_dir(payload);
     with_lock(&dir, || {
         let pending = fs::read_to_string(dir.join(PENDING_NAME))
@@ -262,21 +296,24 @@ fn on_stop(payload: &Map<String, Value>) {
             };
             append_line(
                 &dir,
-                &json!({
-                    "ts": ts_now(),
-                    "kind": "gate",
-                    "gate": gate,
-                    "state": state,
-                    "exit": exit,
-                    "detail": detail,
-                }),
+                &stamp(
+                    json!({
+                        "ts": ts_now(),
+                        "kind": "gate",
+                        "gate": gate,
+                        "state": state,
+                        "exit": exit,
+                        "detail": detail,
+                    }),
+                    host,
+                ),
             );
         }
     });
 }
 
 /// `SubagentStop`:`agent` completed 行;载荷带 `agent_name`/`who` 则透传。
-fn on_subagent_stop(payload: &Map<String, Value>) {
+fn on_subagent_stop(payload: &Map<String, Value>, host: Option<&str>) {
     let who = ["agent_name", "who"].iter().find_map(|key| {
         payload
             .get(*key)
@@ -290,7 +327,30 @@ fn on_subagent_stop(payload: &Map<String, Value>) {
     }
     // 注:events.rs 重放以 `who` 为 agent 事件主键,`task` 只是可选注记;
     // 宿主 SubagentStop 载荷天然无 task,本行只发 who 即满足重放契约。
-    with_lock(&dir, || append_line(&dir, &event));
+    with_lock(&dir, || append_line(&dir, &stamp(event, host)));
+}
+
+/// SubagentStart(codex 等原生事件,W7-001):`agent` dispatched 行。who 取
+/// `agent_type`/`agent_name`/`subagent_type`/`who` 首个非空,缺省 `agent`;
+/// task 字段不在该载荷契约内,不臆造。
+fn on_agent_dispatched(payload: &Map<String, Value>, host: Option<&str>) {
+    let who = ["agent_type", "agent_name", "subagent_type", "who"]
+        .iter()
+        .find_map(|key| {
+            payload
+                .get(*key)
+                .and_then(Value::as_str)
+                .filter(|w| !w.is_empty())
+        })
+        .unwrap_or("agent");
+    let event = json!({
+        "ts": ts_now(),
+        "kind": "agent",
+        "event": "dispatched",
+        "who": clip(who),
+    });
+    let dir = events_dir(payload);
+    with_lock(&dir, || append_line(&dir, &stamp(event, host)));
 }
 
 /// 临界区包装:拿到 `.lock`(`create_new` 自旋,陈锁自愈,超时退化)后执行 `f`,

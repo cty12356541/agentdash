@@ -78,11 +78,13 @@ fn agent_dispatch_completed_pairing() {
                 who: "implementer-1".to_string(),
                 task: Some("3".to_string()),
                 first_seen: "2026-09-13T21:00:00+08:00".to_string(),
+                host: None,
             },
             AgentEntry {
                 who: "reviewer-1".to_string(),
                 task: Some("2".to_string()),
                 first_seen: "2026-09-13T21:05:00+08:00".to_string(),
+                host: None,
             },
         ]
     );
@@ -105,6 +107,7 @@ fn hook_agent_line_with_only_who_lands_in_active_table() {
             who: "implementer-1".to_string(),
             task: None,
             first_seen: "2026-09-13T21:00:00+08:00".to_string(),
+            host: None,
         }]
     );
     assert!(model.warnings.is_empty());
@@ -335,4 +338,20 @@ fn last_gate_passed_tracks_latest_pass_only() {
         Some("2026-09-15T10:02:00+08:00"),
         "后到 passed 覆盖(failed 不动锚)"
     );
+}
+
+#[test]
+fn agent_host_keeps_first_dispatch() {
+    // W7-001:同 who 再派刷新 task 注记,host 保留首见
+    let model = replay_strs(&[
+        r#"{"kind":"agent","event":"dispatched","who":"a","host":"codex","task":"一","ts":"2026-09-15T10:00:00+08:00"}"#,
+        r#"{"kind":"agent","event":"dispatched","who":"a","host":"claude","task":"二","ts":"2026-09-15T10:01:00+08:00"}"#,
+    ]);
+    assert_eq!(model.agents.len(), 1);
+    assert_eq!(
+        model.agents[0].host.as_deref(),
+        Some("codex"),
+        "host 保留首见"
+    );
+    assert_eq!(model.agents[0].task.as_deref(), Some("二"), "task 照常刷新");
 }

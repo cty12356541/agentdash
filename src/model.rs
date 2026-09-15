@@ -94,6 +94,8 @@ pub struct AgentView {
     pub task: Option<String>,
     /// 首次 `dispatched` 的 `ts` 原串(缺省为空串)。
     pub since: String,
+    /// 宿主归属(W7-001;首次 dispatched 的 `--host` 盖章,缺省 [`None`])。
+    pub host: Option<String>,
 }
 
 /// 验证门视图(后到覆盖先到折尽后的终态快照)。
@@ -319,6 +321,7 @@ fn event_views(model: events::EventModel) -> EventViews {
             who: agent.who,
             task: agent.task,
             since: agent.first_seen,
+            host: agent.host,
         })
         .collect();
     agents.sort_by(|a, b| a.who.cmp(&b.who));

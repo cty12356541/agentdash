@@ -1064,3 +1064,94 @@ fn under_threshold_events_not_rotated() {
     assert!(raw.starts_with('x'), "阈值内原文件原样保留");
     assert!(raw.contains("\"who\":\"in-place\""), "新行同文件追加");
 }
+
+// ------------------------------------------------------------ --host 与 subagentstart(W7-001)
+
+#[test]
+fn host_flag_stamps_events_position_tolerant() {
+    // 旗标在事件名前;事件落盘带 host
+    let t = TempDir::new("hostflag");
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "codex", "posttooluse"],
+            &in_cwd(&cargo_test_post(), t.path()).to_string(),
+            t.path(),
+        ),
+        "host 前置",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "posttooluse", "--host=codex"],
+            &in_cwd(&cargo_test_post(), t.path()).to_string(),
+            t.path(),
+        ),
+        "host 后置 = 形态",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "codex", "stop"],
+            &in_cwd(&stop_payload(), t.path()).to_string(),
+            t.path(),
+        ),
+        "stop 同盖 host",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 4, "两 running + 两折叠");
+    for e in &evs {
+        assert_eq!(e["host"], "codex", "每条事件都带归属: {e}");
+    }
+}
+
+#[test]
+fn no_host_flag_omits_field() {
+    // 向后兼容:未传 --host 时事件不含 host 字段
+    let t = TempDir::new("nohost");
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "无 host 回放",
+    );
+    let evs = read_events(t.path());
+    assert!(evs[0].get("host").is_none(), "未传旗标不得出现 host 字段");
+}
+
+#[test]
+fn empty_host_value_is_ignored() {
+    let t = TempDir::new("emptyhost");
+    let out = feed(
+        &["hook", "--host", "  ", "posttooluse"],
+        &in_cwd(&cargo_test_post(), t.path()).to_string(),
+        t.path(),
+    );
+    assert!(out.status.success());
+    let evs = read_events(t.path());
+    assert!(evs[0].get("host").is_none(), "空 host 视同未传");
+}
+
+#[test]
+fn subagentstart_maps_to_dispatched_with_host() {
+    let t = TempDir::new("substart");
+    let payload = json!({
+        "session_id": "s",
+        "hook_event_name": "SubagentStart",
+        "agent_type": "explore",
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host=codex", "subagentstart"],
+            &payload.to_string(),
+            t.path(),
+        ),
+        "subagentstart 回放",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["kind"], "agent");
+    assert_eq!(evs[0]["event"], "dispatched");
+    assert_eq!(evs[0]["who"], "explore", "who 取 agent_type");
+    assert_eq!(evs[0]["host"], "codex");
+}

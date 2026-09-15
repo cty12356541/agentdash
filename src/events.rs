@@ -20,14 +20,17 @@ pub enum GateState {
     Failed { detail: String },
 }
 
-/// 仍活跃的子代理:`dispatched` 按 `who` 首见入表(同 who 再派刷新 task 注记,不新建条目),
-/// `completed` 按 `who` 移除;`task` 为可选注记,有则带入显示,无则 [`None`]。
+/// 仍活跃的子代理:`dispatched` 按 `who` 首见入表(同 who 再派刷新 task 注记,
+/// host 保留首见不覆盖),`completed` 按 `who` 移除;`task`/`host` 为可选注记
+/// (host = 宿主归属,W7-001),有则带入显示,无则 [`None`]。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentEntry {
     pub who: String,
     pub task: Option<String>,
     /// 首次 `dispatched` 事件的 `ts` 原串(缺省为空串)。
     pub first_seen: String,
+    /// 首次 `dispatched` 事件的宿主归属(`--host` 盖章;缺省 [`None`])。
+    pub host: Option<String>,
 }
 
 /// 事件尾容量(W4-002):详情面板只看最近 10 条,超限截旧。
@@ -83,6 +86,7 @@ struct RawEvent {
     phase: Option<String>,
     task: Option<String>,
     who: Option<String>,
+    host: Option<String>,
     tool: Option<String>,
 }
 
@@ -203,11 +207,13 @@ fn apply_agent(model: &mut EventModel, raw: RawEvent, line_no: usize) {
                 raw.ts.clone().unwrap_or_default(),
             );
             match model.agents.iter_mut().find(|a| a.who == who) {
+                // host 保留首见(D2:再派刷新 task 注记不改归属)
                 Some(entry) => entry.task = raw.task,
                 None => model.agents.push(AgentEntry {
                     who,
                     task: raw.task,
                     first_seen: raw.ts.unwrap_or_default(),
+                    host: raw.host,
                 }),
             }
         }

@@ -344,6 +344,7 @@ fn agents_and_gates_project_into_dashboard_sorted() {
             who: "alice".to_owned(),
             task: None,
             since: "2026-09-13T08:30:00Z".to_owned(),
+            host: None,
         },
         "who 字典序:alice 压过派发更早的 bob"
     );
@@ -353,6 +354,7 @@ fn agents_and_gates_project_into_dashboard_sorted() {
             who: "bob".to_owned(),
             task: Some("改写 render".to_owned()),
             since: "2026-09-13T09:00:00Z".to_owned(),
+            host: None,
         },
         "同 who 再派刷新 task 注记,first_seen 保留首见"
     );

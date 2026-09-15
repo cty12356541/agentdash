@@ -272,6 +272,9 @@ fn task_line(task: &TaskView, dash: &Dashboard) -> String {
 /// 在跑 agent 行:`▶ <who>[ · <task>][ · <MM-DDTHH:MM>]`,超宽整行截断。
 fn agent_line(agent: &AgentView, width: usize) -> String {
     let mut line = format!("▶ {}", agent.who);
+    if let Some(host) = agent.host.as_deref() {
+        let _ = write!(line, " [{host}]"); // 宿主归属(W7-001)
+    }
     if let Some(task) = agent.task.as_deref() {
         let _ = write!(line, " · {task}");
     }
