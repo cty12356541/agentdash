@@ -268,3 +268,49 @@ fn ts_window_folds_min_max_over_known_kinds() {
     assert_eq!(empty.ts_min, None);
     assert_eq!(empty.ts_max, None);
 }
+
+// ------------------------------------------------------------ 事件尾(W4-002)
+
+#[test]
+fn tail_keeps_effective_agent_and_gate_in_arrival_order() {
+    let model = replay_strs(&[
+        r#"{"kind":"tool","tool":"edit","phase":"end","ts":"2026-09-15T10:00:00+08:00"}"#,
+        r#"{"kind":"gate","gate":"cargo-test","state":"running","ts":"2026-09-15T10:00:01+08:00"}"#,
+        r#"{"kind":"agent","event":"dispatched","who":"explore","task":"找","ts":"2026-09-15T10:00:02+08:00"}"#,
+        r#"{"kind":"agent","event":"completed","who":"explore","ts":"2026-09-15T10:00:03+08:00"}"#,
+        r#"{"kind":"gate","gate":"cargo-test","state":"passed","detail":"ok","ts":"2026-09-15T10:00:04+08:00"}"#,
+        "not json at all",
+        r#"{"kind":"agent","event":"dispatched","ts":"2026-09-15T10:00:05+08:00"}"#,
+    ]);
+    let tail: Vec<_> = model
+        .tail
+        .iter()
+        .map(|e| (e.kind.as_str(), e.name.as_str(), e.state.as_str()))
+        .collect();
+    assert_eq!(
+        tail,
+        [
+            ("gate", "cargo-test", "running"),
+            ("agent", "explore", "dispatched"),
+            ("agent", "explore", "completed"),
+            ("gate", "cargo-test", "passed"),
+        ],
+        "到达序生效行;tool 行与残缺行(非 JSON/缺 who)不入尾"
+    );
+}
+
+#[test]
+fn tail_caps_at_ten_dropping_oldest() {
+    let lines: Vec<String> = (0..12)
+        .map(|i| {
+            format!(
+                r#"{{"kind":"agent","event":"dispatched","who":"a{i:02}","ts":"2026-09-15T10:{i:02}:00+08:00"}}"#
+            )
+        })
+        .collect();
+    let strs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let model = replay_strs(&strs);
+    assert_eq!(model.tail.len(), 10, "超容量截旧");
+    assert_eq!(model.tail[0].name, "a02", "最旧两条(a00/a01)被截");
+    assert_eq!(model.tail[9].name, "a11", "最新在尾");
+}

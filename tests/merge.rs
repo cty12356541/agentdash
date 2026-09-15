@@ -977,3 +977,32 @@ fn project_follows_git_root_then_cwd_fallback() {
     );
     cleanup(&plain);
 }
+
+// ------------------------------------------------------------ 事件尾投影(W4-002)
+
+#[test]
+fn event_tail_projects_agent_and_gate_in_arrival_order() {
+    let repo = fixture_repo("tail");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("events.jsonl"), EVENTS_AGENTS).expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+    let tail: Vec<_> = dash
+        .event_tail
+        .iter()
+        .map(|e| (e.kind.as_str(), e.name.as_str(), e.state.as_str()))
+        .collect();
+    assert_eq!(
+        tail,
+        [
+            ("agent", "bob", "dispatched"),
+            ("agent", "alice", "dispatched"),
+            ("gate", "test", "passed"),
+            ("agent", "bob", "dispatched"),
+        ],
+        "直投影保持到达序(agents/gates 投影的字典序不适用于尾)"
+    );
+    assert_eq!(dash.event_tail[0].ts, "2026-09-13T09:00:00Z", "ts 原串保留");
+    cleanup(&repo);
+}

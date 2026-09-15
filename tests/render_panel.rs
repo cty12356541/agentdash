@@ -74,6 +74,7 @@ fn w25_dash() -> Dashboard {
         event_span_secs: None, // W3-006:速度线事件活动窗;样例默认无
         // W3-004 D3:项目名上模型,渲染层只读不猜
         project: "agentdash".into(),
+        event_tail: Vec::new(), // W4-002:详情事件尾;渲染组样例默认无
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -91,6 +92,7 @@ fn dash_with(tasks: Vec<TaskView>) -> Dashboard {
         remote: None,
         event_span_secs: None, // W3-006:速度线事件活动窗;样例默认无
         project: "agentdash".into(),
+        event_tail: Vec::new(), // W4-002:详情事件尾;渲染组样例默认无
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }

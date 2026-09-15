@@ -47,7 +47,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::{Frame, Terminal};
 
 use crate::contract::TaskState;
-use crate::model::{self, Dashboard, GateView, TaskView};
+use crate::model::{self, Dashboard, EventTailView, GateView, TaskView};
 use crate::render::{self, C_ACTIVE, C_DONE, C_END, C_STALLED, elide, graph::Cell};
 use crate::sources::git::{self, GitFacts};
 
@@ -344,8 +344,8 @@ pub fn write_prompt_file(repo: &Path, text: &str) -> io::Result<PathBuf> {
 // ---------- W2-003 详情面板 / W2-004 波次滚动与帮助(纯函数) ----------
 
 /// 详情右栏行(纯函数,快照可测):`label`/`state`/`lane`/`note`/`fix_round`/
-/// `since` + 关联 gates(模型无 task↔gate 关联,全量列出)+ 该任务事件
-/// tail——事件层暂未随 [`Dashboard`] 携带(W2-008 接入),以占位行明示。
+/// `since` + 关联 gates(模型无 task↔gate 关联,全量列出)+ 事件尾
+/// (W4-002:最近 10 条 agent/gate 生效行,到达序;空为 `-`)。
 /// 每行按显示宽截断(`width` 为栏内容宽;只裁行宽,不裁行数),着色在截断
 /// 后注入。
 #[must_use]
@@ -376,9 +376,44 @@ pub fn detail_lines(task: &TaskView, dash: &Dashboard, width: usize) -> Vec<Stri
         }
     }
     lines.push(String::from("事件"));
-    // 事件 tail(最近 10 条,agent+gate 过滤)待 W2-008:Dashboard 尚无事件投影
-    lines.push(String::from("  事件层 W2-008 接入"));
+    if dash.event_tail.is_empty() {
+        lines.push(String::from("  -"));
+    } else {
+        for entry in &dash.event_tail {
+            lines.push(tail_line(entry, width));
+        }
+    }
     lines
+}
+
+/// 详情栏事件尾行(W4-002):gate passed ✓ 绿 / failed ✗ 黄 / running ▶ 蓝;
+/// agent dispatched ▶ 蓝 / completed ✓ 绿;`ts` 在场带 `· MM-DDTHH:MM`。
+fn tail_line(entry: &EventTailView, width: usize) -> String {
+    let (mark, color) = match (entry.kind.as_str(), entry.state.as_str()) {
+        ("gate", "failed") => ("✗", C_STALLED),
+        ("gate", "passed") | ("agent", "completed") => ("✓", C_DONE),
+        _ => ("▶", C_ACTIVE),
+    };
+    let body = if entry.ts.is_empty() {
+        format!("  {mark} {} {}", entry.name, entry.state)
+    } else {
+        format!(
+            "  {mark} {} {} · {}",
+            entry.name,
+            entry.state,
+            clock_slice(&entry.ts)
+        )
+    };
+    format!("{color}{}{C_END}", elide(&body, width))
+}
+
+/// `MM-DDTHH:MM` 段切片(与 panel 同位语义;此处本地窄助手防跨模块依赖)。
+fn clock_slice(rfc3339: &str) -> String {
+    if rfc3339.chars().count() >= 16 {
+        rfc3339.chars().skip(5).take(11).collect()
+    } else {
+        rfc3339.to_owned()
+    }
 }
 
 /// `键  值` 行,按显示宽截断(详情栏窄侧板防顶穿)。
@@ -1228,7 +1263,9 @@ fn render_main(frame: &mut Frame, area: Rect, dash: &Dashboard, view: View, filt
 }
 
 /// 详情右栏(40%):聚焦任务的详情卡片;聚焦任务被模型刷新洗掉时框内给
-/// 提示行(不白板)。
+/// 提示行(不白板)。裁定(W4-002 D2):详情恒查全量模型(`app.dash.tasks`
+/// 原表),与主视图的波次/过滤/折叠折算解耦——聚焦是用户显式动作,不随
+/// 视图折算丢失。
 fn render_detail(frame: &mut Frame, area: Rect, app: &Watch) {
     let Some(task) = app
         .focused

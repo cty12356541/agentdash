@@ -75,6 +75,7 @@ fn w25_dash() -> Dashboard {
         gates: Vec::new(),
         event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
+        event_tail: Vec::new(),      // W4-002:详情事件尾;渲染组样例默认无
         generated_at: "2026-09-13T08:30:00Z".into(),
     }
 }
@@ -261,6 +262,7 @@ fn cjk_label_fits_box() {
         gates: Vec::new(),
         event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
+        event_tail: Vec::new(),      // W4-002:详情事件尾;渲染组样例默认无
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let layers = layout_layers(&dash, &[]);
@@ -307,6 +309,7 @@ fn cycle_remaining_merges_into_last_layer() {
         gates: Vec::new(),
         event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
+        event_tail: Vec::new(),      // W4-002:详情事件尾;渲染组样例默认无
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let barriers = vec![BarrierEdges {
@@ -338,6 +341,7 @@ fn lane_chain_forms_layers() {
         gates: Vec::new(),
         event_span_secs: None,       // W3-006:速度线事件活动窗;图样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
+        event_tail: Vec::new(),      // W4-002:详情事件尾;渲染组样例默认无
         generated_at: "2026-09-13T08:30:00Z".into(),
     };
     let layers = layout_layers(&dash, &[]);

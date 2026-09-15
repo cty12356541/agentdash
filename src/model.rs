@@ -104,6 +104,20 @@ pub struct GateView {
     pub detail: String,
 }
 
+/// 详情面板事件尾条目视图(W4-002;[`events::EventModel::tail`] 直投影:
+/// 已生效 agent/gate 事件紧凑行,到达序,最近 10 条)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventTailView {
+    /// 事件类:`agent` / `gate`。
+    pub kind: String,
+    /// 主体名:agent 为 `who`,gate 为门名。
+    pub name: String,
+    /// 事件词:gate 取 state,agent 取 event(dispatched/completed)。
+    pub state: String,
+    /// `ts` 原串(缺省为空串)。
+    pub ts: String,
+}
+
 /// 仪表盘完整模型(渲染层的唯一输入面)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dashboard {
@@ -120,6 +134,9 @@ pub struct Dashboard {
     /// 验证门终态视图(取自 [`events::EventModel`],后到覆盖先到;
     /// 按门名字典序,输出确定)。
     pub gates: Vec<GateView>,
+    /// 详情面板事件尾(W4-002;取自 [`events::EventModel::tail`] 直投影,
+    /// 到达序,最近 10 条,agent+gate 生效行)。
+    pub event_tail: Vec<EventTailView>,
     /// 事件流活动窗跨度(秒,W3-006):events.jsonl ≥2 条不同 `ts` 时取
     /// `max(ts) − min(ts)`(全部 gate/agent/tool 事件按绝对时刻折算);
     /// 无事件 / 单条 / 全同刻为 [`None`]。速度线 span 首选数据源——
@@ -201,46 +218,21 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         }
     }
 
-    // 事件层:永远照常合并(契约缺失或损坏都不影响)
-    let mut agents = Vec::new();
-    let mut gates = Vec::new();
-    // 事件活动窗(W3-006):速度线 span 首选数据源
+    // 事件层:永远照常合并(契约缺失或损坏都不影响);投影细节收口
+    // [`event_views`](agents/gates 字典序,尾到达序,W4-002)
     let mut event_span_secs = None;
     let events_path = repo.join(".agentdash").join("events.jsonl");
     let (events_text, events_present) = read_source(&events_path, "events.jsonl", &mut warnings);
-    if let Some(text) = events_text {
-        let model = events::replay(text.lines().map(str::to_owned));
-        event_span_secs = event_span_of(&model);
-        // 投影时就地排序,渲染层免排序即可拿到确定性输出
-        agents = model
-            .agents
-            .into_iter()
-            .map(|agent| AgentView {
-                who: agent.who,
-                task: agent.task,
-                since: agent.first_seen,
-            })
-            .collect();
-        agents.sort_by(|a, b| a.who.cmp(&b.who));
-        gates = model
-            .gates
-            .into_iter()
-            .map(|(name, state)| {
-                let (state, detail) = match state {
-                    GateState::Running => ("running", String::new()),
-                    GateState::Passed { detail } => ("passed", detail),
-                    GateState::Failed { detail } => ("failed", detail),
-                };
-                GateView {
-                    name,
-                    state: state.to_owned(),
-                    detail,
-                }
-            })
-            .collect();
-        gates.sort_by(|a, b| a.name.cmp(&b.name));
-        warnings.extend(model.warnings);
-    }
+    let (agents, gates, event_tail) = match events_text {
+        Some(text) => {
+            let model = events::replay(text.lines().map(str::to_owned));
+            event_span_secs = event_span_of(&model);
+            let (agents, gates, tail, model_warnings) = event_views(model);
+            warnings.extend(model_warnings);
+            (agents, gates, tail)
+        }
+        None => (Vec::new(), Vec::new(), Vec::new()),
+    };
 
     // AD-ERR-001:契约**缺失**(文件不存在,非损坏)同样降级为警告行,措辞
     // 对齐损坏路径;但仅当其余源(事件文件 / git 仓)在场——三源全无走下方
@@ -271,6 +263,7 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
         warnings,
         agents,
         gates,
+        event_tail,
         event_span_secs,
         git,
         // 远程层(120s 档):失败静默为 None——远程是增强不是依赖,
@@ -291,6 +284,57 @@ fn event_span_of(model: &events::EventModel) -> Option<u64> {
         (Some(min), Some(max)) if max > min => Some(max - min),
         _ => None,
     }
+}
+
+/// 事件重放模型 → 渲染视图四元组:agents 按 `who` 字典序、gates 按门名字典序
+/// (投影时就地排序,渲染层免排序即得确定性输出);事件尾保持到达序不排序
+/// (W4-002:重放序即叙事序);重放警告随行透传。
+fn event_views(
+    model: events::EventModel,
+) -> (
+    Vec<AgentView>,
+    Vec<GateView>,
+    Vec<EventTailView>,
+    Vec<String>,
+) {
+    let mut agents: Vec<AgentView> = model
+        .agents
+        .into_iter()
+        .map(|agent| AgentView {
+            who: agent.who,
+            task: agent.task,
+            since: agent.first_seen,
+        })
+        .collect();
+    agents.sort_by(|a, b| a.who.cmp(&b.who));
+    let mut gates: Vec<GateView> = model
+        .gates
+        .into_iter()
+        .map(|(name, state)| {
+            let (state, detail) = match state {
+                GateState::Running => ("running", String::new()),
+                GateState::Passed { detail } => ("passed", detail),
+                GateState::Failed { detail } => ("failed", detail),
+            };
+            GateView {
+                name,
+                state: state.to_owned(),
+                detail,
+            }
+        })
+        .collect();
+    gates.sort_by(|a, b| a.name.cmp(&b.name));
+    let tail = model
+        .tail
+        .into_iter()
+        .map(|entry| EventTailView {
+            kind: entry.kind,
+            name: entry.name,
+            state: entry.state,
+            ts: entry.ts,
+        })
+        .collect();
+    (agents, gates, tail, model.warnings)
 }
 
 /// 读一个源文件,返回 `(内容, 文件是否存在)`:不存在(NotFound)静默返回

@@ -40,7 +40,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Color, Modifier};
 
 use contract::TaskState;
-use model::{BarrierEdges, Dashboard, GateView, MilestoneView, TaskView};
+use model::{BarrierEdges, Dashboard, EventTailView, GateView, MilestoneView, TaskView};
 use render::graph::Cell;
 use sources::git::GitFacts;
 use tui::{Action, Delivery, InputMode};
@@ -97,6 +97,7 @@ fn w25_dash() -> Dashboard {
         remote: None,
         event_span_secs: None,       // W3-006:速度线事件活动窗;TUI 样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
+        event_tail: Vec::new(),
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -114,6 +115,7 @@ fn empty_dash() -> Dashboard {
         remote: None,
         event_span_secs: None,       // W3-006:速度线事件活动窗;TUI 样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
+        event_tail: Vec::new(),
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -556,6 +558,21 @@ fn detail_dash() -> Dashboard {
         remote: None,
         event_span_secs: None,       // W3-006:速度线事件活动窗;TUI 样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
+        // W4-002:详情事件尾样例(agent 派发 + gate 通过,到达序)
+        event_tail: vec![
+            EventTailView {
+                kind: "agent".into(),
+                name: "explore".into(),
+                state: "dispatched".into(),
+                ts: "2026-09-13T08:30:00Z".into(),
+            },
+            EventTailView {
+                kind: "gate".into(),
+                name: "test".into(),
+                state: "passed".into(),
+                ts: "2026-09-13T09:00:00Z".into(),
+            },
+        ],
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -577,11 +594,14 @@ fn detail_lines_snapshot_fields_complete() {
     assert_eq!(lines[7], "  ✓ pre-merge passed · test+clippy");
     assert_eq!(lines[8], "  ✗ ship failed · 1 red");
     assert_eq!(lines[9], "事件");
+    // W4-002:事件尾真数据(agent 派发 ▶ + gate 通过 ✓,到达序,ts 切 MM-DDTHH:MM)
+    assert_eq!(lines[10], "  ▶ explore dispatched · 09-13T08:30");
+    assert_eq!(lines[11], "  ✓ test passed · 09-13T09:00");
     assert_eq!(
-        lines[10], "  事件层 W2-008 接入",
-        "事件 tail 待 Dashboard 携带前为占位行"
+        lines.len(),
+        12,
+        "字段齐:7 字段 + 门区块 + 事件区块(尾 2 条)"
     );
-    assert_eq!(lines.len(), 11, "字段齐:7 字段 + 门区块 + 事件区块");
 }
 
 #[test]
@@ -601,10 +621,28 @@ fn detail_lines_absent_fields_show_dash_placeholder() {
 }
 
 #[test]
+fn detail_empty_tail_shows_dash_placeholder() {
+    // W4-002:无事件尾时空态占位 `-`(整段不消失),旧占位行(事件层 W2-008
+    // 接入)已退役
+    let dash = w25_dash();
+    let lines: Vec<String> = tui::detail_lines(&dash.tasks[0], &dash, 80)
+        .iter()
+        .map(|line| strip_ansi(line))
+        .collect();
+    // w25 样例无 gates:验证门段只占 6/7 两行,事件段自 8 起
+    assert_eq!(lines[8], "事件");
+    assert_eq!(lines[9], "  -", "无事件尾时空态占位");
+    assert!(
+        !lines.iter().any(|l| l.contains("W2-008")),
+        "旧占位行必须消失: {lines:?}"
+    );
+}
+
+#[test]
 fn detail_lines_elide_to_budget() {
     let dash = detail_dash();
     let lines = tui::detail_lines(&dash.tasks[0], &dash, 20);
-    assert_eq!(lines.len(), 11, "截断只裁行宽,不裁行数");
+    assert_eq!(lines.len(), 12, "截断只裁行宽,不裁行数");
     for line in &lines {
         let plain = strip_ansi(line);
         assert!(
@@ -681,6 +719,7 @@ fn wave_dash() -> Dashboard {
         remote: None,
         event_span_secs: None,       // W3-006:速度线事件活动窗;TUI 样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
+        event_tail: Vec::new(),
         generated_at: GENERATED_AT.into(),
     }
 }
@@ -801,6 +840,7 @@ fn filter_dash() -> Dashboard {
         remote: None,
         event_span_secs: None,       // W3-006:速度线事件活动窗;TUI 样例默认无
         project: "agentdash".into(), // W3-004 D3:项目名上模型
+        event_tail: Vec::new(),
         generated_at: GENERATED_AT.into(),
     }
 }
