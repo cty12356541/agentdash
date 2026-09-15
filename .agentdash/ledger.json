@@ -1,51 +1,56 @@
 {
   "$schema": "agentdash.tasklog.v1",
-  "wave": "W5",
-  "title": "W5 信任锚落地:done_at 物证交叉核对",
+  "wave": "W6",
+  "title": "W6 输出可达性收口:svg 输出 + 解析容忍",
   "profile": "sdd",
-  "note": "W5 开工换血。速度行注:仅会话期 events.jsonl 在场且 ≥2 条不同 ts 才点亮,新 clone 属预期降级。物证 ? 注:正常来源应为写回 d 键自动盖章;dogfood 回填样例会在台账注明。",
+  "note": "W6 开工换血。范围取自历次挂账候选;codex/opencode kit 需宿主 API 调研,列非目标。",
   "lanes": [
     {
-      "name": "批一-快速清偿",
+      "name": "批一-解析与设施",
       "tasks": [
         "01",
         "02"
       ]
     },
     {
-      "name": "批二-信任锚",
+      "name": "批二-svg 输出",
       "tasks": [
         "03"
       ]
     },
     {
-      "name": "收口",
+      "name": "批三-审查",
       "tasks": [
         "04"
+      ]
+    },
+    {
+      "name": "收口",
+      "tasks": [
+        "05"
       ]
     }
   ],
   "tasks": {
     "01": {
-      "label": "MSRV 文档修正(≥1.88)",
-      "state": "done",
-      "done_at": "2026-09-15T20:25:56+08:00"
+      "label": "±HHMM 基本格式容忍",
+      "state": "active"
     },
     "02": {
-      "label": "clock_slice 收敛",
-      "state": "done",
-      "done_at": "2026-09-15T20:25:56+08:00"
+      "label": "proptest 失败回归落盘",
+      "state": "pending"
     },
     "03": {
-      "label": "done_at 契约+写回盖章+? 物证标记",
-      "state": "done",
-      "done_at": "2026-09-15T20:25:56+08:00"
+      "label": "render graph --format svg",
+      "state": "pending"
     },
     "04": {
-      "label": "0.4.0 收口+帧证据+tag",
-      "state": "done",
-      "done_at": "2026-09-15T20:26:47+08:00",
-      "note": "0.4.0 三处版本 + 物证环双向实证 + tag v0.4.0"
+      "label": "install.ps1 静态审查(记录)",
+      "state": "pending"
+    },
+    "05": {
+      "label": "0.5.0 收口+样张+tag",
+      "state": "pending"
     }
   },
   "barriers": [
@@ -54,10 +59,11 @@
       "after": [
         "01",
         "02",
-        "03"
+        "03",
+        "04"
       ],
       "unlocks": [
-        "04"
+        "05"
       ]
     }
   ]
