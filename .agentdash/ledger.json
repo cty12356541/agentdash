@@ -1,93 +1,47 @@
 {
   "$schema": "agentdash.tasklog.v1",
-  "wave": "W7",
-  "title": "W7 多宿主 kit 与跨宿主一致性",
+  "wave": "W8",
+  "title": "W8 zcode-kit(公司内部宿主)",
   "profile": "sdd",
-  "note": "W7 开工换血。API 依据 2026-09 调研(codex lifecycle hooks / opencode plugins);一致性 = 同台账同锁同词表(C1)+ host 归属(C2)+ AGENTDASH.md 单源(C3)。",
+  "note": "API 依据 ZCode 官方 configuration-guide/diagnosing-hooks 技能;一致性三支柱与 W7 同构。",
   "lanes": [
     {
-      "name": "批一-内核地基",
+      "name": "实现",
       "tasks": [
-        "01"
+        "01",
+        "02"
       ]
     },
     {
-      "name": "批二-kit 全家",
+      "name": "dogfood 与收口",
       "tasks": [
-        "02",
-        "03",
-        "04",
-        "05"
-      ]
-    },
-    {
-      "name": "收口",
-      "tasks": [
-        "06"
+        "03"
       ]
     }
   ],
   "tasks": {
     "01": {
-      "label": "--host 旗标+subagentstart+agent 表 host",
-      "state": "done",
-      "done_at": "2026-09-15T22:45:00+08:00",
-      "note": "W7-001:--host 旗标+subagentstart+agent 表归属,6 新测试"
+      "label": "zcode-kit(安装器+hooks 配置)",
+      "state": "active"
     },
     "02": {
-      "label": "共享 AGENTDASH.md 单源",
-      "state": "done",
-      "done_at": "2026-09-15T22:45:00+08:00",
-      "note": "W7-002:AGENTDASH.md 标记段单源"
+      "label": "本仓实装 dogfood(hooks 真实生效)",
+      "state": "pending"
     },
     "03": {
-      "label": "codex-kit(hooks.json+安装器)",
-      "state": "done",
-      "done_at": "2026-09-15T22:45:00+08:00",
-      "note": "W7-003:codex-kit 保守安装器+README"
-    },
-    "04": {
-      "label": "opencode-kit(插件+安装器)",
-      "state": "done",
-      "done_at": "2026-09-15T22:45:00+08:00",
-      "note": "W7-004:opencode 插件(Bun.spawn 降级铁律)+安装器"
-    },
-    "05": {
-      "label": "claude-code kit 归属补齐",
-      "state": "done",
-      "done_at": "2026-09-15T22:45:00+08:00",
-      "note": "W7-005:四钩子 --host claude+CLAUDE.md 合入"
-    },
-    "06": {
-      "label": "双宿主交错 dogfood+0.6.0 收口",
-      "state": "done",
-      "done_at": "2026-09-15T22:45:00+08:00",
-      "note": "双宿主交错 dogfood 实证+0.6.0+tag v0.6.0"
+      "label": "0.7.0 收口+报告+tag",
+      "state": "pending"
     }
   },
   "barriers": [
     {
       "id": "B1",
       "after": [
-        "01"
+        "01",
+        "02"
       ],
       "unlocks": [
-        "02",
-        "03",
-        "04",
-        "05"
-      ]
-    },
-    {
-      "id": "B2",
-      "after": [
-        "02",
-        "03",
-        "04",
-        "05"
-      ],
-      "unlocks": [
-        "06"
+        "03"
       ]
     }
   ]
