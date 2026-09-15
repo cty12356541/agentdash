@@ -668,11 +668,21 @@ pub fn filter_empty_notice(query: &str) -> String {
 
 // ---------- W2-008 watch 位置参数(纯函数) ----------
 
+/// watch 位置参数错误(W9-005 起结构化返回):纯数据不携带文案——tui 会被
+/// `#[path]` 单独编入多个测试 crate,不牵 lang 模块;文案在 main 层按语言渲染。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatchArgError {
+    /// 未知旗标(载荷为旗标原文;完整用法由调用方附 USAGE 打印)。
+    UnknownFlag(String),
+    /// `[SECONDS] [PATH]` 之后出现多余参数。
+    ExtraArgs,
+}
+
 /// watch 位置参数解析(纯函数,W2-008):`[--once] ([SECONDS] [PATH] | [PATH])`
 /// ——数字首参 = 刷新间隔秒(钳 1..3600,全数字溢出串仍按间隔钳到上限),
-/// 其后至多一个 PATH;`--once` 任意位置。返回 `(once, interval 秒, path)`,
-/// `Err` 为已成型的错误消息(调用方打印后以退出码 2 终止)。
-pub fn parse_watch_args(rest: &[String]) -> Result<(bool, u64, PathBuf), String> {
+/// 其后至多一个 PATH;`--once` 任意位置。`Err` 为结构化参数错误(W9-005,
+/// 文案归 main 层),调用方打印后以退出码 2 终止。
+pub fn parse_watch_args(rest: &[String]) -> Result<(bool, u64, PathBuf), WatchArgError> {
     let mut once = false;
     let mut interval: Option<u64> = None;
     let mut path: Option<PathBuf> = None;
@@ -680,20 +690,14 @@ pub fn parse_watch_args(rest: &[String]) -> Result<(bool, u64, PathBuf), String>
         match arg.as_str() {
             "--once" => once = true,
             other if other.starts_with('-') => {
-                return Err(format!(
-                    "unknown flag `{other}` (watch takes [--once] [SECONDS] [PATH])"
-                ));
+                return Err(WatchArgError::UnknownFlag((*other).to_owned()));
             }
             other if path.is_none() && interval.is_none() && is_seconds_literal(other) => {
                 // 全数字才认间隔;解析溢出按 u64::MAX 处理后仍钳到上限
                 interval = Some(clamp_interval(other.parse::<u64>().unwrap_or(u64::MAX)));
             }
             other if path.is_none() => path = Some(PathBuf::from(other)),
-            _ => {
-                return Err(String::from(
-                    "unexpected extra arguments after [SECONDS] [PATH]",
-                ));
-            }
+            _ => return Err(WatchArgError::ExtraArgs),
         }
     }
     Ok((

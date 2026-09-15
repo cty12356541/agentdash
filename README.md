@@ -14,6 +14,12 @@ cargo install --path .
 agentdash --version   # 自检
 ```
 
+### CLI 语言(中英双语,0.7.0 起)
+
+帮助与参数错误文案默认**中文**;`AGENTDASH_LANG=en` 切换英文(容忍
+`en-US`/`en_US` 区域后缀;`zh*`/未知值回落中文)。两语言 `--help` 尾部
+互附对方切换提示。
+
 ### 插件市场(Claude Code)
 
 ```bash

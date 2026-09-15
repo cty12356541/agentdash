@@ -6,6 +6,7 @@ mod contract;
 #[allow(dead_code)]
 mod events;
 mod hook;
+mod lang;
 mod model;
 mod render;
 mod sources;
@@ -14,33 +15,12 @@ mod tui;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "\
-agentdash - agent progress dashboard
-
-Usage: agentdash <COMMAND> [ARGS]
-
-Commands:
-  render panel|graph [--format ansi|svg] [PATH]
-                                  Render the dashboard panel or the task DAG
-                                  (--format svg: vector DAG, graph only)
-  oneline [PATH]                  Print a one-line status summary
-  watch [--once] [SECONDS] [PATH] Watch a plan and refresh live (q/Ctrl-C quits)
-  hook <EVENT>                    Consume a host-tool hook payload from stdin
-
-Arguments:
-  [PATH]        Path to the project or plan directory [default: .]
-  [SECONDS]     Watch refresh interval, clamped to 1..3600 [default: 5]
-  watch --once  Render a single frame and exit (implied when stdin is not a TTY)
-
-Options:
-  -V, --version  Print version
-  -h, --help     Print help";
-
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let lang = lang::current();
     match args.first().map(String::as_str) {
         None | Some("-h" | "--help") => {
-            println!("{USAGE}");
+            println!("{}", lang.usage());
             ExitCode::SUCCESS
         }
         // 自检入口:安装指引(README ×2 / kits README ×1 / bin README ×1)
@@ -54,11 +34,11 @@ fn main() -> ExitCode {
             // stdin 读(W1-008b;--host 多宿主归属,W7-001)
             hook::run(&args[1..])
         }
-        Some("render") => cmd_render(&args[1..]),
-        Some("oneline") => cmd_oneline(&args[1..]),
-        Some("watch") => cmd_watch(&args[1..]),
+        Some("render") => cmd_render(&args[1..], lang),
+        Some("oneline") => cmd_oneline(&args[1..], lang),
+        Some("watch") => cmd_watch(&args[1..], lang),
         Some(cmd) => {
-            eprintln!("error: unrecognized command `{cmd}`\n\n{USAGE}");
+            eprintln!("{}\n\n{}", lang.unrecognized_command(cmd), lang.usage());
             ExitCode::from(2)
         }
     }
@@ -75,7 +55,10 @@ enum RenderFormat {
 
 /// `render` 参数解析(W6-002,纯函数):`--format ansi|svg`(或 `--format=X`,
 /// 缺省 ansi)+ 至多一个 [PATH]。`Err` 为已成型错误消息,调用方打印后退 2。
-fn parse_render_args(rest: &[String]) -> Result<(RenderFormat, Option<PathBuf>), String> {
+fn parse_render_args(
+    rest: &[String],
+    lang: lang::Lang,
+) -> Result<(RenderFormat, Option<PathBuf>), String> {
     let mut format = RenderFormat::Ansi;
     let mut path = None;
     let mut iter = rest.iter();
@@ -85,24 +68,21 @@ fn parse_render_args(rest: &[String]) -> Result<(RenderFormat, Option<PathBuf>),
                 Some("ansi") => RenderFormat::Ansi,
                 Some("svg") => RenderFormat::Svg,
                 other => {
-                    return Err(format!(
-                        "--format 需要 ansi|svg,得到 {}",
-                        other.unwrap_or("(缺参)")
-                    ));
+                    return Err(lang.format_invalid(other.unwrap_or(lang.missing_value())));
                 }
             };
         } else if let Some(value) = arg.strip_prefix("--format=") {
             format = match value {
                 "ansi" => RenderFormat::Ansi,
                 "svg" => RenderFormat::Svg,
-                other => return Err(format!("--format 需要 ansi|svg,得到 {other}")),
+                other => return Err(lang.format_invalid(other)),
             };
         } else if arg.starts_with('-') {
-            return Err(format!("unexpected flag `{arg}`"));
+            return Err(lang.unexpected_flag(arg));
         } else if path.is_none() {
             path = Some(PathBuf::from(arg));
         } else {
-            return Err(String::from("unexpected extra arguments after [PATH]"));
+            return Err(lang.unexpected_extra("[PATH]"));
         }
     }
     Ok((format, path))
@@ -112,28 +92,28 @@ fn parse_render_args(rest: &[String]) -> Result<(RenderFormat, Option<PathBuf>),
 /// 原始列:低于 40 列退化为 oneline 单行(AD-ERR-004),否则钳 40..120 出
 /// 框化视图;模型走多源合并(损坏降级为警告行,不失败)。`--format svg`
 /// 仅 graph(W6-002):矢量 DAG 文档,其余同旧路径。
-fn cmd_render(rest: &[String]) -> ExitCode {
+fn cmd_render(rest: &[String], lang: lang::Lang) -> ExitCode {
     let Some(view) = rest.first().map(String::as_str) else {
-        eprintln!("error: render needs a view: `render panel|graph [PATH]`\n\n{USAGE}");
+        eprintln!("{}\n\n{}", lang.render_needs_view(), lang.usage());
         return ExitCode::from(2);
     };
     let default_width = match view {
         "panel" => render::DEFAULT_PANEL_WIDTH,
         "graph" => render::graph::DEFAULT_GRAPH_WIDTH,
         other => {
-            eprintln!("error: unknown render view `{other}` (expected panel|graph)\n\n{USAGE}");
+            eprintln!("{}\n\n{}", lang.unknown_view(other), lang.usage());
             return ExitCode::from(2);
         }
     };
-    let (format, path) = match parse_render_args(&rest[1..]) {
+    let (format, path) = match parse_render_args(&rest[1..], lang) {
         Ok(parsed) => parsed,
         Err(msg) => {
-            eprintln!("error: {msg}\n\n{USAGE}");
+            eprintln!("error: {msg}\n\n{}", lang.usage());
             return ExitCode::from(2);
         }
     };
     if format == RenderFormat::Svg && view != "graph" {
-        eprintln!("error: --format svg 仅支持 `render graph`\n\n{USAGE}");
+        eprintln!("{}\n\n{}", lang.svg_only_graph(), lang.usage());
         return ExitCode::from(2);
     }
     let path = path.unwrap_or_else(|| PathBuf::from("."));
@@ -156,8 +136,8 @@ fn cmd_render(rest: &[String]) -> ExitCode {
 }
 
 /// `oneline [PATH]`:无 ANSI 单行 statusline。
-fn cmd_oneline(rest: &[String]) -> ExitCode {
-    let Some(path) = positional_path(rest) else {
+fn cmd_oneline(rest: &[String], lang: lang::Lang) -> ExitCode {
+    let Some(path) = positional_path(rest, lang) else {
         return ExitCode::from(2);
     };
     println!("{}", render::render_oneline(&model::merge(&path)));
@@ -167,7 +147,7 @@ fn cmd_oneline(rest: &[String]) -> ExitCode {
 /// `watch [--once] [SECONDS] [PATH]`:ratatui watch;位置参数解析收口在
 /// [`tui::parse_watch_args`](W2-008 恢复 interval 位置档);`--once` 渲染
 /// 一帧即退,非 tty stdin 同样自动退化为单帧。
-fn cmd_watch(rest: &[String]) -> ExitCode {
+fn cmd_watch(rest: &[String], lang: lang::Lang) -> ExitCode {
     match tui::parse_watch_args(rest) {
         Ok((once, interval, repo)) => {
             let outcome = if once {
@@ -178,13 +158,17 @@ fn cmd_watch(rest: &[String]) -> ExitCode {
             match outcome {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
-                    eprintln!("error: watch failed: {err}");
+                    eprintln!("error: {} {err}", lang.watch_failed());
                     ExitCode::FAILURE
                 }
             }
         }
         Err(msg) => {
-            eprintln!("error: {msg}\n\n{USAGE}");
+            let text = match msg {
+                tui::WatchArgError::UnknownFlag(flag) => lang.unexpected_flag(&flag),
+                tui::WatchArgError::ExtraArgs => lang.unexpected_extra("[SECONDS] [PATH]"),
+            };
+            eprintln!("error: {text}\n\n{}", lang.usage());
             ExitCode::from(2)
         }
     }
@@ -192,16 +176,20 @@ fn cmd_watch(rest: &[String]) -> ExitCode {
 
 /// 取 `[PATH]` 位置参数:缺省 `.`;旗标与多余参数报错(返回 `None` 时
 /// 调用方已打印用法,应以退出码 2 终止)。
-fn positional_path(rest: &[String]) -> Option<PathBuf> {
+fn positional_path(rest: &[String], lang: lang::Lang) -> Option<PathBuf> {
     match rest {
         [] => Some(PathBuf::from(".")),
         [only] if !only.starts_with('-') => Some(PathBuf::from(only)),
         [flag] => {
-            eprintln!("error: unexpected flag `{flag}`\n\n{USAGE}");
+            eprintln!("error: {}\n\n{}", lang.unexpected_flag(flag), lang.usage());
             None
         }
         _ => {
-            eprintln!("error: unexpected extra arguments after [PATH]\n\n{USAGE}");
+            eprintln!(
+                "error: {}\n\n{}",
+                lang.unexpected_extra("[PATH]"),
+                lang.usage()
+            );
             None
         }
     }
