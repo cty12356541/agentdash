@@ -34,23 +34,33 @@
   "tasks": {
     "01": {
       "label": "±HHMM 基本格式容忍",
-      "state": "active"
+      "state": "done",
+      "done_at": "2026-09-15T22:14:28+08:00",
+      "note": "W6-001:单臂守卫统一 ±HH:MM/±HHMM,6 例点断言"
     },
     "02": {
       "label": "proptest 失败回归落盘",
-      "state": "pending"
+      "state": "done",
+      "done_at": "2026-09-15T22:14:28+08:00",
+      "note": "W6-004:Direct → crate 根 proptest-regressions/"
     },
     "03": {
       "label": "render graph --format svg",
-      "state": "pending"
+      "state": "done",
+      "done_at": "2026-09-15T22:14:28+08:00",
+      "note": "W6-002:svg 与 ansi 同源异渲染;CLI 3 测试"
     },
     "04": {
       "label": "install.ps1 静态审查(记录)",
-      "state": "pending"
+      "state": "done",
+      "done_at": "2026-09-15T22:14:28+08:00",
+      "note": "W6-003:五项逐条核对通过,零改码(见收口报告)"
     },
     "05": {
       "label": "0.5.0 收口+样张+tag",
-      "state": "pending"
+      "state": "done",
+      "done_at": "2026-09-15T22:15:15+08:00",
+      "note": "0.5.0 三处版本 + svg 样张 + tag v0.5.0"
     }
   },
   "barriers": [

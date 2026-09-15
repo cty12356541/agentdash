@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="696" height="408" viewBox="0 0 696 408" font-family="Menlo, Consolas, 'PingFang SC', monospace" font-size="13">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#616161"/></marker></defs>
+<rect width="696" height="408" fill="#FAFAF7"/>
+<text x="8" y="18" fill="#263238">agentdash · DAG</text>
+<line x1="0" y1="36" x2="696" y2="36" stroke="#CFCFCF"/>
+<g fill="none" stroke="#616161" stroke-width="1.5">
+<path d="M 104,120 V 156 H 120 V 168" marker-end="url(#a)"/>
+<path d="M 104,120 V 276 H 112 V 288" marker-end="url(#a)"/>
+<path d="M 120,240 V 276 H 112 V 288" marker-end="url(#a)"/>
+<path d="M 328,120 V 276 H 112 V 288" marker-end="url(#a)"/>
+<path d="M 560,120 V 276 H 112 V 288" marker-end="url(#a)"/>
+</g>
+<rect x="0" y="48" width="216" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="16" y="89" fill="#2E7D32">✓ 01 ±HHMM 基本格式容忍</text>
+<rect x="232" y="48" width="200" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="248" y="89" fill="#2E7D32">✓ 03 render graph --f</text>
+<rect x="448" y="48" width="232" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="464" y="89" fill="#2E7D32">✓ 04 install.ps1 静态审查</text>
+<rect x="0" y="168" width="240" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="16" y="209" fill="#2E7D32">✓ 02 proptest 失败回归落盘</text>
+<rect x="0" y="288" width="224" height="72" rx="6" fill="#FFFFFF" stroke="#2E7D32"/>
+<text x="16" y="329" fill="#2E7D32">✓ 05 0.5.0 收口+样张+tag</text>
+<line x1="0" y1="384" x2="696" y2="384" stroke="#CFCFCF"/>
+</svg>
+
