@@ -12,6 +12,8 @@ mod lang;
 mod model;
 mod render;
 mod sources;
+// W11-004:agentstats 观测面(三张纯文本表),私有模块单入口平铺
+mod stats;
 mod tui;
 
 use std::path::PathBuf;
@@ -39,6 +41,8 @@ fn main() -> ExitCode {
         Some("render") => cmd_render(&args[1..], lang),
         Some("oneline") => cmd_oneline(&args[1..], lang),
         Some("watch") => cmd_watch(&args[1..], lang),
+        // 观测面(W11-004):宿主/gate/周转三表,自带参数解析(见 cmd_stats)
+        Some("stats") => cmd_stats(&args[1..], lang),
         Some(cmd) => {
             eprintln!("{}\n\n{}", lang.unrecognized_command(cmd), lang.usage());
             ExitCode::from(2)
@@ -164,11 +168,12 @@ fn cmd_render(rest: &[String], lang: lang::Lang) -> ExitCode {
 }
 
 /// panel 多 PATH 入口(W10-001):逐参自研 glob 展开(含 `*`/`?` 的分量,
-/// 字面前缀 `read_dir` 逐段匹配)。恰 1 仓(含展开后)= 现行全面板路径,
-/// 输出逐字节不变(黄金);N>1 逐仓精要块(空行分隔),无匹配 pattern 尾
-/// 随 ⚠ 行;0 仓(全模式无匹配)逐 pattern 一行 ⚠——恒退 0,不崩溃。
-/// 窄终端退化同现行:低于 40 列逐仓 oneline 单行。`infer` 透传合并
-/// (W11-003 `--no-infer`)。
+/// 字面前缀 `read_dir` 逐段匹配)。恰 1 仓(含展开后)= 现行全面板路径
+/// (无 nomatch 时输出逐字节不变,W10 黄金);N>1 逐仓精要块(空行分隔);
+/// 无匹配 pattern 一律尾随 ⚠ 行(W10 终审 Important-1 起 N==1 同样补行,
+/// 不再被单仓路径吞掉);0 仓(全模式无匹配)逐 pattern 一行 ⚠——恒退 0,
+/// 不崩溃。窄终端退化同现行:低于 40 列逐仓 oneline 单行。`infer` 透传
+/// 合并(W11-003 `--no-infer`)。
 fn cmd_render_panel(paths: &[PathBuf], default_width: usize, infer: bool) -> ExitCode {
     let (repos, nomatch) = glob::expand_args(paths);
     match repos.len() {
@@ -181,10 +186,19 @@ fn cmd_render_panel(paths: &[PathBuf], default_width: usize, infer: bool) -> Exi
         }
         1 => {
             let dash = model::merge_opts(&repos[0], infer);
+            // W10 终审 Important-1:恰 1 仓(含展开后)也随行补无匹配 ⚠——
+            // 拼接法与 N>1 臂同构,nomatch 为空时 join 单元素逐字节不变
+            // (单仓字节钉 W10 黄金不破)
             match tui::output_form(tui::stdout_cols(), default_width) {
-                tui::OutputForm::OneLine => println!("{}", render::render_oneline(&dash)),
+                tui::OutputForm::OneLine => {
+                    let mut lines = vec![render::render_oneline(&dash)];
+                    lines.extend(nomatch.iter().map(|pattern| nomatch_line(pattern)));
+                    println!("{}", lines.join("\n"));
+                }
                 tui::OutputForm::Framed(width) => {
-                    println!("{}", render::render_panel(&dash, width));
+                    let mut blocks = vec![render::render_panel(&dash, width)];
+                    blocks.extend(nomatch.iter().map(|pattern| nomatch_line(pattern)));
+                    println!("{}", blocks.join("\n\n"));
                 }
             }
         }
@@ -253,6 +267,56 @@ fn cmd_render_digest(rest: &[String], lang: lang::Lang) -> ExitCode {
         return ExitCode::FAILURE; // 1:失败门/blocked 在场(cron 监控用)
     }
     ExitCode::SUCCESS
+}
+
+/// `stats [--host <name>] [PATH]`(W11-004):观测面——宿主使用率 / gate
+/// 通过率 / 任务周转三张纯文本表(渲染归 [`stats::render`],本层只收参)。
+/// 自带旗标解析:`--host <name>`(或 `--host=<name>`,空白值 = 用法错)+
+/// 至多一位置 PATH(缺省 `.`);未知旗标与多余 PATH 用法错退 2。stats 是
+/// 纯投影且恒退 0(D2):渲染/退出码不在此层判定,内容永不影响退出。
+fn cmd_stats(rest: &[String], lang: lang::Lang) -> ExitCode {
+    let mut host: Option<String> = None;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut iter = rest.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--host" {
+            match iter.next().map(String::as_str).map(str::trim) {
+                Some(name) if !name.is_empty() => host = Some(name.to_owned()),
+                other => {
+                    let shown = other.unwrap_or_else(|| lang.missing_value());
+                    eprintln!("error: {}\n\n{}", lang.host_needs_name(shown), lang.usage());
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--host=") {
+            match value.trim() {
+                "" => {
+                    eprintln!(
+                        "error: {}\n\n{}",
+                        lang.host_needs_name(lang.missing_value()),
+                        lang.usage()
+                    );
+                    return ExitCode::from(2);
+                }
+                name => host = Some(name.to_owned()),
+            }
+        } else if arg.starts_with('-') {
+            eprintln!("error: {}\n\n{}", lang.unexpected_flag(arg), lang.usage());
+            return ExitCode::from(2);
+        } else {
+            paths.push(PathBuf::from(arg));
+        }
+    }
+    if paths.len() > 1 {
+        eprintln!(
+            "error: {}\n\n{}",
+            lang.unexpected_extra("[PATH]"),
+            lang.usage()
+        );
+        return ExitCode::from(2);
+    }
+    let path = paths.pop().unwrap_or_else(|| PathBuf::from("."));
+    stats::run(&path, host.as_deref())
 }
 
 /// `oneline [--no-infer] [PATH]`:无 ANSI 单行 statusline;旗标与多余参数

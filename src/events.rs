@@ -6,11 +6,27 @@
 //! `ts` 保留原串不做时区运算,乱序容忍 = 后到事件按到达序处理。
 //! 残缺行(非合法 JSON / 缺关键字段 / 未知 kind)一律丢弃并收集警告,绝不中断重放。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Deserialize;
 
 use crate::model::rfc3339_to_secs;
+
+/// 无 host 戳事件的归桶键(W11-004 stats):诚实标注"不知道归属",不猜。
+pub const UNKNOWN_HOST: &str = "unknown";
+
+/// 门终态折叠计数(W11-004 stats):state passed/failed 的门事件按
+/// (门名 × 宿主)各一桶;`unknown` 收 exit 不可知的失败折叠(W4-001 D1 的
+/// `(exit unknown)` 路径)——证据缺失不与真失败混计。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GateFoldTally {
+    /// 折叠为 passed 的门事件数。
+    pub passed: u64,
+    /// 折叠为 failed 且带显式退出码的门事件数。
+    pub failed: u64,
+    /// 折叠为 failed 但 exit 不可知(null/缺字段)的门事件数。
+    pub unknown: u64,
+}
 
 /// 验证门终态:同 gate 后到事件覆盖先到。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +93,16 @@ pub struct EventModel {
     pub ts_max: Option<u64>,
     /// 残缺行警告(格式 `line {n}: ...`,行号从 1 起计,空行不计)。
     pub warnings: Vec<String>,
+    /// 宿主使用率底账(W11-004 stats):**生效**事件按行上 `host` 戳计数,
+    /// 无戳/空白戳归 [`UNKNOWN_HOST`] 桶。生效 = replay 消费的行:gate 合法
+    /// 行、agent dispatched/completed 生效行(含推断配对)、tool `end` 相位
+    /// 行;残缺行与未知 kind 不计(tools 计数同口径:仅 end 相位)。
+    pub host_events: BTreeMap<String, u64>,
+    /// 门终态折叠计数(W11-004 stats):(门名, 宿主) → 各态计数。running
+    /// 在途行与残缺行不计;failed 折叠按行上 `exit` 证据分流(有码 →
+    /// `failed`,无码 → `unknown`)。折叠本身仍由本模型 `gates` 独家产出,
+    /// 这里只对折叠产物计数投影,不重算折叠。
+    pub gate_folds: BTreeMap<(String, String), GateFoldTally>,
 }
 
 /// 一行一 JSON 的宽松事件形状:字段类型不符即整行判残缺。
@@ -93,6 +119,9 @@ struct RawEvent {
     who: Option<String>,
     host: Option<String>,
     tool: Option<String>,
+    /// W11-004 stats:门折叠行的退出码证据(hook 落盘为数字或 `null`;
+    /// running 行无此字段)。`null`/缺失 = exit 不可知。
+    exit: Option<serde_json::Value>,
 }
 
 /// 重放事件流:按到达序逐行折叠出模型(缺省开启无 who completed 配对
@@ -183,6 +212,21 @@ fn apply_gate(model: &mut EventModel, raw: RawEvent, line_no: usize) {
     let ts = raw.ts;
     // 后态覆盖前态;生效行入事件尾(W4-002)
     model.gates.insert(gate.clone(), state);
+    // W11-004 stats:生效门事件计入宿主使用率;终态折叠(passed/failed)
+    // 另按(门名, host)累计——failed 折叠按 exit 证据分流(有码 failed,
+    // 无码 unknown 即 W4-001 D1 的 `(exit unknown)` 路径);running 在途不算折叠
+    let host = host_key(raw.host.as_deref());
+    *model.host_events.entry(host.clone()).or_default() += 1;
+    if label != "running" {
+        let tally = model.gate_folds.entry((gate.clone(), host)).or_default();
+        if label == "passed" {
+            tally.passed += 1;
+        } else if matches!(raw.exit, Some(serde_json::Value::Number(_))) {
+            tally.failed += 1;
+        } else {
+            tally.unknown += 1;
+        }
+    }
     push_tail(
         &mut model.tail,
         "gate",
@@ -217,11 +261,14 @@ fn apply_agent(
     infer: bool,
     inferred_pairs: &mut usize,
 ) {
+    // W11-004 stats:宿主键归一先行(AgentEntry.host 仍存行上原值不动);
+    // 生效 dispatched/completed(含推断配对)各计一次使用率,残缺行不计
+    let host = host_key(raw.host.as_deref());
     let Some(who) = raw.who else {
         // W11-003:无 who 的 completed 在启发开启时配给最老在跑;其余缺 who
         // 形态(dispatched / 未知 event / 启发关闭)照旧残缺丢弃
         if infer && raw.event.as_deref() == Some("completed") {
-            infer_pair(model, raw, line_no, inferred_pairs);
+            infer_pair(model, raw, line_no, inferred_pairs, &host);
         } else {
             model.warnings.push(format!(
                 "line {line_no}: agent event with missing `who`, line dropped"
@@ -256,6 +303,7 @@ fn apply_agent(
                     inferred: false,
                 }),
             }
+            *model.host_events.entry(host).or_default() += 1;
         }
         // 按 who 移除(与 task 注记无关);未在册的 who(幽灵)静默忽略。
         // 生效行入尾(W4-002)
@@ -268,6 +316,7 @@ fn apply_agent(
                 raw.ts.unwrap_or_default(),
             );
             model.agents.retain(|a| a.who != who);
+            *model.host_events.entry(host).or_default() += 1;
         }
         _ => model.warnings.push(format!(
             "line {line_no}: agent event with unknown or missing `event`, line dropped"
@@ -280,7 +329,14 @@ fn apply_agent(
 /// [`AgentEntry::inferred`](= 完成,不占在跑),事件尾以被配对 who 记一笔
 /// 生效 completed(匿名行由此落到具体 agent 的叙事序);无在跑可配 →
 /// 保持今天的逐行丢弃警告(汇总由 [`replay_infer`] 收尾统一出)。
-fn infer_pair(model: &mut EventModel, raw: RawEvent, line_no: usize, inferred_pairs: &mut usize) {
+/// `host` = 匿名行自身宿主键(W11-004 stats:配对成功计一次使用率)。
+fn infer_pair(
+    model: &mut EventModel,
+    raw: RawEvent,
+    line_no: usize,
+    inferred_pairs: &mut usize,
+    host: &str,
+) {
     let Some(entry) = model.agents.iter_mut().find(|agent| !agent.inferred) else {
         model.warnings.push(format!(
             "line {line_no}: agent event with missing `who`, line dropped"
@@ -289,6 +345,7 @@ fn infer_pair(model: &mut EventModel, raw: RawEvent, line_no: usize, inferred_pa
     };
     entry.inferred = true;
     *inferred_pairs += 1;
+    *model.host_events.entry(host.to_owned()).or_default() += 1;
     push_tail(
         &mut model.tail,
         "agent",
@@ -309,6 +366,9 @@ fn apply_tool(model: &mut EventModel, raw: RawEvent, line_no: usize) {
     // 缺相 / 未知相按残缺行丢弃 + 警告
     match raw.phase.as_deref() {
         Some("end") => {
+            // W11-004 stats:生效 tool 行计入宿主使用率(与 tools 同口径)
+            let host = host_key(raw.host.as_deref());
+            *model.host_events.entry(host).or_default() += 1;
             let count = model.tools.entry(tool).or_default();
             *count = count.saturating_add(1);
         }
@@ -316,5 +376,14 @@ fn apply_tool(model: &mut EventModel, raw: RawEvent, line_no: usize) {
         _ => model.warnings.push(format!(
             "line {line_no}: tool event with unknown or missing `phase`, line dropped"
         )),
+    }
+}
+
+/// 宿主键归一(W11-004 stats):行上有非空 `host` 戳即原样作键;缺失/空白
+/// 归 [`UNKNOWN_HOST`] 桶(诚实标注,不猜归属)。
+fn host_key(host: Option<&str>) -> String {
+    match host.map(str::trim).filter(|h| !h.is_empty()) {
+        Some(host) => host.to_owned(),
+        None => UNKNOWN_HOST.to_owned(),
     }
 }

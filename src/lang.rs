@@ -42,6 +42,7 @@ agentdash - agent 进度仪表盘(agent progress dashboard)
                                   渲染面板或任务 DAG(--format svg:矢量 DAG,仅 graph)
   render digest [--strict] [PATH] 离场摘要(纯文本;--strict 遇失败门或阻塞退 1)
   oneline [PATH]                  打印单行状态摘要
+  stats [PATH] [--host <name>]    观测统计:宿主/gate/周转三表(纯文本,恒退 0)
   watch [--once] [SECONDS] [PATH] 常驻实时刷新(q/Ctrl-C 退出)
   hook <EVENT>                    从 stdin 消费宿主工具钩子载荷
 
@@ -70,6 +71,8 @@ Commands:
   render digest [--strict] [PATH] Print a plain-text leave digest (--strict
                                   exits 1 on failed gate or blocked task)
   oneline [PATH]                  Print a one-line status summary
+  stats [PATH] [--host <name>]    Observation tables: hosts / gates / turnover
+                                  (plain text, always exits 0)
   watch [--once] [SECONDS] [PATH] Watch a plan and refresh live (q/Ctrl-C quits)
   hook <EVENT>                    Consume a host-tool hook payload from stdin
 
@@ -160,6 +163,14 @@ Language/语言: English · AGENTDASH_LANG=zh 切换中文(switch to Chinese)"
         match self {
             Lang::Zh => "(缺参)",
             Lang::En => "(missing)",
+        }
+    }
+
+    /// `--host` 缺参/空值(W11-004 stats;`got` 为调用方预成型的实际值串)。
+    pub(crate) fn host_needs_name(self, got: &str) -> String {
+        match self {
+            Lang::Zh => format!("--host 需要宿主名,得到 {got}"),
+            Lang::En => format!("--host needs a host name, got {got}"),
         }
     }
 }
