@@ -34,13 +34,13 @@
     },
     "07": {
       "label": "pending 池会话归属",
-      "state": "active",
-      "note": "W11-001 派发(2026-09-16):session_id 池化,Stop 折叠同池;遗留/无 session_id 行为不变;真机嵌套双会话实证;spec 详见 w11-delta"
+      "state": "done",
+      "note": "128a594(2026-09-16):256 测试(+5);Stop 折叠同池,真机嵌套双会话实证互不污染;verify-kits 130/0(顺手修 cygpath 根因);审查 Approved(3 Minor 延后)"
     },
     "08": {
       "label": "claude 宿主退出码证据 + README 证据分级句校准",
-      "state": "pending",
-      "note": "本宿主 Bash 载荷无退出码→自定义 gate 终态恒 failed(exit unknown);终审 ⑭+Important-3 路由:补载荷退出码提取或校准 README『折叠出真实退出码』句(2026-09-16)"
+      "state": "active",
+      "note": "W11-002 派发(2026-09-16):抓原始载荷实证,缺哪补哪;reports 入册;修则活体复验,不修则 README 句校准"
     }
   },
   "barriers": []
