@@ -34,8 +34,8 @@
     },
     "07": {
       "label": "pending 池会话归属",
-      "state": "pending",
-      "note": "多会话共享 pending_gate.json,首个 Stop 折叠全部槽位——嵌套会话互相污染退出证据(W10 活体验证实测);终审 ⑬ 路由(2026-09-16)"
+      "state": "active",
+      "note": "W11-001 派发(2026-09-16):session_id 池化,Stop 折叠同池;遗留/无 session_id 行为不变;真机嵌套双会话实证;spec 详见 w11-delta"
     },
     "08": {
       "label": "claude 宿主退出码证据 + README 证据分级句校准",
