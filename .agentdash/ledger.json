@@ -40,8 +40,8 @@
     },
     "03": {
       "label": "用户自定义 gate(.agentdash/config 声明词表)",
-      "state": "active",
-      "note": "W10-003 派发(2026-09-16):config.json 词序列(非正则,零新依赖);用户表先查;损坏整表静默回退;六 kit 巡检照常"
+      "state": "done",
+      "note": "fd71c06(2026-09-16):251 测试;15 态格式错表驱动钉整表回退;用户先查同名覆盖;proplist 联系点原封;审查 Approved(4 Minor 延后);活体验证归 T4"
     },
     "04": {
       "label": "agentstats 观测面(宿主使用率/gate 通过率/任务周转)",
