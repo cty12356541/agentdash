@@ -24,8 +24,8 @@
     },
     "05": {
       "label": "契约文档化:schema/事件词表公开版本化",
-      "state": "active",
-      "note": "W11-005 派发(2026-09-16):docs/contract.md 契约 v1.0 公开版,以代码为对账基准逐字段核写"
+      "state": "done",
+      "note": "67f29bb(2026-09-16):docs/contract.md 348 行契约 v1.0 公开版;七项高风险主张逐条对账源码无一错;逮住 README 四→五钩子漏改并校准;审查 Approved(4 Minor 措辞级延后)"
     },
     "06": {
       "label": "无 who completed 配对启发",
