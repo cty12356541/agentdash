@@ -79,7 +79,7 @@ zcode/cursor/claude-code 注册)与在途 gate 配对后升级真证据——cla
 .\kits\claude-code\install.ps1 [-Target <目标项目目录>]
 ```
 
-安装器幂等注册四个 hook(PostToolUse / PreToolUse / Stop / SubagentStop;
+安装器幂等注册五个 hook(PostToolUse / PostToolUseFailure / PreToolUse / Stop / SubagentStop;
 PreToolUse 以 matcher `Task|Agent` 只拦 agent 派发),命令直调二进制
 `agentdash hook <event> || true`——**无路径 baked、无任何脚本运行时依赖**;
 hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直接用
@@ -113,6 +113,9 @@ dispatched 行(FIFO);配对行在 panel/摘要/精要中显式标注
 `watch` 常驻视图暂不支持该旗标(恒缺省开启,见 W11-003 报告)。
 
 ## 数据契约 v1(两文件 + config.json)
+
+**契约公开版 v1.0 全文见 [`docs/contract.md`](docs/contract.md)**(全词表/字段语义/
+折叠与会话池/推断配对/证据分级,第三方宿主照写即可);本节为速览。
 
 约定目录 `<repo>/.agentdash/`;合并可信序 **契约 > 事件 > git 快照**,
 任何单源缺失/损坏只降级为警告行,不失败、不白屏。
