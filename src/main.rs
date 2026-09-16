@@ -55,16 +55,18 @@ enum RenderFormat {
     Svg,
 }
 
-/// `render` 参数解析(W6-002;W10-001 起多 PATH,纯函数):`--format
-/// ansi|svg`(或 `--format=X`,缺省 ansi)+ 任意个 [PATH];panel 侧逐参
-/// glob 展开,graph 侧仍限单个,由 [`cmd_render`] 收口。`Err` 为已成型
+/// `render` 参数解析(W6-002;W10-001 起多 PATH;W11-003 起 `--no-infer`,
+/// 纯函数):`--format ansi|svg`(或 `--format=X`,缺省 ansi)+ `--no-infer`
+/// (关闭无 who completed 配对启发,缺省开启)+ 任意个 [PATH];panel 侧
+/// 逐参 glob 展开,graph 侧仍限单个,由 [`cmd_render`] 收口。`Err` 为已成型
 /// 错误消息,调用方打印后退 2。
 fn parse_render_args(
     rest: &[String],
     lang: lang::Lang,
-) -> Result<(RenderFormat, Vec<PathBuf>), String> {
+) -> Result<(RenderFormat, Vec<PathBuf>, bool), String> {
     let mut format = RenderFormat::Ansi;
     let mut paths = Vec::new();
+    let mut infer = true;
     let mut iter = rest.iter();
     while let Some(arg) = iter.next() {
         if arg == "--format" {
@@ -81,13 +83,15 @@ fn parse_render_args(
                 "svg" => RenderFormat::Svg,
                 other => return Err(lang.format_invalid(other)),
             };
+        } else if arg == "--no-infer" {
+            infer = false;
         } else if arg.starts_with('-') {
             return Err(lang.unexpected_flag(arg));
         } else {
             paths.push(PathBuf::from(arg));
         }
     }
-    Ok((format, paths))
+    Ok((format, paths, infer))
 }
 
 /// `render panel|graph|digest [PATH]...`:打印对应渲染(digest 自带解析臂,
@@ -115,7 +119,7 @@ fn cmd_render(rest: &[String], lang: lang::Lang) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let (format, paths) = match parse_render_args(&rest[1..], lang) {
+    let (format, paths, infer) = match parse_render_args(&rest[1..], lang) {
         Ok(parsed) => parsed,
         Err(msg) => {
             eprintln!("error: {msg}\n\n{}", lang.usage());
@@ -140,13 +144,13 @@ fn cmd_render(rest: &[String], lang: lang::Lang) -> ExitCode {
         if paths.is_empty() {
             paths.push(PathBuf::from(".")); // 缺省 cwd(承现行)
         }
-        return cmd_render_panel(&paths, default_width);
+        return cmd_render_panel(&paths, default_width, infer);
     }
     let path = paths
         .into_iter()
         .next()
         .unwrap_or_else(|| PathBuf::from("."));
-    let dash = model::merge(&path);
+    let dash = model::merge_opts(&path, infer);
     match format {
         RenderFormat::Svg => println!("{}", render::graph::render_graph_svg(&dash)),
         RenderFormat::Ansi => match tui::output_form(tui::stdout_cols(), default_width) {
@@ -163,8 +167,9 @@ fn cmd_render(rest: &[String], lang: lang::Lang) -> ExitCode {
 /// 字面前缀 `read_dir` 逐段匹配)。恰 1 仓(含展开后)= 现行全面板路径,
 /// 输出逐字节不变(黄金);N>1 逐仓精要块(空行分隔),无匹配 pattern 尾
 /// 随 ⚠ 行;0 仓(全模式无匹配)逐 pattern 一行 ⚠——恒退 0,不崩溃。
-/// 窄终端退化同现行:低于 40 列逐仓 oneline 单行。
-fn cmd_render_panel(paths: &[PathBuf], default_width: usize) -> ExitCode {
+/// 窄终端退化同现行:低于 40 列逐仓 oneline 单行。`infer` 透传合并
+/// (W11-003 `--no-infer`)。
+fn cmd_render_panel(paths: &[PathBuf], default_width: usize, infer: bool) -> ExitCode {
     let (repos, nomatch) = glob::expand_args(paths);
     match repos.len() {
         0 => {
@@ -175,7 +180,7 @@ fn cmd_render_panel(paths: &[PathBuf], default_width: usize) -> ExitCode {
             println!("{}", lines.join("\n"));
         }
         1 => {
-            let dash = model::merge(&repos[0]);
+            let dash = model::merge_opts(&repos[0], infer);
             match tui::output_form(tui::stdout_cols(), default_width) {
                 tui::OutputForm::OneLine => println!("{}", render::render_oneline(&dash)),
                 tui::OutputForm::Framed(width) => {
@@ -187,7 +192,7 @@ fn cmd_render_panel(paths: &[PathBuf], default_width: usize) -> ExitCode {
             tui::OutputForm::OneLine => {
                 let mut lines: Vec<String> = repos
                     .iter()
-                    .map(|path| render::render_oneline(&model::merge(path)))
+                    .map(|path| render::render_oneline(&model::merge_opts(path, infer)))
                     .collect();
                 lines.extend(nomatch.iter().map(|pattern| nomatch_line(pattern)));
                 println!("{}", lines.join("\n"));
@@ -195,7 +200,7 @@ fn cmd_render_panel(paths: &[PathBuf], default_width: usize) -> ExitCode {
             tui::OutputForm::Framed(width) => {
                 let mut blocks: Vec<String> = repos
                     .iter()
-                    .map(|path| render::render_brief(&model::merge(path), width))
+                    .map(|path| render::render_brief(&model::merge_opts(path, infer), width))
                     .collect();
                 blocks.extend(nomatch.iter().map(|pattern| nomatch_line(pattern)));
                 println!("{}", blocks.join("\n\n"));
@@ -211,17 +216,21 @@ fn nomatch_line(pattern: &str) -> String {
     format!("{}⚠ no match: {pattern}{}", render::C_WARN, render::C_END)
 }
 
-/// `render digest [--strict] [PATH]`(W10-002):离场摘要,纯文本无 ANSI。
-/// 单 PATH(oneline 同款缺省 `.`;多仓 digest 即用法错退 2,D2);`--strict`
-/// 是本仓首个内容性退出码——存在失败门或 blocked 任务退 1,否则 0。渲染与
-/// 判定分层:`render::render_digest` 只出文本,退出码在 cmd 层凭
-/// [`render::digest_needs_attention`] 收口。
+/// `render digest [--strict] [--no-infer] [PATH]`(W10-002):离场摘要,
+/// 纯文本无 ANSI。单 PATH(oneline 同款缺省 `.`;多仓 digest 即用法错退 2,
+/// D2);`--strict` 是本仓首个内容性退出码——存在失败门或 blocked 任务退 1,
+/// 否则 0。渲染与判定分层:`render::render_digest` 只出文本,退出码在 cmd
+/// 层凭 [`render::digest_needs_attention`] 收口;`--no-infer` 透传合并
+/// (W11-003)。
 fn cmd_render_digest(rest: &[String], lang: lang::Lang) -> ExitCode {
     let mut strict = false;
+    let mut infer = true;
     let mut paths: Vec<PathBuf> = Vec::new();
     for arg in rest {
         if arg == "--strict" {
             strict = true;
+        } else if arg == "--no-infer" {
+            infer = false;
         } else if arg.starts_with('-') {
             eprintln!("error: {}\n\n{}", lang.unexpected_flag(arg), lang.usage());
             return ExitCode::from(2);
@@ -238,7 +247,7 @@ fn cmd_render_digest(rest: &[String], lang: lang::Lang) -> ExitCode {
         return ExitCode::from(2);
     }
     let path = paths.pop().unwrap_or_else(|| PathBuf::from("."));
-    let dash = model::merge(&path);
+    let dash = model::merge_opts(&path, infer);
     println!("{}", render::render_digest(&dash));
     if strict && render::digest_needs_attention(&dash) {
         return ExitCode::FAILURE; // 1:失败门/blocked 在场(cron 监控用)
@@ -246,12 +255,34 @@ fn cmd_render_digest(rest: &[String], lang: lang::Lang) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `oneline [PATH]`:无 ANSI 单行 statusline。
+/// `oneline [--no-infer] [PATH]`:无 ANSI 单行 statusline;旗标与多余参数
+/// 报错退 2(W11-003 起 `--no-infer` 透传合并)。
 fn cmd_oneline(rest: &[String], lang: lang::Lang) -> ExitCode {
-    let Some(path) = positional_path(rest, lang) else {
+    let mut infer = true;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for arg in rest {
+        if arg == "--no-infer" {
+            infer = false;
+        } else if arg.starts_with('-') {
+            eprintln!("error: {}\n\n{}", lang.unexpected_flag(arg), lang.usage());
+            return ExitCode::from(2);
+        } else {
+            paths.push(PathBuf::from(arg));
+        }
+    }
+    if paths.len() > 1 {
+        eprintln!(
+            "error: {}\n\n{}",
+            lang.unexpected_extra("[PATH]"),
+            lang.usage()
+        );
         return ExitCode::from(2);
-    };
-    println!("{}", render::render_oneline(&model::merge(&path)));
+    }
+    let path = paths.pop().unwrap_or_else(|| PathBuf::from("."));
+    println!(
+        "{}",
+        render::render_oneline(&model::merge_opts(&path, infer))
+    );
     ExitCode::SUCCESS
 }
 
@@ -281,27 +312,6 @@ fn cmd_watch(rest: &[String], lang: lang::Lang) -> ExitCode {
             };
             eprintln!("error: {text}\n\n{}", lang.usage());
             ExitCode::from(2)
-        }
-    }
-}
-
-/// 取 `[PATH]` 位置参数:缺省 `.`;旗标与多余参数报错(返回 `None` 时
-/// 调用方已打印用法,应以退出码 2 终止)。
-fn positional_path(rest: &[String], lang: lang::Lang) -> Option<PathBuf> {
-    match rest {
-        [] => Some(PathBuf::from(".")),
-        [only] if !only.starts_with('-') => Some(PathBuf::from(only)),
-        [flag] => {
-            eprintln!("error: {}\n\n{}", lang.unexpected_flag(flag), lang.usage());
-            None
-        }
-        _ => {
-            eprintln!(
-                "error: {}\n\n{}",
-                lang.unexpected_extra("[PATH]"),
-                lang.usage()
-            );
-            None
         }
     }
 }

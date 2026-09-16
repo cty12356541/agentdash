@@ -96,6 +96,10 @@ pub struct AgentView {
     pub since: String,
     /// 宿主归属(W7-001;首次 dispatched 的 `--host` 盖章,缺省 [`None`])。
     pub host: Option<String>,
+    /// W11-003:该行已被无 `who` 的 completed **推断配对**为完成——显示层
+    /// 标 `▶⇢✓ … (inferred)`,计数走完成侧(不占在跑);推断非实测,严格
+    /// 路径(`--no-infer`)恒 `false`。
+    pub inferred: bool,
 }
 
 /// 验证门视图(后到覆盖先到折尽后的终态快照)。
@@ -175,14 +179,37 @@ pub struct Dashboard {
 /// 任何单源损坏都不 `panic`、不失败:降级为警告行,其余源照常。
 #[must_use]
 pub fn merge(repo: &Path) -> Dashboard {
-    merge_with_git(repo, git::snapshot(repo))
+    merge_opts(repo, true)
+}
+
+/// [`merge`] 的旗标变体(W11-003):`infer = false` 关闭无 who completed
+/// 配对启发(`--no-infer`,严格丢弃 + 逐行警告),`true` 为缺省开启;
+/// 其余语义与 [`merge`] 完全一致。
+#[must_use]
+pub fn merge_opts(repo: &Path, infer: bool) -> Dashboard {
+    build(repo, git::snapshot(repo), infer)
+}
+
+impl Dashboard {
+    /// 在跑 agent 计数(W11-003):只算未推断行——配对行已完成(完成侧
+    /// 语义),不占在跑。panel/精要/摘要/oneline 四处计数同源。
+    #[must_use]
+    pub fn running_agents(&self) -> usize {
+        self.agents.iter().filter(|agent| !agent.inferred).count()
+    }
 }
 
 /// [`merge`] 的分级刷新变体(watch 30s 节流档,W1-007):git 快照由调用方
 /// 注入,使最重的 git 探测能压到 30s 边界、其余源照常按 interval 档重建;
-/// 合并语义与 [`merge`] 完全一致。
+/// 合并语义与 [`merge`] 完全一致(启发缺省开启)。
 #[must_use]
 pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
+    build(repo, git, true)
+}
+
+/// 三入口共用折叠核(W11-003 起):`infer` 只透传事件重放(契约/git 源
+/// 与配对启发无关)。
+fn build(repo: &Path, git: GitFacts, infer: bool) -> Dashboard {
     let mut warnings = Vec::new();
 
     // 契约层(可信序最高):合法则任务/里程碑出自台账;损坏降级为警告行
@@ -236,7 +263,7 @@ pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
     let (events_text, events_present) = read_source(&events_path, "events.jsonl", &mut warnings);
     let (agents, gates, event_tail, last_gate_passed) = match events_text {
         Some(text) => {
-            let model = events::replay(text.lines().map(str::to_owned));
+            let model = events::replay_infer(text.lines().map(str::to_owned), infer);
             event_span_secs = event_span_of(&model);
             let (agents, gates, tail, anchor, model_warnings) = event_views(model);
             warnings.extend(model_warnings);
@@ -322,6 +349,7 @@ fn event_views(model: events::EventModel) -> EventViews {
             task: agent.task,
             since: agent.first_seen,
             host: agent.host,
+            inferred: agent.inferred,
         })
         .collect();
     agents.sort_by(|a, b| a.who.cmp(&b.who));

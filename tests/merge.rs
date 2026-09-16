@@ -3,7 +3,12 @@
 //! agentdash 当前是纯二进制 crate(无 lib 目标),集成测试按 `#[path]` 在 crate
 //! 根挂载 `src` 模块树,使 model.rs 内部的 `crate::contract` / `crate::events` /
 //! `crate::sources::git` 顶层路径照常解析(mod 声明序经 rustfmt 字母序重排,
-//! 与解析无关)。
+//! 与解析无关)。本组用例只触达合并投影,挂载树的其余 pub 项(如
+//! `events::replay` / `merge_with_git` 的直呼面)属死代码,按文件级 allow
+//! 放行(同 `tests/events.rs` 约定;W11-003 起 merge 改经 `merge_opts` →
+//! `build` 折叠核,不再传递消费上述两项)。
+
+#![allow(dead_code)]
 
 #[path = "../src/contract.rs"]
 mod contract;
@@ -345,6 +350,7 @@ fn agents_and_gates_project_into_dashboard_sorted() {
             task: None,
             since: "2026-09-13T08:30:00Z".to_owned(),
             host: None,
+            inferred: false,
         },
         "who 字典序:alice 压过派发更早的 bob"
     );
@@ -355,6 +361,7 @@ fn agents_and_gates_project_into_dashboard_sorted() {
             task: Some("改写 render".to_owned()),
             since: "2026-09-13T09:00:00Z".to_owned(),
             host: None,
+            inferred: false,
         },
         "同 who 再派刷新 task 注记,first_seen 保留首见"
     );
@@ -1071,4 +1078,57 @@ fn rfc3339_accepts_basic_offset_format() {
         None,
         "分越界拒解析"
     );
+}
+
+/// W11-003:无 who completed 配对启发上模——配对行投影 `inferred`(完成侧,
+/// 不占在跑计数),警告降频一条汇总;`merge_opts(.., false)`(--no-infer)
+/// 回严格丢弃 + 逐行警告,与 W11 前逐字节一致。
+#[test]
+fn anonymous_completed_projects_inferred_and_no_infer_is_strict() {
+    const EVENTS: &str = concat!(
+        r#"{"kind":"agent","event":"dispatched","who":"alice","ts":"2026-09-16T09:00:00Z"}"#,
+        "\n",
+        r#"{"kind":"agent","event":"dispatched","who":"bob","ts":"2026-09-16T09:01:00Z"}"#,
+        "\n",
+        r#"{"kind":"agent","event":"completed","ts":"2026-09-16T09:02:00Z"}"#,
+        "\n",
+    );
+    let repo = fixture_repo("infer");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER).expect("write ledger.json");
+    fs::write(dir.join("events.jsonl"), EVENTS).expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+    assert_eq!(
+        dash.warnings,
+        vec!["1 个无 who completed 已推断配对".to_owned()],
+        "缺省开启发:逐行警告降频为一条汇总"
+    );
+    let alice = dash
+        .agents
+        .iter()
+        .find(|agent| agent.who == "alice")
+        .unwrap();
+    let bob = dash.agents.iter().find(|agent| agent.who == "bob").unwrap();
+    assert!(alice.inferred, "最老在跑 alice 被推断配对(完成侧)");
+    assert!(!bob.inferred, "bob 照常在跑");
+    assert_eq!(
+        dash.running_agents(),
+        1,
+        "在跑计数只算未推断行:配对行不占在跑"
+    );
+
+    let strict = model::merge_opts(&repo, false);
+    assert_eq!(
+        strict.warnings,
+        vec!["line 3: agent event with missing `who`, line dropped".to_owned()],
+        "--no-infer:严格丢弃 + 逐行警告,无汇总"
+    );
+    assert!(
+        strict.agents.iter().all(|agent| !agent.inferred),
+        "严格路径无推断行"
+    );
+    assert_eq!(strict.running_agents(), 2);
+    cleanup(&repo);
 }

@@ -51,6 +51,7 @@ agentdash - agent 进度仪表盘(agent progress dashboard)
   watch --once  只渲染一帧即退(stdin 非 TTY 时自动生效)
 
 选项:
+  --no-infer     关闭无 who completed 配对启发(render/oneline 系;缺省开启推断)
   -V, --version  打印版本号
   -h, --help     打印本帮助
 
@@ -78,6 +79,8 @@ Arguments:
   watch --once  Render a single frame and exit (implied when stdin is not a TTY)
 
 Options:
+  --no-infer     Disable no-who completed pairing inference (render/oneline
+                 family; inference is on by default)
   -V, --version  Print version
   -h, --help     Print help
 

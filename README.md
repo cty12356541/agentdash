@@ -92,15 +92,25 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 
 | 命令 | 作用 |
 |---|---|
-| `agentdash render panel [PATH]` | 终端面板:页眉统计 → 健康(验证门/警告)→ 轨迹(里程碑进度条)→ 车道任务 |
-| `agentdash render graph [--format ansi|svg] [PATH]` | 任务 DAG 字符图(同车道链 + 屏障边,拓扑分层布局);`--format svg` 出矢量文档 |
-| `agentdash render digest [--strict] [PATH]` | 离场摘要:纯文本无 ANSI(失败门/在跑 agent/blocked/done 任务/⚠);`--strict` 存在失败门或 blocked 时退 1(cron 夜间监控) |
-| `agentdash oneline [PATH]` | 无 ANSI 单行 statusline:`[dash] <project> ✓d▶a·r ⚑s ·nag` |
+| `agentdash render panel [--no-infer] [PATH]` | 终端面板:页眉统计 → 健康(验证门/警告)→ 轨迹(里程碑进度条)→ 车道任务 |
+| `agentdash render graph [--format ansi|svg] [--no-infer] [PATH]` | 任务 DAG 字符图(同车道链 + 屏障边,拓扑分层布局);`--format svg` 出矢量文档 |
+| `agentdash render digest [--strict] [--no-infer] [PATH]` | 离场摘要:纯文本无 ANSI(失败门/在跑 agent/blocked/done 任务/⚠);`--strict` 存在失败门或 blocked 时退 1(cron 夜间监控) |
+| `agentdash oneline [--no-infer] [PATH]` | 无 ANSI 单行 statusline:`[dash] <project> ✓d▶a·r ⚑s ·nag` |
 | `agentdash watch [--once] [PATH]` | 常驻 TUI(5s 刷新档,git 快照 30s 节流;`q`/Ctrl-C 退出);`--once` 或非 tty stdin 渲染一帧即退 |
 | `agentdash hook <EVENT>` | 消费宿主 hook 载荷(stdin),折叠后追加 `.agentdash/events.jsonl` |
 
 `[PATH]` 缺省 `.`;渲染宽度非 tty 用默认、tty 按终端列钳 40..120,
 窄于 40 列时框化视图必破图,`render`/`watch` 自动退化为 oneline 单行。
+
+**无 who completed 配对启发(W11-003)**:宿主载荷缺 `who` 的 completed
+事件(部分宿主子代理停止通知天然不带身份),回放层缺省配给**最老在跑**的
+dispatched 行(FIFO);配对行在 panel/摘要/精要中显式标注
+`▶⇢✓ <who> … (inferred)`(完成绿),计数走完成侧——不占 `N agents` /
+`·nag` 在跑口径;配对成功的逐行 `missing who` 警告降频为回放收尾一条
+`⚠ N 个无 who completed 已推断配对` 汇总(无在跑可配的仍逐行丢弃警告;
+配对是启发推断,不是实测配对)。`--no-infer`(panel/graph/digest/oneline
+支持)关闭启发回到严格丢弃 + 逐行警告,行为与启发落地前逐字节一致;
+`watch` 常驻视图暂不支持该旗标(恒缺省开启,见 W11-003 报告)。
 
 ## 数据契约 v1(两文件 + config.json)
 

@@ -31,6 +31,11 @@ pub struct AgentEntry {
     pub first_seen: String,
     /// 首次 `dispatched` 事件的宿主归属(`--host` 盖章;缺省 [`None`])。
     pub host: Option<String>,
+    /// W11-003:被无 `who` 的 completed **推断配对**为完成——配对只是 FIFO
+    /// 启发,非实测配对,故显式标记供显示层标注(`▶⇢✓ … (inferred)`),
+    /// 计数走完成侧不占在跑(显示真相,不是新状态);同 who 再派即复活
+    /// 置回 `false`。严格路径(`--no-infer`)恒 `false`。
+    pub inferred: bool,
 }
 
 /// 事件尾容量(W4-002):详情面板只看最近 10 条,超限截旧。
@@ -90,10 +95,21 @@ struct RawEvent {
     tool: Option<String>,
 }
 
-/// 重放事件流:按到达序逐行折叠出模型。
+/// 重放事件流:按到达序逐行折叠出模型(缺省开启无 who completed 配对
+/// 启发,W11-003)。
 #[must_use]
 pub fn replay(lines: impl Iterator<Item = String>) -> EventModel {
+    replay_infer(lines, true)
+}
+
+/// [`replay`] 的旗标变体(W11-003):`infer = false` 关闭配对启发,无
+/// `who` 的 completed 一律严格丢弃 + 逐行警告(`--no-infer`,与启发落地
+/// 前行为逐字节一致);`infer = true` 时配对成功的逐行警告降频为回放
+/// 收尾的一条汇总。
+#[must_use]
+pub fn replay_infer(lines: impl Iterator<Item = String>, infer: bool) -> EventModel {
     let mut model = EventModel::default();
+    let mut inferred_pairs = 0usize;
     for (idx, line) in lines.enumerate() {
         let line_no = idx + 1;
         let trimmed = line.trim();
@@ -119,12 +135,19 @@ pub fn replay(lines: impl Iterator<Item = String>) -> EventModel {
         }
         match raw.kind.as_str() {
             "gate" => apply_gate(&mut model, raw, line_no),
-            "agent" => apply_agent(&mut model, raw, line_no),
+            "agent" => apply_agent(&mut model, raw, line_no, infer, &mut inferred_pairs),
             "tool" => apply_tool(&mut model, raw, line_no),
             other => model.warnings.push(format!(
                 "line {line_no}: unknown event kind `{other}`, line dropped"
             )),
         }
+    }
+    // 警告降频(W11-003):凡发生推断配对,配对成功的逐行警告一律不发,
+    // 回放收尾一条汇总(未配对的逐行警告照常在各自到达位)
+    if inferred_pairs > 0 {
+        model
+            .warnings
+            .push(format!("{inferred_pairs} 个无 who completed 已推断配对"));
     }
     model
 }
@@ -187,11 +210,23 @@ fn push_tail(tail: &mut Vec<TailEntry>, kind: &str, name: String, state: &str, t
     }
 }
 
-fn apply_agent(model: &mut EventModel, raw: RawEvent, line_no: usize) {
+fn apply_agent(
+    model: &mut EventModel,
+    raw: RawEvent,
+    line_no: usize,
+    infer: bool,
+    inferred_pairs: &mut usize,
+) {
     let Some(who) = raw.who else {
-        model.warnings.push(format!(
-            "line {line_no}: agent event with missing `who`, line dropped"
-        ));
+        // W11-003:无 who 的 completed 在启发开启时配给最老在跑;其余缺 who
+        // 形态(dispatched / 未知 event / 启发关闭)照旧残缺丢弃
+        if infer && raw.event.as_deref() == Some("completed") {
+            infer_pair(model, raw, line_no, inferred_pairs);
+        } else {
+            model.warnings.push(format!(
+                "line {line_no}: agent event with missing `who`, line dropped"
+            ));
+        }
         return;
     };
     match raw.event.as_deref() {
@@ -207,13 +242,18 @@ fn apply_agent(model: &mut EventModel, raw: RawEvent, line_no: usize) {
                 raw.ts.clone().unwrap_or_default(),
             );
             match model.agents.iter_mut().find(|a| a.who == who) {
-                // host 保留首见(D2:再派刷新 task 注记不改归属)
-                Some(entry) => entry.task = raw.task,
+                // host 保留首见(D2:再派刷新 task 注记不改归属);
+                // 再派复活(W11-003):推断完成行回到真在跑
+                Some(entry) => {
+                    entry.task = raw.task;
+                    entry.inferred = false;
+                }
                 None => model.agents.push(AgentEntry {
                     who,
                     task: raw.task,
                     first_seen: raw.ts.unwrap_or_default(),
                     host: raw.host,
+                    inferred: false,
                 }),
             }
         }
@@ -233,6 +273,29 @@ fn apply_agent(model: &mut EventModel, raw: RawEvent, line_no: usize) {
             "line {line_no}: agent event with unknown or missing `event`, line dropped"
         )),
     }
+}
+
+/// 无 who 的 completed 配对启发(W11-003):配给**最老在跑**行(表首即
+/// 派发首见序,FIFO;已推断完成的行跳过,不再吃配对)。配对行标
+/// [`AgentEntry::inferred`](= 完成,不占在跑),事件尾以被配对 who 记一笔
+/// 生效 completed(匿名行由此落到具体 agent 的叙事序);无在跑可配 →
+/// 保持今天的逐行丢弃警告(汇总由 [`replay_infer`] 收尾统一出)。
+fn infer_pair(model: &mut EventModel, raw: RawEvent, line_no: usize, inferred_pairs: &mut usize) {
+    let Some(entry) = model.agents.iter_mut().find(|agent| !agent.inferred) else {
+        model.warnings.push(format!(
+            "line {line_no}: agent event with missing `who`, line dropped"
+        ));
+        return;
+    };
+    entry.inferred = true;
+    *inferred_pairs += 1;
+    push_tail(
+        &mut model.tail,
+        "agent",
+        entry.who.clone(),
+        "completed",
+        raw.ts.unwrap_or_default(),
+    );
 }
 
 fn apply_tool(model: &mut EventModel, raw: RawEvent, line_no: usize) {

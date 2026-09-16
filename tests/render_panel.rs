@@ -51,6 +51,7 @@ fn agent_host(who: &str, task: Option<&str>, since: &str, host: Option<&str>) ->
         task: task.map(str::to_owned),
         since: since.into(),
         host: host.map(str::to_owned),
+        inferred: false,
     }
 }
 
@@ -1348,5 +1349,44 @@ fn brief_view_empty_repo_renders_two_lines_only() {
         lines,
         vec!["agentdash", "✓4 ▶0 ·0 ⚑0 ⊘0 · 0 agents · 09-13T08:30",],
         "空仓仅页眉+统计两行: {plain}"
+    );
+}
+
+// ------------------------------ 无 who completed 配对启发:标注与计数(W11-003)
+
+/// 推断配对行(W11-003):`▶⇢✓ <who> (inferred)` 显式标注、完成色,且**不占**
+/// 页眉 `N agents` 在跑计数;真在跑行 `▶` 照旧。
+#[test]
+fn inferred_agent_rows_labeled_and_out_of_running_count() {
+    let mut dash = w25_dash();
+    let mut done = agent("alice", None, "2026-09-13T08:30:00Z");
+    done.inferred = true;
+    dash.agents = vec![done, agent("bob", None, "2026-09-13T09:00:00Z")];
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("▶⇢✓ alice · 09-13T08:30 (inferred)"),
+        "推断行带显式标注: {plain}"
+    );
+    assert!(
+        plain.contains("▶ bob · 09-13T09:00"),
+        "真在跑行照旧: {plain}"
+    );
+    assert!(
+        plain.contains("· 1 agents"),
+        "在跑计数只算未推断行: {plain}"
+    );
+}
+
+/// oneline `·Nag` 同口径(W11-003 裁决):推断配对行计入完成侧,不占在跑。
+#[test]
+fn oneline_excludes_inferred_agents_from_running_count() {
+    let mut dash = w25_dash();
+    let mut done = agent("alice", None, "");
+    done.inferred = true;
+    dash.agents = vec![done, agent("bob", None, "")];
+    assert_eq!(
+        render_oneline(&dash),
+        "[dash] agentdash ✓4▶0·0 ⚑0 ·1ag",
+        "·Nag 只算真在跑"
     );
 }

@@ -23,7 +23,7 @@ pub fn render_digest(dash: &Dashboard) -> String {
     lines.push(head_line(dash));
     lines.push(stats_body(
         &counts(&dash.tasks),
-        dash.agents.len(),
+        dash.running_agents(),
         &clock_slice(&dash.generated_at),
     ));
 
@@ -34,7 +34,8 @@ pub fn render_digest(dash: &Dashboard) -> String {
         }
     }
 
-    // 在跑 agent:▶ who [host] · task · MM-DDTHH:MM
+    // agent 行:▶ who [host] · task · MM-DDTHH:MM;W11-003 推断配对行随行
+    // 带 `▶⇢✓ … (inferred)` 显式标注(正文与 panel 同源)
     for agent in &dash.agents {
         lines.push(agent_body(agent));
     }

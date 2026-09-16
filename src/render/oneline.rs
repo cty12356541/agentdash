@@ -24,7 +24,8 @@ pub fn render_oneline(dash: &Dashboard) -> String {
         }
     }
     let rest = dash.tasks.len() - done - active;
-    let agents = dash.agents.len();
+    // W11-003:`·Nag` 只算真在跑(推断配对行走完成侧,不占在跑计数)
+    let agents = dash.running_agents();
     let ms = match active_milestone(dash) {
         // I7:带上活跃里程碑;无则整体省略
         Some(milestone) => format!("{} ", ms_id(milestone)),

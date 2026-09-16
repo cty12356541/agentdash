@@ -19,7 +19,7 @@ mod sources;
 
 use std::collections::HashMap;
 
-use events::{AgentEntry, EventModel, GateState};
+use events::{AgentEntry, EventModel, GateState, replay_infer};
 
 fn replay_strs(lines: &[&str]) -> EventModel {
     events::replay(lines.iter().map(ToString::to_string))
@@ -79,12 +79,14 @@ fn agent_dispatch_completed_pairing() {
                 task: Some("3".to_string()),
                 first_seen: "2026-09-13T21:00:00+08:00".to_string(),
                 host: None,
+                inferred: false,
             },
             AgentEntry {
                 who: "reviewer-1".to_string(),
                 task: Some("2".to_string()),
                 first_seen: "2026-09-13T21:05:00+08:00".to_string(),
                 host: None,
+                inferred: false,
             },
         ]
     );
@@ -108,6 +110,7 @@ fn hook_agent_line_with_only_who_lands_in_active_table() {
             task: None,
             first_seen: "2026-09-13T21:00:00+08:00".to_string(),
             host: None,
+            inferred: false,
         }]
     );
     assert!(model.warnings.is_empty());
@@ -354,4 +357,207 @@ fn agent_host_keeps_first_dispatch() {
         "host 保留首见"
     );
     assert_eq!(model.agents[0].task.as_deref(), Some("二"), "task 照常刷新");
+}
+
+// ---------------------------------------- 无 who completed 配对启发(W11-003)
+
+#[test]
+fn anonymous_completed_pairs_oldest_running() {
+    // W11-003:无 who 的 completed 配给最老在跑(表首 FIFO);配对行带
+    // inferred 标记(= 完成,不再在跑),警告降频为一条汇总
+    let model = replay_strs(&[
+        r#"{"ts":"T1","kind":"agent","event":"dispatched","who":"a"}"#,
+        r#"{"ts":"T2","kind":"agent","event":"dispatched","who":"b"}"#,
+        r#"{"ts":"T3","kind":"agent","event":"completed"}"#,
+    ]);
+    assert_eq!(
+        model.agents,
+        vec![
+            AgentEntry {
+                who: "a".to_string(),
+                task: None,
+                first_seen: "T1".to_string(),
+                host: None,
+                inferred: true,
+            },
+            AgentEntry {
+                who: "b".to_string(),
+                task: None,
+                first_seen: "T2".to_string(),
+                host: None,
+                inferred: false,
+            },
+        ],
+        "最老在跑 a 被推断配对(标 inferred),b 照常在跑"
+    );
+    assert_eq!(
+        model.warnings,
+        vec!["1 个无 who completed 已推断配对".to_string()],
+        "配对成功的逐行警告取消,降频为一条汇总"
+    );
+}
+
+#[test]
+fn multiple_anonymous_completions_pair_successive_oldest_fifo() {
+    // 两条匿名 completed 依次配掉表首两个在跑(FIFO),第三个保持真在跑
+    let model = replay_strs(&[
+        r#"{"kind":"agent","event":"dispatched","who":"a"}"#,
+        r#"{"kind":"agent","event":"dispatched","who":"b"}"#,
+        r#"{"kind":"agent","event":"dispatched","who":"c"}"#,
+        r#"{"kind":"agent","event":"completed"}"#,
+        r#"{"kind":"agent","event":"completed"}"#,
+    ]);
+    let marks: Vec<(bool, bool)> = model
+        .agents
+        .iter()
+        .map(|agent| (agent.who == "c", agent.inferred))
+        .collect();
+    assert_eq!(
+        marks,
+        vec![(false, true), (false, true), (true, false)],
+        "a、b 依派发序先后推断完成,c 是唯一仍真在跑"
+    );
+    assert_eq!(
+        model.warnings,
+        vec!["2 个无 who completed 已推断配对".to_string()],
+        "汇总计数 = 配对成功条数"
+    );
+}
+
+#[test]
+fn anonymous_completed_without_running_row_keeps_drop_warning() {
+    // 无在跑可配:保持今天的丢弃 + 逐行警告;配对汇总只统计配对成功的,
+    // 追加在回放末尾(警告序 = 逐行在前、汇总收尾)
+    let model = replay_strs(&[
+        r#"{"ts":"T1","kind":"agent","event":"completed"}"#,
+        r#"{"ts":"T2","kind":"agent","event":"dispatched","who":"a"}"#,
+        r#"{"ts":"T3","kind":"agent","event":"completed"}"#,
+        r#"{"ts":"T4","kind":"agent","event":"completed"}"#,
+    ]);
+    assert_eq!(
+        model.agents,
+        vec![AgentEntry {
+            who: "a".to_string(),
+            task: None,
+            first_seen: "T2".to_string(),
+            host: None,
+            inferred: true,
+        }],
+        "T3 配掉 a;T1/T4 无在跑可配,原样丢弃"
+    );
+    assert_eq!(
+        model.warnings,
+        vec![
+            "line 1: agent event with missing `who`, line dropped".to_string(),
+            "line 4: agent event with missing `who`, line dropped".to_string(),
+            "1 个无 who completed 已推断配对".to_string(),
+        ],
+        "未配对的保持逐行丢弃警告;配对成功的折一条汇总(收尾)"
+    );
+}
+
+#[test]
+fn no_infer_keeps_strict_drop_and_per_line_warnings() {
+    // --no-infer:启发关闭,行为与 W11 前逐字节一致(全丢弃 + 逐行警告,
+    // 在跑表不动、无汇总)
+    let model = replay_infer(
+        [
+            r#"{"ts":"T1","kind":"agent","event":"dispatched","who":"a"}"#,
+            r#"{"ts":"T2","kind":"agent","event":"completed"}"#,
+            r#"{"ts":"T3","kind":"agent","event":"completed"}"#,
+        ]
+        .iter()
+        .map(ToString::to_string),
+        false,
+    );
+    assert_eq!(
+        model.agents,
+        vec![AgentEntry {
+            who: "a".to_string(),
+            task: None,
+            first_seen: "T1".to_string(),
+            host: None,
+            inferred: false,
+        }],
+        "严格丢弃:a 仍真在跑"
+    );
+    assert_eq!(
+        model.warnings,
+        vec![
+            "line 2: agent event with missing `who`, line dropped".to_string(),
+            "line 3: agent event with missing `who`, line dropped".to_string(),
+        ],
+        "逐行警告原样保留,无汇总行"
+    );
+}
+
+#[test]
+fn anonymous_non_completed_agent_events_still_dropped_with_infer() {
+    // 启发只认 completed:无 who 的 dispatched / 未知 event 照旧残缺丢弃
+    let model = replay_strs(&[
+        r#"{"kind":"agent","event":"dispatched"}"#,
+        r#"{"kind":"agent","event":"rewound"}"#,
+    ]);
+    assert!(model.agents.is_empty(), "无 who 的 dispatched 无从配对");
+    assert_eq!(
+        model.warnings,
+        vec![
+            "line 1: agent event with missing `who`, line dropped".to_string(),
+            "line 2: agent event with missing `who`, line dropped".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn redispatch_after_inferred_reactivates_row() {
+    // 推断完成的行被再次 dispatched = 回到真在跑(新一次运行),此后匿名
+    // completed 可再次配对;first_seen 保留首见(承再派刷新语义)
+    let model = replay_strs(&[
+        r#"{"ts":"T1","kind":"agent","event":"dispatched","who":"a"}"#,
+        r#"{"ts":"T2","kind":"agent","event":"completed"}"#,
+        r#"{"ts":"T3","kind":"agent","event":"dispatched","who":"a"}"#,
+        r#"{"ts":"T4","kind":"agent","event":"completed"}"#,
+    ]);
+    assert_eq!(
+        model.agents,
+        vec![AgentEntry {
+            who: "a".to_string(),
+            task: None,
+            first_seen: "T1".to_string(),
+            host: None,
+            inferred: true,
+        }],
+        "再派复活后又被 T4 推断配对"
+    );
+    assert_eq!(
+        model.warnings,
+        vec!["2 个无 who completed 已推断配对".to_string()],
+        "同一行可先后被推断配对两次"
+    );
+}
+
+#[test]
+fn inferred_pairing_lands_in_tail_attributed_to_paired_who() {
+    // 配对成功的 completed 是生效行(W4-002 语义):入事件尾,主体记被配
+    // 对的 who(匿名行由此落到具体 agent 的叙事序里)
+    let model = replay_strs(&[
+        r#"{"kind":"agent","event":"dispatched","who":"a","ts":"2026-09-16T09:00:00+08:00"}"#,
+        r#"{"kind":"agent","event":"completed","ts":"2026-09-16T09:01:00+08:00"}"#,
+    ]);
+    let tail: Vec<_> = model
+        .tail
+        .iter()
+        .map(|entry| {
+            (
+                entry.kind.as_str(),
+                entry.name.as_str(),
+                entry.state.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        tail,
+        [("agent", "a", "dispatched"), ("agent", "a", "completed"),],
+        "推断配对的 completed 以被配对 who 入尾"
+    );
 }

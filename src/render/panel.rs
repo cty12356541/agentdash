@@ -33,17 +33,18 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     let tally = counts(&dash.tasks);
     lines.push(stats_line(
         &tally,
-        dash.agents.len(),
+        dash.running_agents(),
         &clock_slice(&dash.generated_at),
     ));
     lines.push("═".repeat(width));
 
-    // 区块 A:在跑 / 健康(在跑 agents → 验证门终态)
+    // 区块 A:在跑 / 健康(在跑 agents → 验证门终态;W11-003 起推断配对行
+    // 随行带显式标注,计数与空态判定都只看未推断行)
     lines.push(format!("{C_BOLD}在跑 / 健康{C_END}"));
     if dash.agents.is_empty() && dash.gates.is_empty() {
         lines.push(format!("{C_DONE}✓ 无活跃/卡死{C_END}"));
     } else {
-        if dash.agents.is_empty() {
+        if dash.running_agents() == 0 {
             lines.push(format!("{C_PENDING}· 无活跃{C_END}"));
         }
         for agent in &dash.agents {
@@ -118,7 +119,7 @@ pub fn render_brief(dash: &Dashboard, width: usize) -> String {
     let tally = counts(&dash.tasks);
     lines.push(stats_line(
         &tally,
-        dash.agents.len(),
+        dash.running_agents(),
         &clock_slice(&dash.generated_at),
     ));
     for agent in &dash.agents {
@@ -362,10 +363,13 @@ fn task_line(task: &TaskView, dash: &Dashboard) -> String {
     )
 }
 
-/// 在跑 agent 行正文(纯文本):`▶ <who>[ [<host>]][ · <task>][ ·
-/// <MM-DDTHH:MM>]`(着色版与 digest 纯文本版同源;宿主归属 W7-001)。
+/// agent 行正文(纯文本):真在跑 `▶ <who>[ [<host>]][ · <task>][ ·
+/// <MM-DDTHH:MM>]`;W11-003 推断配对行(已完成,不占在跑计数)显式标注
+/// `▶⇢✓ <who>… (inferred)`——推断非实测,标注是显示真相(着色版与
+/// digest 纯文本版同源;宿主归属 W7-001)。
 pub(super) fn agent_body(agent: &AgentView) -> String {
-    let mut line = format!("▶ {}", agent.who);
+    let mark = if agent.inferred { "▶⇢✓" } else { "▶" };
+    let mut line = format!("{mark} {}", agent.who);
     if let Some(host) = agent.host.as_deref() {
         let _ = write!(line, " [{host}]"); // 宿主归属(W7-001)
     }
@@ -375,12 +379,17 @@ pub(super) fn agent_body(agent: &AgentView) -> String {
     if !agent.since.is_empty() {
         let _ = write!(line, " · {}", clock_slice(&agent.since));
     }
+    if agent.inferred {
+        line.push_str(" (inferred)");
+    }
     line
 }
 
-/// 在跑 agent 行(着色):正文([`agent_body`])按宽截断后套前景色。
+/// agent 行(着色):正文([`agent_body`])按宽截断后套前景色——真在跑
+/// 活跃色,推断完成行走完成色(W11-003,与完成侧计数口径同源)。
 fn agent_line(agent: &AgentView, width: usize) -> String {
-    format!("{C_ACTIVE}{}{C_END}", elide(&agent_body(agent), width))
+    let color = if agent.inferred { C_DONE } else { C_ACTIVE };
+    format!("{color}{}{C_END}", elide(&agent_body(agent), width))
 }
 
 /// 验证门行正文(纯文本):`<mark> <name>[ · <detail>]`,running ▶ /

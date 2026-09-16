@@ -51,6 +51,7 @@ fn agent(who: &str, task: Option<&str>, since: &str, host: Option<&str>) -> Agen
         task: task.map(str::to_owned),
         since: since.into(),
         host: host.map(str::to_owned),
+        inferred: false,
     }
 }
 
