@@ -10,7 +10,9 @@
       "tasks": [
         "04",
         "05",
-        "06"
+        "06",
+        "07",
+        "08"
       ]
     }
   ],
@@ -29,6 +31,16 @@
       "label": "无 who completed 配对启发",
       "state": "pending",
       "note": "回放层把无 who 的 completed 配给最老在跑行,推断显式标注(如 ▶⇢✓?),配对警告保留;治『SubagentStop 载荷缺名/跨会话重启导致 agent 行卡在跑』——2026-09-16 维护者决策汇入 W11"
+    },
+    "07": {
+      "label": "pending 池会话归属",
+      "state": "pending",
+      "note": "多会话共享 pending_gate.json,首个 Stop 折叠全部槽位——嵌套会话互相污染退出证据(W10 活体验证实测);终审 ⑬ 路由(2026-09-16)"
+    },
+    "08": {
+      "label": "claude 宿主退出码证据 + README 证据分级句校准",
+      "state": "pending",
+      "note": "本宿主 Bash 载荷无退出码→自定义 gate 终态恒 failed(exit unknown);终审 ⑭+Important-3 路由:补载荷退出码提取或校准 README『折叠出真实退出码』句(2026-09-16)"
     }
   },
   "barriers": []
