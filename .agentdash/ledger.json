@@ -1,12 +1,12 @@
 {
   "$schema": "agentdash.tasklog.v1",
   "wave": "W11",
-  "title": "W11 候选:配对启发 + agentstats + 契约文档化",
+  "title": "W11 已收口:证据闭环 + 观测面 + 契约公开",
   "profile": "sdd",
-  "note": "W10 已收口(2026-09-16,0.8.0):主打 01/02/03 全 done,审查均 Approved,延后 Minor 共 12 条(01×5 / 02×3 / 03×4);自定义 gate 活体入账(events 落 cargo-bench:嵌套 headless 会话真跑 cargo bench,词表命中用户命名;本宿主 Bash 载荷无退出码,Stop 折叠记 failed(exit unknown),W4 保守语义既定)。宿主余量:zcode hook 生命周期串行阻塞(需上一 hook 回复),兼容暂时搁置(README 矩阵 caveat 已补);cursor 端到端仍待 cursor-agent login。本波为候选池,启动时点由维护者定。",
+  "note": "W11 已收口(2026-09-16,0.9.0):五任务(07/08/06/04/05 依赖序)全 done,审查均 Approved;延后 Minor 共 16 条(W11-001×3 / 002×2 / 003×4 / 004×3 / 005×4,随触即清不单开)。主打:pending 池会话归属(嵌套双会话真机实证互不污染)、claude 宿主退出码实证入册 + 红侧 error 串头解析(绿侧 README 证据分级校准)、无 who completed 配对启发(--no-infer 可关)、agentstats 观测面(stats 三表)、契约 v1.0 公开版(docs/contract.md)。宿主余量结转:cursor 端到端仍待 cursor-agent login;zcode hook 串行阻塞兼容搁置(README caveat 在册);watch 常驻视图不支持 --no-infer。W12 候选尚未提报(维护者提报制,提报前台账保持本收口态)。",
   "lanes": [
     {
-      "name": "W11 候选",
+      "name": "W11 已收口",
       "tasks": [
         "04",
         "05",
