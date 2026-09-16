@@ -3,7 +3,7 @@
   "wave": "W10",
   "title": "W10 候选:0.8 产品化(多仓聚合 + digest + 自定义 gate)",
   "profile": "sdd",
-  "note": "定位评估已入册(docs/superpowers/reports/2026-09-16-w9-product-review.md):定位升级为「跨宿主 agent 工作契约及其仪表盘」;0.8 主打 01+02+03(自定义 gate 经用户决策升格),04-05 视进度进退。W9 全清(6/6),余量待验:zcode 失败配对重开复核、cursor 端到端待 cursor-agent login。",
+  "note": "定位评估已入册(docs/superpowers/reports/2026-09-16-w9-product-review.md):定位升级为「跨宿主 agent 工作契约及其仪表盘」;0.8 主打 01+02+03(自定义 gate 经用户决策升格),04-05 视进度进退。W9 全清(6/6)。宿主余量(2026-09-16 维护者实测):zcode hook 生命周期为串行阻塞——需上一个 hook 回复才能继续,兼容暂时搁置(README 矩阵 caveat 待收口文档补);cursor 端到端待 cursor-agent login。",
   "lanes": [
     {
       "name": "0.8 主打",
