@@ -248,7 +248,8 @@ fn three_hooks_replay_with_gate_fold() {
 fn failed_gate_fold() {
     let t = TempDir::new("failed");
     let payload = json!({
-        "session_id": "s",
+        // W11-001:与 stop_payload() 同会话(池归属后 Stop 只折同会话槽)
+        "session_id": "s-w1-008",
         "hook_event_name": "PostToolUse",
         "tool_name": "Bash",
         "tool_input": {"command": "go test ./..."},
@@ -458,7 +459,8 @@ fn summary_line_variants() {
     for (response, expected) in cases {
         let t = TempDir::new("summary");
         let payload = json!({
-            "session_id": "s",
+            // W11-001:与 stop_payload() 同会话(池归属后 Stop 只折同会话槽)
+            "session_id": "s-w1-008",
             "hook_event_name": "PostToolUse",
             "tool_name": "Bash",
             "tool_input": {"command": "cargo test"},
@@ -485,7 +487,8 @@ fn unknown_exit_gate_folds_failed_with_tailnote() {
     // "证据缺失";summary 在场时尾注接在摘要后。
     let t = TempDir::new("unknownexit");
     let payload = json!({
-        "session_id": "s",
+        // W11-001:与 stop_payload() 同会话(池归属后 Stop 只折同会话槽)
+        "session_id": "s-w1-008",
         "hook_event_name": "PostToolUse",
         "tool_name": "Bash",
         "tool_input": {"command": "cargo test"},
@@ -512,7 +515,8 @@ fn unknown_exit_gate_folds_failed_with_tailnote() {
     // response 整体缺失:detail 只有尾注
     let t2 = TempDir::new("unknownexit2");
     let bare = json!({
-        "session_id": "s",
+        // W11-001:与 stop_payload() 同会话(池归属后 Stop 只折同会话槽)
+        "session_id": "s-w1-008",
         "hook_event_name": "PostToolUse",
         "tool_name": "Bash",
         "tool_input": {"command": "cargo clippy"}
@@ -694,7 +698,12 @@ fn stop_folds_without_event_arg_via_payload_name() {
         "cargo test posttooluse",
     );
     // 不传事件参数:载荷 hook_event_name 分派(老版本宿主防御)
-    let stop = json!({"hook_event_name": "Stop", "cwd": t.path().to_string_lossy()});
+    // W11-001:与 cargo_test_post() 同会话(池归属后 Stop 只折同会话槽)
+    let stop = json!({
+        "session_id": "s-w1-008",
+        "hook_event_name": "Stop",
+        "cwd": t.path().to_string_lossy()
+    });
     assert_silent_success(&feed(&["hook"], &stop.to_string(), t.path()), "无参 stop");
     let evs = read_events(t.path());
     assert_eq!(evs.len(), 2);
@@ -928,7 +937,9 @@ fn fresh_lock_still_waits_then_degrades_in_place() {
 fn multi_slot_gates_fold_each_terminal() {
     let t = TempDir::new("multislot");
     let go_failed = json!({
-        "session_id": "s",
+        // W11-001:与 cargo_test_post()/stop_payload() 同会话(池归属后 Stop
+        // 只折同会话槽,两槽须同池才能整折)
+        "session_id": "s-w1-008",
         "hook_event_name": "PostToolUse",
         "tool_name": "Bash",
         "tool_input": {"command": "go test ./..."},
@@ -1007,6 +1018,295 @@ fn legacy_single_object_pending_still_folds() {
     assert_eq!(evs[0]["exit"], 3);
     assert_eq!(evs[0]["detail"], "warning: unused import");
     assert!(!pending.exists(), "旧格式暂存同样消费删除");
+}
+
+// ------------------------------------------------------------ pending 池会话归属(W11-001)
+
+/// 指定 session 的 gate 命中 PostToolUse(W11-001 双会话 fixture)。
+fn gate_post_for(session: &str, command: &str, response: &Value) -> Value {
+    json!({
+        "session_id": session,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_response": response
+    })
+}
+
+/// 指定 session 的 Stop(W11-001 双会话 fixture)。
+fn stop_for(session: &str) -> Value {
+    json!({
+        "session_id": session,
+        "hook_event_name": "Stop",
+        "stop_hook_active": true
+    })
+}
+
+/// 读暂存并归一为槽数组(测试侧只读镜像 `pending_slots`)。
+fn read_pending_slots(cwd: &Path) -> Vec<Value> {
+    let raw = fs::read_to_string(pending_path(cwd)).expect("pending 可读");
+    match serde_json::from_str::<Value>(&raw).expect("暂存应为合法 JSON") {
+        Value::Array(items) => items,
+        obj @ Value::Object(_) => vec![obj],
+        other => panic!("暂存形状异常: {other}"),
+    }
+}
+
+#[test]
+fn stop_folds_only_own_session_slots() {
+    // W10 活体发现的回归钉:双会话共享 pending_gate.json 时,A 的 Stop 只折
+    // A 槽,B 槽原位保留等 B 自己的 Stop——嵌套会话不再互折退出证据。
+    let t = TempDir::new("pool-own");
+    let gate_a = gate_post_for(
+        "sess-A",
+        "cargo test --all",
+        &json!({"stdout": "test result: ok. 9 passed\n", "status": 0}),
+    );
+    let gate_b = gate_post_for(
+        "sess-B",
+        "go test ./...",
+        &json!({
+            "stdout": "",
+            "stderr": "FAIL\t./pkg [build failed]\nexit status 1\n",
+            "status": 1
+        }),
+    );
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&gate_a, t.path()), t.path()),
+        "A gate",
+    );
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&gate_b, t.path()), t.path()),
+        "B gate",
+    );
+
+    // 暂存中间态:两槽各记归属会话
+    let slots = read_pending_slots(t.path());
+    assert_eq!(slots.len(), 2);
+    assert_eq!(slots[0]["session"], "sess-A", "槽位记录归属会话");
+    assert_eq!(slots[1]["session"], "sess-B", "槽位记录归属会话");
+
+    // A 的 Stop:只折 A 槽;B 槽原样保留
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_for("sess-A"), t.path()), t.path()),
+        "A stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 3, "A/B 两 running + 仅 A 的折叠");
+    assert_eq!(evs[0]["gate"], "cargo-test");
+    assert_eq!(evs[1]["gate"], "go-test");
+    assert_eq!(evs[2]["gate"], "cargo-test", "A 的 Stop 只折 A 的门");
+    assert_eq!(evs[2]["state"], "passed");
+    assert_eq!(evs[2]["exit"], 0);
+    let slots = read_pending_slots(t.path());
+    assert_eq!(slots.len(), 1, "B 槽未被 A 的 Stop 消费");
+    assert_eq!(slots[0]["gate"], "go-test");
+    assert_eq!(slots[0]["session"], "sess-B");
+
+    // B 的 Stop:再折 B 槽,暂存消费删除
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_for("sess-B"), t.path()), t.path()),
+        "B stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 4);
+    assert_eq!(evs[3]["gate"], "go-test");
+    assert_eq!(evs[3]["state"], "failed", "B 槽折叠自身终态");
+    assert_eq!(evs[3]["exit"], 1);
+    assert!(!pending_path(t.path()).exists(), "B 折叠后暂存消费删除");
+}
+
+#[test]
+fn sessionless_default_pool_folds_mutually_as_today() {
+    // 载荷无 session_id(default 池):行为与今日完全一致——首个 Stop 折叠
+    // 全部 default 槽(跨会话 default 互折保持,规格 §1.1 明文);且不落
+    // session 字段,与遗留格式同形,零迁移。
+    let t = TempDir::new("pool-default");
+    let a = json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo test --all"},
+        "tool_response": {"stdout": "test result: ok. 3 passed\n", "status": 0}
+    });
+    let b = json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "go test ./..."},
+        "tool_response": {"stdout": "", "stderr": "FAIL\nexit status 1\n", "status": 1}
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&a, t.path()), t.path()),
+        "default gate A",
+    );
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&b, t.path()), t.path()),
+        "default gate B",
+    );
+    let slots = read_pending_slots(t.path());
+    assert_eq!(slots.len(), 2);
+    assert!(
+        slots.iter().all(|s| s.get("session").is_none()),
+        "无 session_id 载荷不落归属字段(default 池与遗留同形)"
+    );
+
+    // 无 session_id 的 Stop:default 池互折(同今日)
+    let stop = json!({"hook_event_name": "Stop"});
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop, t.path()), t.path()),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 4, "两 running + 两折叠");
+    assert_eq!(evs[2]["gate"], "cargo-test");
+    assert_eq!(evs[2]["state"], "passed");
+    assert_eq!(evs[3]["gate"], "go-test");
+    assert_eq!(evs[3]["state"], "failed");
+    assert!(!pending_path(t.path()).exists(), "default 池折叠后消费删除");
+}
+
+#[test]
+fn stop_folds_own_plus_legacy_fieldless_slots() {
+    // 遗留槽(旧格式落盘,无 session 字段)保持现行为:任意 Stop 折叠全部
+    // (规格 §1.1:首个 Stop 折叠全部,向后兼容不做格式迁移)
+    let t = TempDir::new("pool-legacy");
+    let pending = pending_path(t.path());
+    fs::create_dir_all(pending.parent().unwrap()).expect("mkdir .agentdash");
+    fs::write(
+        &pending,
+        r#"{"gate":"cargo-clippy","exit":3,"detail":"warning: unused import"}"#,
+    )
+    .expect("write legacy pending");
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(
+                &gate_post_for(
+                    "sess-A",
+                    "cargo test",
+                    &json!({"stdout": "ok\n", "status": 0}),
+                ),
+                t.path(),
+            ),
+            t.path(),
+        ),
+        "A gate",
+    );
+    // A 的 Stop:遗留槽 + 同会话槽都折
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_for("sess-A"), t.path()), t.path()),
+        "A stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 3, "running + 遗留槽折叠 + 自槽折叠");
+    assert_eq!(evs[1]["gate"], "cargo-clippy");
+    assert_eq!(evs[1]["state"], "failed");
+    assert_eq!(evs[1]["exit"], 3);
+    assert_eq!(evs[2]["gate"], "cargo-test");
+    assert_eq!(evs[2]["state"], "passed");
+    assert!(!pending.exists(), "全部消费删除");
+}
+
+#[test]
+fn failure_supersede_pairs_same_session_only() {
+    // posttoolusefailure 顶替同样只配本会话槽:B 的失败不得顶替 A 的在途
+    // 证据(无同池槽 → 补 running+暂存对);A/B 各自的 Stop 各折各的证据。
+    let t = TempDir::new("pool-supersede");
+    let gate_a = gate_post_for(
+        "sess-A",
+        "cargo test --all",
+        &json!({"stdout": "ok\n", "status": 0}),
+    );
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&gate_a, t.path()), t.path()),
+        "A gate",
+    );
+    let failure_b = json!({
+        "session_id": "sess-B",
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo test --all"},
+        "tool_response": {"stderr": "error: test failed\n", "status": 101}
+    });
+    assert_silent_success(
+        &feed_payload(
+            "posttoolusefailure",
+            &in_cwd(&failure_b, t.path()),
+            t.path(),
+        ),
+        "B failure",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2, "A running + B 补 running 对(未顶替)");
+    let slots = read_pending_slots(t.path());
+    assert_eq!(slots.len(), 2, "A 槽保留 + B 补新槽");
+    assert_eq!(slots[0]["session"], "sess-A");
+    assert_eq!(slots[0]["exit"], 0, "A 槽证据未被 B 的失败顶替");
+    assert_eq!(slots[1]["session"], "sess-B");
+    assert_eq!(slots[1]["exit"], 101);
+
+    // A 的 Stop:A 槽以自身证据折叠 passed(B 的失败不串档)
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_for("sess-A"), t.path()), t.path()),
+        "A stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 3);
+    assert_eq!(evs[2]["gate"], "cargo-test");
+    assert_eq!(evs[2]["state"], "passed");
+    assert_eq!(evs[2]["exit"], 0);
+    assert!(pending_path(t.path()).exists(), "B 槽仍在途");
+
+    // B 的 Stop:B 槽折叠 failed 101
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_for("sess-B"), t.path()), t.path()),
+        "B stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 4);
+    assert_eq!(evs[3]["gate"], "cargo-test");
+    assert_eq!(evs[3]["state"], "failed");
+    assert_eq!(evs[3]["exit"], 101);
+    assert!(!pending_path(t.path()).exists());
+}
+
+#[test]
+fn failure_supersede_same_session_still_pairs() {
+    // 同会话顶替不回退:failure 与在途槽同 session_id 时照旧换证据(位置
+    // 不变、不加行),归属字段保留
+    let t = TempDir::new("pool-supersede-own");
+    let gate_a = gate_post_for(
+        "sess-A",
+        "cargo test --all",
+        &json!({"stdout": "ok\n"}), // 无退出码证据:exit 暂存 null
+    );
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&gate_a, t.path()), t.path()),
+        "A gate",
+    );
+    let failure = json!({
+        "session_id": "sess-A",
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo test --all"},
+        "tool_response": {"stderr": "FAIL ./pkg\nexit status 2\n", "status": 2}
+    });
+    assert_silent_success(
+        &feed_payload("posttoolusefailure", &in_cwd(&failure, t.path()), t.path()),
+        "A failure",
+    );
+    let slots = read_pending_slots(t.path());
+    assert_eq!(slots.len(), 1, "同会话顶替:槽位不新增");
+    assert_eq!(slots[0]["exit"], 2, "真证据换入");
+    assert_eq!(slots[0]["session"], "sess-A", "归属字段保留");
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_for("sess-A"), t.path()), t.path()),
+        "A stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2, "running + 折叠,顶替不加行");
+    assert_eq!(evs[1]["state"], "failed");
+    assert_eq!(evs[1]["exit"], 2);
+    assert!(!pending_path(t.path()).exists());
 }
 
 // ------------------------------------------------------------ events 轮转(W2-008)

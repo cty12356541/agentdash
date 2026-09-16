@@ -19,6 +19,14 @@ keep=0
 [ "${1:-}" = "--keep" ] && keep=1
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/agentdash-verify-kits.XXXXXX")"
+# Windows(Git Bash/MSYS)归一:mktemp 产出 POSIX 形制(/tmp/...),而 PATH 上
+# 的 agentdash 是 Windows 二进制——载荷 cwd 里的 /tmp/... 会被它按当前盘
+# 解析成 \tmp\...,探针读取与二进制落盘分家(六宿主事件断言齐 FAIL 的根因)。
+# 统一为 mixed 形制(C:/...,bash 与 Windows 二进制两侧通用);无 cygpath 的
+# 平台原样(Linux/macOS 不受影响)。
+if command -v cygpath >/dev/null 2>&1; then
+  tmp="$(cygpath -m "$tmp")"
+fi
 if [ "$keep" = 1 ]; then
   echo "[verify-kits] --keep:临时目录保留 $tmp"
 else

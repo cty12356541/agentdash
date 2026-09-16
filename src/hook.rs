@@ -3,7 +3,8 @@
 //! 读 stdin 全量 JSON 载荷,按事件追加一行(spec §4.2)到 `<cwd>/.agentdash/events.jsonl`:
 //! - posttooluse:bash 命中验证门(cargo test/clippy/fmt、go test、npm test、gh pr checks)
 //!   → `gate` running 行 + 退出码/一行摘要暂存 `pending_gate.json` **槽位数组**
-//!   (同刻多个在途 gate 各占一槽,Stop 折叠须经落盘交接;旧单对象格式读入兼容);
+//!   (同刻多个在途 gate 各占一槽,Stop 折叠须经落盘交接;旧单对象格式读入兼容;
+//!   槽位记录归属会话,W11-001);
 //!   否则 `tool` phase=end + exit + summary。载荷词表两家:Claude/ZCode 系
 //!   `tool_name`+`tool_input`/`tool_response`;Cursor 系 `afterShellExecution`
 //!   顶层 `command`+`output`(W9,归一成 bash 视图)
@@ -11,7 +12,9 @@
 //!   暂存槽顶替为真失败证据(缺码落 1、中断 130);无在途槽补 running+暂存对
 //! - stop:把在途 gate 逐槽折叠为各自 passed/failed(exit + detail 摘要行),消费后删除暂存;
 //!   退出码不可知(暂存 exit 为 `null`)记 `failed` + detail 尾注 `(exit unknown)`——
-//!   不虚报通过(W4-001 D1)
+//!   不虚报通过(W4-001 D1)。折叠按**会话池**(W11-001):载荷自报 `session_id`
+//!   的槽只由同会话的 Stop 折叠,并发会话不再互折退出证据;无 `session_id` 的
+//!   槽(default 池,与遗留格式同形)任意 Stop 可折叠,行为与昔日一致
 //! - pretooluse:子代理派发工具(`Task`/`Agent`)→ `agent` dispatched(who=
 //!   `agentType`/`subagent_type`/`name`,缺省 `agent`;task=`description` 截 80,
 //!   缺省省略)
@@ -147,16 +150,27 @@ fn events_dir(payload: &Map<String, Value>) -> PathBuf {
     base.join(".agentdash")
 }
 
+/// 会话归属(W11-001):载荷顶层 `session_id`(claude 形制既有字段)非空即取;
+/// 缺席/空白 → `None`(default 池)。
+fn session_id_of(payload: &Map<String, Value>) -> Option<&str> {
+    payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
 /// PostToolUse:gate 提取或 tool 行。载荷词表两家:Claude/ZCode 系(`tool_name`
 /// + `tool_input`/`tool_response`)与 Cursor 系(`afterShellExecution` 顶层
 ///   `command`+`output`,W9),后者归一成 bash 视图走同一条路。
 fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
     let dir = events_dir(payload);
+    let session = session_id_of(payload);
     // Cursor 宿主:`afterShellExecution` 无 tool_name,顶层 command 即 shell
     // 命令、output 即合并输出;合成 stdout 视图,退出码证据缺失恒 None(不臆造)。
     if let Some((command, output)) = cursor_shell_payload(payload) {
         let view = json!({ "stdout": output });
-        bash_receipt(&dir, &command, Some(&view), host);
+        bash_receipt(&dir, &command, Some(&view), host, session);
         return;
     }
     let Some(tool) = payload
@@ -175,7 +189,7 @@ fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
             .and_then(|i| i.get("command"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        bash_receipt(&dir, command, response, host);
+        bash_receipt(&dir, command, response, host, session);
         return;
     }
     let summary = input
@@ -214,7 +228,13 @@ fn cursor_shell_payload(payload: &Map<String, Value>) -> Option<(String, String)
 /// 配对);否则 tool 行(摘要把命令本身交回)。退出码/摘要证据统一由 `response`
 /// 视图提取,Cursor 合成视图缺失退出码即自然落 None。gate 词表用户表先行
 /// (W10-003,config.json 静默现读,损坏/越界空表自然回落内置)。
-fn bash_receipt(dir: &Path, command: &str, response: Option<&Value>, host: Option<&str>) {
+fn bash_receipt(
+    dir: &Path,
+    command: &str,
+    response: Option<&Value>,
+    host: Option<&str>,
+    session: Option<&str>,
+) {
     let custom = load_custom_gates(dir);
     if let Some(gate) = gate_name_with(command, &custom) {
         // running 行与暂存同临界区:保证 Stop 折叠读到的暂存与 running 行配对
@@ -238,6 +258,7 @@ fn bash_receipt(dir: &Path, command: &str, response: Option<&Value>, host: Optio
                     "exit": exit_code(response),
                     "detail": summary_line(response),
                 }),
+                session,
             );
         });
         return;
@@ -252,6 +273,7 @@ fn bash_receipt(dir: &Path, command: &str, response: Option<&Value>, host: Optio
 /// (如 cursor error 载荷无 command 字段)或非验证门:零写入——宁缺毋造。
 fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
     let dir = events_dir(payload);
+    let session = session_id_of(payload);
     let custom = load_custom_gates(&dir);
     let Some(command) = failure_command(payload) else {
         return;
@@ -276,7 +298,7 @@ fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
         detail = clip(msg);
     }
     with_lock(&dir, || {
-        if supersede_pending_slot(&dir, gate.as_ref(), exit, &detail) {
+        if supersede_pending_slot(&dir, gate.as_ref(), exit, &detail, session) {
             return; // 既有槽已换上新证据,running 行在案
         }
         append_line(
@@ -294,6 +316,7 @@ fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
         append_pending_slot(
             &dir,
             &json!({ "gate": gate.as_ref(), "exit": exit, "detail": detail }),
+            session,
         );
     });
 }
@@ -316,17 +339,24 @@ fn failure_command(payload: &Map<String, Value>) -> Option<String> {
     None
 }
 
-/// 顶替在途暂存槽(W9-003):同 gate 的槽换上新证据(位置不变)并写回,
-/// 返回 true;无该 gate 的槽返回 false(调用方补原子对)。锁内调用。
-fn supersede_pending_slot(dir: &Path, gate: &str, exit: i64, detail: &str) -> bool {
-    let path = dir.join(PENDING_NAME);
-    let existing = fs::read_to_string(&path)
+/// 顶替在途暂存槽(W9-003):同 gate 且**同会话池**(W11-001,见
+/// [`slot_in_session`])的槽换上新证据(位置不变)并写回,返回 true;无可配
+/// 槽返回 false(调用方补原子对)。锁内调用。
+fn supersede_pending_slot(
+    dir: &Path,
+    gate: &str,
+    exit: i64,
+    detail: &str,
+    session: Option<&str>,
+) -> bool {
+    let existing = fs::read_to_string(dir.join(PENDING_NAME))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok());
     let mut slots = pending_slots(existing);
     let mut hit = false;
     for slot in &mut slots {
-        if slot.get("gate").and_then(Value::as_str) == Some(gate) {
+        if slot.get("gate").and_then(Value::as_str) == Some(gate) && slot_in_session(slot, session)
+        {
             slot["exit"] = json!(exit);
             slot["detail"] = json!(clip(detail));
             hit = true;
@@ -335,11 +365,8 @@ fn supersede_pending_slot(dir: &Path, gate: &str, exit: i64, detail: &str) -> bo
     if !hit {
         return false;
     }
-    let Ok(mut file) = File::create(&path) else {
-        return false; // 写不回:按无顶替处理,调用方补原子对(旧槽随读随弃)
-    };
-    let _ = file.write_all(serde_json::to_string(&slots).unwrap_or_default().as_bytes());
-    true
+    // 写不回:按无顶替处理,调用方补原子对(旧槽随读随弃)
+    write_pending_slots(dir, &slots)
 }
 
 /// PreToolUse:子代理派发工具(`Task`/`Agent` 新旧名)→ `agent` dispatched 行,
@@ -413,20 +440,30 @@ fn append_tool_event(
     });
 }
 
-/// Stop:把暂存的每个在途 gate 逐槽折叠为各自 passed/failed;暂存无论解析
-/// 成败都消费删除(折叠只做一次)。槽缺 `gate` 字段跳过,不产生幽灵事件。
+/// Stop:把暂存的**本会话池**在途 gate 逐槽折叠为各自 passed/failed(W11-001:
+/// 载荷自报 `session_id` 的槽只由同会话的 Stop 折叠,治并发会话互折退出证据;
+/// 无 `session_id` 的槽=default 池,任意 Stop 可折,行为与昔日一致);他会话
+/// 槽原位写回暂存,由其归属会话的 Stop 折叠。暂存无论解析成败都消费删除
+/// (写回失败按降级铁律整体消费——折叠仍只做一次)。槽缺 `gate` 字段跳过,
+/// 不产生幽灵事件。
 fn on_stop(payload: &Map<String, Value>, host: Option<&str>) {
     let dir = events_dir(payload);
+    let session = session_id_of(payload);
     with_lock(&dir, || {
         let pending = fs::read_to_string(dir.join(PENDING_NAME))
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok());
         let _ = fs::remove_file(dir.join(PENDING_NAME));
-        let slots = pending_slots(pending);
-        if slots.is_empty() {
-            return; // 无在途 gate / 暂存损坏:不产生幽灵事件
+        let (folding, foreign): (Vec<Value>, Vec<Value>) = pending_slots(pending)
+            .into_iter()
+            .partition(|slot| slot_in_session(slot, session));
+        if !foreign.is_empty() {
+            write_pending_slots(&dir, &foreign); // 他会话在途槽原位保留
         }
-        for slot in slots {
+        if folding.is_empty() {
+            return; // 本池无在途 gate / 暂存损坏:不产生幽灵事件
+        }
+        for slot in folding {
             let gate = slot.get("gate").and_then(Value::as_str).unwrap_or_default();
             if gate.is_empty() {
                 continue;
@@ -634,20 +671,47 @@ fn pending_slots(pending: Option<Value>) -> Vec<Value> {
     }
 }
 
+/// 池配对谓词(W11-001):槽位无 `session` 字段(遗留格式与 default 池同形)
+/// 归任何会话可配——跨会话 default 互折保持昔日行为;有字段则须同会话,
+/// 并发会话互不折叠/互不顶替。空白字段视同无字段(防手写脏档成孤儿槽)。
+fn slot_in_session(slot: &Value, session: Option<&str>) -> bool {
+    match slot
+        .get("session")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        None => true,
+        Some(own) => Some(own) == session,
+    }
+}
+
+/// 槽位数组整体写回暂存(W11-001:Stop 为他会话保留在途槽;顶替写回同法)。
+/// 失败静默——损失的是交接暂存,不损 events.jsonl(降级铁律)。锁内调用。
+fn write_pending_slots(dir: &Path, slots: &[Value]) -> bool {
+    let Ok(mut file) = File::create(dir.join(PENDING_NAME)) else {
+        return false;
+    };
+    let _ = file.write_all(serde_json::to_string(slots).unwrap_or_default().as_bytes());
+    true
+}
+
 /// gate 交接暂存(多槽位):读入既有暂存归一成数组后追加一槽,同刻多个
-/// 在途 gate 各占一槽,Stop 时逐槽折叠各自终态。读-并-写同在锁内临界区;
-/// 暂存失败只损失折叠,不损 events.jsonl。
-fn append_pending_slot(dir: &Path, slot: &Value) {
-    let path = dir.join(PENDING_NAME);
-    let existing = fs::read_to_string(&path)
+/// 在途 gate 各占一槽,Stop 时逐槽折叠各自终态。载荷自报 `session_id` 时
+/// 槽位记录归属(同会话 Stop 才折叠);未自报不落字段(default 池,与遗留
+/// 格式同形,零迁移)。读-并-写同在锁内临界区;暂存失败只损失折叠,不损
+/// events.jsonl。
+fn append_pending_slot(dir: &Path, slot: &Value, session: Option<&str>) {
+    let existing = fs::read_to_string(dir.join(PENDING_NAME))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok());
     let mut slots = pending_slots(existing);
-    slots.push(slot.clone());
-    let Ok(mut file) = File::create(&path) else {
-        return;
-    };
-    let _ = file.write_all(serde_json::to_string(&slots).unwrap_or_default().as_bytes());
+    let mut slot = slot.clone();
+    if let Some(session) = session {
+        slot["session"] = json!(session);
+    }
+    slots.push(slot);
+    write_pending_slots(dir, &slots);
 }
 
 /// 用户自定义 gate(W10-003):`.agentdash/config.json` 声明的验证门词表条目。
