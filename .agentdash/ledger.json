@@ -29,8 +29,8 @@
     },
     "06": {
       "label": "无 who completed 配对启发",
-      "state": "pending",
-      "note": "回放层把无 who 的 completed 配给最老在跑行,推断显式标注(如 ▶⇢✓?),配对警告保留;治『SubagentStop 载荷缺名/跨会话重启导致 agent 行卡在跑』——2026-09-16 维护者决策汇入 W11"
+      "state": "active",
+      "note": "W11-003 派发(2026-09-16):最老在跑 FIFO 配对+inferred 标注;警告降频汇总;--no-infer 回严格;oneline 计数=推断后计 done 侧"
     },
     "07": {
       "label": "pending 池会话归属",
@@ -39,8 +39,8 @@
     },
     "08": {
       "label": "claude 宿主退出码证据 + README 证据分级句校准",
-      "state": "active",
-      "note": "W11-002 派发(2026-09-16):抓原始载荷实证,缺哪补哪;reports 入册;修则活体复验,不修则 README 句校准"
+      "state": "done",
+      "note": "1f048ca(2026-09-16):259 测试;红侧 error 串头解析(活体 exit:101)+绿侧 README 校准(铁律不臆造 0);09-14 passed=前 W4 乐观默认之谜解;kit 增第五事件五面一致;审查 Approved"
     }
   },
   "barriers": []
