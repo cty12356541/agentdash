@@ -19,13 +19,13 @@
   "tasks": {
     "04": {
       "label": "agentstats 观测面(宿主使用率/gate 通过率/任务周转)",
-      "state": "active",
-      "note": "W11-004 派发(2026-09-16):stats 三表纯文本+--host 过滤;顺手清 W10 终审 Important-1(N==1 无匹配 ⚠ 抑制)"
+      "state": "done",
+      "note": "62c1a13(2026-09-16):277 测试(+8);replay 底账纯加法;周转表不虚构时长;N==1 ⚠ 修复钉死;审查 Approved(M1 ③表不滤 host 经控制器追认:诚实>字面)"
     },
     "05": {
       "label": "契约文档化:schema/事件词表公开版本化",
-      "state": "pending",
-      "note": ".agentdash/ 契约(事件词表/ledger/门语义)文档化版本化,第三方宿主可照写——防御性最强的一步(对标 .editorconfig)"
+      "state": "active",
+      "note": "W11-005 派发(2026-09-16):docs/contract.md 契约 v1.0 公开版,以代码为对账基准逐字段核写"
     },
     "06": {
       "label": "无 who completed 配对启发",
