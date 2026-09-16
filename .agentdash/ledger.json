@@ -19,6 +19,12 @@
         "04",
         "05"
       ]
+    },
+    {
+      "name": "W11 候选",
+      "tasks": [
+        "06"
+      ]
     }
   ],
   "tasks": {
@@ -46,6 +52,11 @@
       "label": "契约文档化:schema/事件词表公开版本化",
       "state": "pending",
       "note": ".agentdash/ 契约(事件词表/ledger/门语义)文档化版本化,第三方宿主可照写——防御性最强的一步(对标 .editorconfig)"
+    },
+    "06": {
+      "label": "无 who completed 配对启发",
+      "state": "pending",
+      "note": "回放层把无 who 的 completed 配给最老在跑行,推断显式标注(如 ▶⇢✓?),配对警告保留;治『SubagentStop 载荷缺名/跨会话重启导致 agent 行卡在跑』——2026-09-16 维护者决策汇入 W11"
     }
   },
   "barriers": []
