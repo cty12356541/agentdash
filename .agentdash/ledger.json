@@ -30,13 +30,13 @@
   "tasks": {
     "01": {
       "label": "多仓聚合:render panel 支持 PATH glob",
-      "state": "active",
-      "note": "W10-001 派发(2026-09-16):单仓黄金字节不变;精要视图四要素;glob 自研分量级 *;spec 83aaf8d"
+      "state": "done",
+      "note": "0bf3c84(2026-09-16):236 测试(+11);字节钉黄金自改前构建捕获;render_brief 单一真值复用 panel 计数;审查 Approved(5 Minor 测试补强级延后)"
     },
     "02": {
       "label": "离场摘要:render digest",
-      "state": "pending",
-      "note": "你不在时发生了什么——折叠失败的门/done 任务/亮 ? 物证;配合 cron 即夜间监控;0.8 主打"
+      "state": "active",
+      "note": "W10-002 派发(2026-09-16):纯文本零 ESC;--strict 内容性退出码首个;节序=统计/失败门/在跑/blocked/done+?物证/⚠"
     },
     "03": {
       "label": "用户自定义 gate(.agentdash/config 声明词表)",
