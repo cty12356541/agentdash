@@ -19,8 +19,8 @@
   "tasks": {
     "04": {
       "label": "agentstats 观测面(宿主使用率/gate 通过率/任务周转)",
-      "state": "pending",
-      "note": "events.jsonl 已躺着的数据,低成本观测面;向契约标准叙事靠近"
+      "state": "active",
+      "note": "W11-004 派发(2026-09-16):stats 三表纯文本+--host 过滤;顺手清 W10 终审 Important-1(N==1 无匹配 ⚠ 抑制)"
     },
     "05": {
       "label": "契约文档化:schema/事件词表公开版本化",
@@ -29,8 +29,8 @@
     },
     "06": {
       "label": "无 who completed 配对启发",
-      "state": "active",
-      "note": "W11-003 派发(2026-09-16):最老在跑 FIFO 配对+inferred 标注;警告降频汇总;--no-infer 回严格;oneline 计数=推断后计 done 侧"
+      "state": "done",
+      "note": "132dcd1(2026-09-16):269 测试(+10);FIFO 按位配对+▶⇢✓(inferred) 标注;--no-infer 与旧二进制字节等价;活体:警告 236→221、卡行配对归零在跑;审查 Approved(4 Minor 延后)"
     },
     "07": {
       "label": "pending 池会话归属",
