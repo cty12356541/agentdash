@@ -1672,3 +1672,276 @@ fn dsh_string_killed_by_signal_maps_130() {
     assert_eq!(evs[1]["state"], "failed");
     assert_eq!(evs[1]["exit"], 130, "信号杀死承 interrupted 的 130 约定");
 }
+
+// ------------------------------------------------------------ 用户自定义 gate(W10-003)
+
+/// 预置 `.agentdash/config.json`(用户自定义 gate 词表,整文件覆写)。
+fn seed_config(cwd: &Path, text: &str) {
+    let dir = cwd.join(".agentdash");
+    fs::create_dir_all(&dir).expect("mkdir .agentdash");
+    fs::write(dir.join("config.json"), text).expect("write config.json");
+}
+
+/// `PostToolUse` · bash `pytest -q`(W10-003 用户词表演练命令,非内置门)。
+fn pytest_post() -> Value {
+    json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "pytest -q"},
+        "tool_response": {"stdout": "9 passed in 0.31s\n", "status": 0}
+    })
+}
+
+#[test]
+fn custom_gate_config_hits_user_words_alongside_builtins() {
+    let t = TempDir::new("usergate");
+    seed_config(t.path(), r#"{"gates":[{"name":"ut","words":["pytest"]}]}"#);
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&pytest_post(), t.path()), t.path()),
+        "用户词表回放",
+    );
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "内置门共存回放",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "stop 折叠",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 4, "两 running + 两折叠");
+    assert_eq!(evs[0]["kind"], "gate");
+    assert_eq!(evs[0]["gate"], "ut", "用户 gate 名原样入账");
+    assert_eq!(evs[0]["state"], "running");
+    assert_eq!(evs[1]["gate"], "cargo-test", "内置门与用户表共存");
+    assert_eq!(evs[2]["gate"], "ut");
+    assert_eq!(evs[2]["state"], "passed", "用户 gate 折叠终态");
+    assert_eq!(evs[2]["exit"], 0);
+    assert_eq!(evs[3]["gate"], "cargo-test");
+    assert_eq!(evs[3]["state"], "passed");
+}
+
+#[test]
+fn custom_gate_shares_word_sequence_semantics() {
+    // 自定义表复用既有词序列机(非正则、非子串):连续词 + 词边界,同内置语义
+    let t = TempDir::new("userseq");
+    seed_config(
+        t.path(),
+        r#"{"gates":[{"name":"make-check","words":["make","check"]}]}"#,
+    );
+    let cases = [
+        ("make check", true),
+        ("make  check", true),      // 词间多空白(\s+ 语义)
+        ("make && check", true),    // && 分隔符
+        ("make all check", false),  // 中间隔 token:不跨
+        ("makefile check", false),  // 词边界:前缀粘连不匹配
+        ("make checkstyle", false), // 词尾边界:check 粘连 style 不匹配
+    ];
+    for (command, _) in cases {
+        let payload = json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_response": {"stdout": "ok\n", "status": 0}
+        });
+        assert_silent_success(
+            &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+            "词序列回放",
+        );
+    }
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), cases.len());
+    for (idx, (command, is_gate)) in cases.iter().enumerate() {
+        assert_eq!(
+            evs[idx]["kind"].as_str() == Some("gate"),
+            *is_gate,
+            "command={command:?} 落了 {} 行",
+            evs[idx]["kind"]
+        );
+    }
+}
+
+#[test]
+fn invalid_config_shapes_fall_back_to_builtins_whole_table() {
+    // 任一形状错/越界 → 整表静默回退(表内合法条目同弃),hook 照常退 0
+    // 且零 stderr;config 解析自身不产生任何事件(每例恰增一行)
+    let entries_33 = {
+        let mut gates: Vec<String> = (0..32)
+            .map(|i| format!(r#"{{"name":"g{i}","words":["w{i}"]}}"#))
+            .collect();
+        gates.push(r#"{"name":"Overflow","words":["w32"]}"#.to_owned());
+        format!(r#"{{"gates":[{}]}}"#, gates.join(","))
+    };
+    let cases: Vec<(&str, &str, &str)> = vec![
+        ("损坏 JSON", "{{{ not json", "pytest -q"),
+        (
+            "顶层非对象",
+            r#"[{"gates":[{"name":"ut","words":["pytest"]}]}]"#,
+            "pytest -q",
+        ),
+        ("gates 键缺失", "{}", "pytest -q"),
+        (
+            "gates 非数组",
+            r#"{"gates":{"name":"ut","words":["pytest"]}}"#,
+            "pytest -q",
+        ),
+        ("条目非对象", r#"{"gates":["ut"]}"#, "pytest -q"),
+        (
+            "name 非字符串",
+            r#"{"gates":[{"name":3,"words":["pytest"]}]}"#,
+            "pytest -q",
+        ),
+        (
+            "name 空串",
+            r#"{"gates":[{"name":"","words":["pytest"]}]}"#,
+            "pytest -q",
+        ),
+        (
+            "name 字符集越界(合法条目同弃)",
+            r#"{"gates":[{"name":"ut","words":["pytest"]},{"name":"Build","words":["pytest"]}]}"#,
+            "pytest -q",
+        ),
+        ("words 缺失", r#"{"gates":[{"name":"ut"}]}"#, "pytest -q"),
+        (
+            "words 非数组",
+            r#"{"gates":[{"name":"ut","words":"pytest"}]}"#,
+            "pytest -q",
+        ),
+        (
+            "words 空表",
+            r#"{"gates":[{"name":"ut","words":[]}]}"#,
+            "pytest -q",
+        ),
+        (
+            "词含空串",
+            r#"{"gates":[{"name":"ut","words":["pytest",""]}]}"#,
+            "pytest -q",
+        ),
+        (
+            "词非字符串",
+            r#"{"gates":[{"name":"ut","words":["pytest",3]}]}"#,
+            "pytest -q",
+        ),
+        (
+            "words 超 8 词",
+            r#"{"gates":[{"name":"ut","words":["w1","w2","w3","w4","w5","w6","w7","w8","w9"]}]}"#,
+            "pytest -q",
+        ),
+        ("超 32 条(首条合法同弃)", &entries_33, "w0"),
+    ];
+    let t = TempDir::new("badshape");
+    let mut lines = 0usize;
+    for (label, config, command) in &cases {
+        seed_config(t.path(), config);
+        let payload = json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_response": {"stdout": "ok\n", "status": 0}
+        });
+        assert_silent_success(
+            &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+            label,
+        );
+        lines += 1;
+        let evs = read_events(t.path());
+        assert_eq!(evs.len(), lines, "{label}: 恰增一行");
+        assert_eq!(
+            evs.last().unwrap()["kind"],
+            "tool",
+            "{label}: 整表回退,用户词不得命中"
+        );
+    }
+    // 损坏 config 在场时内置门照常(显式配对钉死)
+    seed_config(t.path(), "{{{ not json");
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "损坏 config 内置门",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.last().unwrap()["gate"], "cargo-test");
+}
+
+#[test]
+fn custom_gate_name_clipped_to_40_chars() {
+    // name 超 40 字符按规格截断(长度是归一化,字符集才是裁断)
+    let t = TempDir::new("nameclip");
+    let long_name = "a".repeat(45);
+    let config = format!(r#"{{"gates":[{{"name":"{long_name}","words":["pytest"]}}]}}"#);
+    seed_config(t.path(), &config);
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&pytest_post(), t.path()), t.path()),
+        "超长名回放",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs[0]["kind"], "gate");
+    let gate = evs[0]["gate"].as_str().expect("gate 名");
+    assert_eq!(gate.chars().count(), 40, "gate 名截 40: {gate}");
+}
+
+#[test]
+fn user_table_same_name_overrides_builtin() {
+    let t = TempDir::new("override");
+    seed_config(
+        t.path(),
+        r#"{"gates":[{"name":"cargo-test","words":["cargo","check"]}]}"#,
+    );
+    // 用户表先行:`cargo check` 命中用户 cargo-test(内置词表无此门)
+    let payload = json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo check"},
+        "tool_response": {"stdout": "ok\n", "status": 0}
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+        "同名覆盖回放",
+    );
+    // 用户表未命中的词回落内置
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "回落内置",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[0]["kind"], "gate");
+    assert_eq!(evs[0]["gate"], "cargo-test", "同名覆盖:用户词表命中内置名");
+    assert_eq!(evs[1]["gate"], "cargo-test", "用户未命中回落内置词表");
+}
+
+#[test]
+fn empty_gates_array_is_valid_means_builtins_only() {
+    let t = TempDir::new("emptygates");
+    seed_config(t.path(), r#"{"gates":[]}"#);
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&pytest_post(), t.path()), t.path()),
+        "空表回放",
+    );
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "内置门回放",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(
+        evs[0]["kind"], "tool",
+        "空 gates 数组合法:仅内置,pytest 不命中"
+    );
+    assert_eq!(evs[1]["gate"], "cargo-test");
+}

@@ -96,7 +96,7 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 `[PATH]` 缺省 `.`;渲染宽度非 tty 用默认、tty 按终端列钳 40..120,
 窄于 40 列时框化视图必破图,`render`/`watch` 自动退化为 oneline 单行。
 
-## 数据契约 v1(两文件)
+## 数据契约 v1(两文件 + config.json)
 
 约定目录 `<repo>/.agentdash/`;合并可信序 **契约 > 事件 > git 快照**,
 任何单源缺失/损坏只降级为警告行,不失败、不白屏。
@@ -105,6 +105,23 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 |---|---|---|
 | `ledger.json` | agent 或人 | 任务台账:`wave` / `title`(必填)/ `profile` / `lanes` / `tasks`(label+state;可选 `done_at` 完成自报时刻,写回 `d` 键自动盖章)/ `barriers`(after→unlocks)/ `milestones`(可选声明式分组:被引用任务按组归并、同任务首见为准,余者入「未分组」尾组;缺省由 wave+全任务合成单里程碑)/ `note`(可选根级波次注记:自由文本,内核按未知字段忽略语义容忍,供人读/流程留痕)。状态机最小核 `pending→active→done`,终态 `blocked`;`review`/`fix-round` 富态仅在声明 `profile` 后有效,否则自动降级并记警告。物证核对:done 任务自带 `done_at` 且事件窗在场时,自报晚于最近通过门(或窗内无通过门)打 `?`(自报无物证);严格校验面:`schema/agentdash.tasklog.v1.json` |
 | `events.jsonl` | `agentdash hook` | 会话事件流:`gate`(running→passed/failed,退出码不可知按 failed 折叠,验证门自动登记)、`tool`、`agent`;多进程并发追加经文件锁保证零丢失 |
+| `config.json` | 人或 agent(可选) | 用户自定义 gate 词表(W10-003,见下) |
+
+**用户自定义 gate**(W10-003;取代 v1 设计散文中的 `config.toml` 提法):
+`.agentdash/config.json` 声明验证门词表,验证门从内置六条(cargo test/clippy/fmt、
+go test、npm test、gh pr checks)开放——
+
+```json
+{"gates": [{"name": "pytest", "words": ["pytest"]}, {"name": "make-check", "words": ["make", "check"]}]}
+```
+
+自定义词序列与内置门走**同一匹配机制**(连续词序列 + 词边界,不引入正则),
+**用户表先于内置表匹配**(first-match-wins,与内置同名即覆盖)。校验:`name`
+限 `[a-z0-9-_]+` 且截 40 字符(超长截断、字符集越界才裁);`words` 1..=8 个
+非空词;至多 32 条。任一形状错/越界(含文件损坏、超 64KB)→ **整表静默回退
+内置**(降级铁律:零警告、零事件,hook 照常退 0);文件缺失 = 仅内置;
+`"gates": []` = 合法空表。配置按每次 hook 调用现读、改完即生效(无缓存无热
+重载概念);六宿主 kit 共用同一二进制,自动受益。
 
 三源全无时输出空态引导文案;仅 git 仓无契约时降级为最近提交伪任务单链
 (恒 `pending`),oneline 照常可用——降级同时出一条 `⚠ missing ledger.json`

@@ -20,11 +20,17 @@
 //! events.jsonl 轮转(W2-008):追加前检查文件大小,超过 5MB 滚动为
 //! `events.jsonl.1`(覆盖旧 .1)再新建,防单文件无限增长。
 //!
+//! 验证门词表(W10-003):内置六门之外,`.agentdash/config.json` 可声明用户
+//! 自定义词表(词序列同机,不引入正则);用户表**先于**内置匹配(first-match-
+//! wins 下用户优先,同名即覆盖)。任一形状错/越界/文件损坏 → **整表静默回退
+//! 内置**(降级铁律),配置按 hook 进程现读、改完即生效。
+//!
 //! 铁律:自身任何失败(损坏/空 stdin、非对象载荷、IO 错误)一律静默退出 0,
 //! 绝不向宿主报错阻塞会话。并发追加经 `.agentdash/.lock` 文件锁自旋
 //! (`create_new` 循环,上限重试后按降级铁律退化直接写)保证零丢失;
 //! 持有方崩溃残留的超龄陈锁(mtime 超阈值)由后续获取方摘除自愈。
 
+use std::borrow::Cow;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -49,6 +55,15 @@ const LOCK_SLEEP: Duration = Duration::from_millis(2);
 /// 陈锁判定阈值:锁文件 mtime 距今超过该值视为持有方崩溃残留(正常持锁临界区
 /// 是毫秒级单行写入),可摘除自愈——否则此后每个 hook 都要白等 `LOCK_MAX_WAIT`。
 const LOCK_STALE: Duration = Duration::from_secs(10);
+/// 用户自定义 gate 配置(W10-003):`.agentdash/config.json`。
+const CONFIG_NAME: &str = "config.json";
+/// 用户 gate 表上限:条数 32;词数 1..=8;名 `[a-z0-9-_]+` 截 40 字符。
+const GATE_MAX_ENTRIES: usize = 32;
+const GATE_MAX_WORDS: usize = 8;
+const GATE_MAX_NAME_CHARS: usize = 40;
+/// 配置文件大小上限(合法 32 条远小于该值;超出视同形状错整表回退——
+/// 单 hook 有界工作量,绝不读无界文件)。
+const GATE_CONFIG_MAX_BYTES: u64 = 64 * 1024;
 
 /// hook 子命令入口(W7-001):`agentdash hook [--host <name>] <event>`——旗标
 /// 与事件名顺序容忍;`host` 显式传入时盖到本进程产出的每条事件上(多宿主
@@ -197,22 +212,29 @@ fn cursor_shell_payload(payload: &Map<String, Value>) -> Option<(String, String)
 
 /// bash 工具回执统一入口:命中验证门 → gate running 行 + 暂存槽位(同临界区
 /// 配对);否则 tool 行(摘要把命令本身交回)。退出码/摘要证据统一由 `response`
-/// 视图提取,Cursor 合成视图缺失退出码即自然落 None。
+/// 视图提取,Cursor 合成视图缺失退出码即自然落 None。gate 词表用户表先行
+/// (W10-003,config.json 静默现读,损坏/越界空表自然回落内置)。
 fn bash_receipt(dir: &Path, command: &str, response: Option<&Value>, host: Option<&str>) {
-    if let Some(gate) = gate_name(command) {
+    let custom = load_custom_gates(dir);
+    if let Some(gate) = gate_name_with(command, &custom) {
         // running 行与暂存同临界区:保证 Stop 折叠读到的暂存与 running 行配对
         with_lock(dir, || {
             append_line(
                 dir,
                 &stamp(
-                    json!({ "ts": ts_now(), "kind": "gate", "gate": gate, "state": "running" }),
+                    json!({
+                        "ts": ts_now(),
+                        "kind": "gate",
+                        "gate": gate.as_ref(),
+                        "state": "running"
+                    }),
                     host,
                 ),
             );
             append_pending_slot(
                 dir,
                 &json!({
-                    "gate": gate,
+                    "gate": gate.as_ref(),
                     "exit": exit_code(response),
                     "detail": summary_line(response),
                 }),
@@ -229,11 +251,14 @@ fn bash_receipt(dir: &Path, command: &str, response: Option<&Value>, host: Optio
 /// posttooluse)则补 running+暂存原子对,保证 Stop 折叠有源。命令不可得
 /// (如 cursor error 载荷无 command 字段)或非验证门:零写入——宁缺毋造。
 fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
-    let Some((_, gate)) = failure_command(payload).and_then(|c| gate_name(&c).map(|g| (c, g)))
-    else {
+    let dir = events_dir(payload);
+    let custom = load_custom_gates(&dir);
+    let Some(command) = failure_command(payload) else {
         return;
     };
-    let dir = events_dir(payload);
+    let Some(gate) = gate_name_with(&command, &custom) else {
+        return;
+    };
     let response = payload.get("tool_response");
     // 失败证据:显式退出码优先;中断 130;失败事件在场即非零证据,缺码落 1
     // (承 exit_code 的 is_error→1 约定,绝不落 0)
@@ -251,19 +276,24 @@ fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
         detail = clip(msg);
     }
     with_lock(&dir, || {
-        if supersede_pending_slot(&dir, gate, exit, &detail) {
+        if supersede_pending_slot(&dir, gate.as_ref(), exit, &detail) {
             return; // 既有槽已换上新证据,running 行在案
         }
         append_line(
             &dir,
             &stamp(
-                json!({ "ts": ts_now(), "kind": "gate", "gate": gate, "state": "running" }),
+                json!({
+                    "ts": ts_now(),
+                    "kind": "gate",
+                    "gate": gate.as_ref(),
+                    "state": "running"
+                }),
                 host,
             ),
         );
         append_pending_slot(
             &dir,
-            &json!({ "gate": gate, "exit": exit, "detail": detail }),
+            &json!({ "gate": gate.as_ref(), "exit": exit, "detail": detail }),
         );
     });
 }
@@ -620,12 +650,83 @@ fn append_pending_slot(dir: &Path, slot: &Value) {
     let _ = file.write_all(serde_json::to_string(&slots).unwrap_or_default().as_bytes());
 }
 
-/// 验证门命令匹配:连续词序列 + 词边界(承 Python 版 `\bcargo\s+test\b` 的
-/// 相邻语义):目标序列的词必须在命令里**连续**出现,词间只容空白或一枚
-/// `&&`/`;` 分隔符,不得跨任意中间 token——`npm run test` 不匹配 npm-test、
-/// `go build ./... && test` 不匹配 go-test,而 `cargo build && cargo test`
-/// (后段连续)与 `cd x && cargo clippy -- -D warnings` 匹配;按序首中即返。
-/// `pub(crate)` 供 W4-005 性质测试(词边界不变式需直连纯函数)。
+/// 用户自定义 gate(W10-003):`.agentdash/config.json` 声明的验证门词表条目。
+/// `pub(crate)` 字段供 W10-003 性质测试构造(模块挂载后同 crate 可见)。
+pub(crate) struct CustomGate {
+    pub(crate) name: String,
+    pub(crate) words: Vec<String>,
+}
+
+/// 读取用户自定义 gate 表(W10-003):文件缺失/损坏/超限/任一形状错 → 空表
+/// (即仅内置),零事件零输出(降级铁律);配置按 hook 进程现读,改完即生效,
+/// 无需缓存。表上限 32 条、词 1..=8、名截 40,均先于匹配 enforce(有界工作量)。
+fn load_custom_gates(dir: &Path) -> Vec<CustomGate> {
+    let path = dir.join(CONFIG_NAME);
+    if !fs::metadata(&path).is_ok_and(|meta| meta.len() <= GATE_CONFIG_MAX_BYTES) {
+        return Vec::new(); // 缺失(含目录不存在)或超大:视同无表/形状错
+    }
+    parse_custom_gates(&fs::read_to_string(&path).unwrap_or_default()).unwrap_or_default()
+}
+
+/// 解析用户 gate 表文本:`gates` 数组,每条 `{"name","words"}`。name 限
+/// `[a-z0-9-_]+` 且截 40 字符(长度是归一化,字符集才是裁断);words 1..=8
+/// 个非空词;至多 32 条。任一越界 → [`None`] → 调用方整表回退内置。
+/// `pub(crate)` 供 W10-003 性质测试(解析面不 panic + 截断不变式)。
+#[must_use]
+pub(crate) fn parse_custom_gates(text: &str) -> Option<Vec<CustomGate>> {
+    let root = serde_json::from_str::<Value>(text).ok()?;
+    let entries = root.get("gates")?.as_array()?;
+    if entries.len() > GATE_MAX_ENTRIES {
+        return None; // 越界:整表回退
+    }
+    let mut gates = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let name = entry.get("name").and_then(Value::as_str)?;
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-' | '_'))
+        {
+            return None;
+        }
+        let words_json = entry.get("words").and_then(Value::as_array)?;
+        if words_json.is_empty() || words_json.len() > GATE_MAX_WORDS {
+            return None;
+        }
+        let mut words = Vec::with_capacity(words_json.len());
+        for word in words_json {
+            words.push(word.as_str().filter(|w| !w.is_empty())?.to_owned());
+        }
+        gates.push(CustomGate {
+            name: name.chars().take(GATE_MAX_NAME_CHARS).collect(),
+            words,
+        });
+    }
+    Some(gates)
+}
+
+/// gate 匹配全入口(W10-003):用户表先行(first-match-wins 语义下用户优先,
+/// 同名即覆盖内置),未命中回落内置词表 [`gate_name`]。返回名借用自用户表
+/// 条目或静态内置名。自定义 words 走同一词序列机([`match_word_seq`]),不引入
+/// 第二匹配器。
+#[must_use]
+pub(crate) fn gate_name_with<'a>(command: &str, custom: &'a [CustomGate]) -> Option<Cow<'a, str>> {
+    for gate in custom {
+        let words: Vec<&str> = gate.words.iter().map(String::as_str).collect();
+        if match_word_seq(command, &words) {
+            return Some(Cow::Borrowed(&gate.name));
+        }
+    }
+    gate_name(command).map(Cow::Borrowed)
+}
+
+/// 内置验证门词表查询(六门):连续词序列 + 词边界(承 Python 版
+/// `\bcargo\s+test\b` 的相邻语义):目标序列的词必须在命令里**连续**出现,
+/// 词间只容空白或一枚 `&&`/`;` 分隔符,不得跨任意中间 token——`npm run test`
+/// 不匹配 npm-test、`go build ./... && test` 不匹配 go-test,而
+/// `cargo build && cargo test`(后段连续)与 `cd x && cargo clippy -- -D warnings`
+/// 匹配;按序首中即返。W10-003 起为内置表包装(hook 链路走
+/// [`gate_name_with`] 用户优先);`pub(crate)` 供 W4-005/W10-003 性质测试直连。
 pub(crate) fn gate_name(command: &str) -> Option<&'static str> {
     const PATTERNS: [&[&str]; 6] = [
         &["cargo", "test"],

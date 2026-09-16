@@ -6,6 +6,8 @@
 //! - `±HH:MM` 本地偏移按绝对时刻折算正确;
 //! - `parse_fix_round` 残余 note 性质(前缀恰抑,残余 `trim` 后原样保留);
 //! - `gate_name` 词边界不变式(空白/`&&` 间隔可匹配,粘连/插词必拒);
+//! - `gate_name_with` 用户自定义表同词序列机 + 用户优先(W10-003);
+//! - `parse_custom_gates` 任意输入不 panic、合法长名截 40(W10-003);
 //! - `civil_from_days` / `days_from_civil` 互逆(Windows CI 专属,互逆对
 //!   只在该目标编译)。
 //!
@@ -122,6 +124,64 @@ proptest! {
         prop_assert_eq!(hook::gate_name(&format!("cargo{g1}test")), None);
         prop_assert_eq!(hook::gate_name(&format!("cargo {g1} test")), None);
         prop_assert_eq!(hook::gate_name(&format!("go {g1}build{g2} test")), None);
+    }
+
+    /// P7(W10-003):自定义 gate 表走**同一词序列机**——词边界语义与表来源
+    /// 无关(空白/`&&` 间隔可命中,粘连必拒),用户表先行(命中即用用户名),
+    /// 未命中回落内置。junk 同 P5b 排除 `go`。
+    #[test]
+    fn custom_table_word_sequence_invariants(
+        ws in "[ \t\n]{1,3}",
+        junk in "[a-z]{1,3}".prop_filter("exclude standalone `go`", |w| *w != "go"),
+    ) {
+        let custom = vec![hook::CustomGate {
+            name: "ut".to_owned(),
+            words: vec!["pytest".to_owned()],
+        }];
+        let spaced = hook::gate_name_with(&format!("pytest{ws}-q"), &custom);
+        prop_assert_eq!(spaced.as_deref(), Some("ut"), "纯空白间隔: 用户词表命中");
+        let chained_cmd = format!("echo{ws}&&{ws}pytest{ws}-q");
+        let chained = hook::gate_name_with(&chained_cmd, &custom);
+        prop_assert_eq!(chained.as_deref(), Some("ut"), "&& 链后段: 用户词表命中");
+        let glued_cmd = format!("pytest{junk}q");
+        let glued = hook::gate_name_with(&glued_cmd, &custom);
+        prop_assert_eq!(glued.as_deref(), None, "粘连必拒(与内置同规)");
+        let fallback = hook::gate_name_with("cargo test", &custom);
+        prop_assert_eq!(
+            fallback.as_deref(),
+            Some("cargo-test"),
+            "用户表未命中回落内置"
+        );
+        // 用户优先:同名覆盖——用户 words 先查,内置表无 `cargo check` 门
+        let over = vec![hook::CustomGate {
+            name: "cargo-test".to_owned(),
+            words: vec!["cargo".to_owned(), "check".to_owned()],
+        }];
+        let overridden = hook::gate_name_with("cargo check", &over);
+        prop_assert_eq!(overridden.as_deref(), Some("cargo-test"));
+    }
+
+    /// P8(W10-003):config.json 解析面对任意输入不 panic(损坏/形状错 →
+    /// `None` → 整表回退,降级铁律的结构面);`(?s)` 让 `.` 覆盖换行。
+    #[test]
+    fn custom_config_parse_never_panics(
+        text in proptest::string::string_regex("(?s).{0,200}").unwrap(),
+    ) {
+        let _ = hook::parse_custom_gates(&text);
+    }
+
+    /// P9(W10-003):合法字符集的长名**截 40 归一**(非整表回退)——名长
+    /// 是长度问题、字符集才是裁断;词表 1..=8 界内时解析必成功。
+    #[test]
+    fn custom_gate_long_name_clipped_not_rejected(name in "[a-z0-9_-]{41,80}") {
+        let text = format!(r#"{{"gates":[{{"name":"{name}","words":["w"]}}]}}"#);
+        let gates = hook::parse_custom_gates(&text);
+        prop_assert!(gates.is_some(), "合法形状必解析: name={name}");
+        let parsed = gates.unwrap();
+        prop_assert_eq!(parsed.len(), 1);
+        let clipped = &name[..40];
+        prop_assert_eq!(&parsed[0].name, clipped, "名截 40(ASCII 单字节)");
+        prop_assert_eq!(&parsed[0].words, &["w".to_owned()][..]);
     }
 }
 
