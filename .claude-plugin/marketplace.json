@@ -9,7 +9,7 @@
       "name": "agentdash",
       "source": "./kits/claude-code",
       "description": "Multi-host agent progress dashboard: session-native hooks fold conversation events into a task DAG with verification-gate states; works with Claude Code, Codex CLI, opencode and ZCode against one shared .agentdash contract (host-attributed events); zero runtime, hooks call the `agentdash` binary on PATH. Terminal panel / character DAG / vector svg / oneline statusline / interactive watch TUI.",
-      "version": "0.7.0"
+      "version": "0.8.0"
     }
   ]
 }

@@ -1,48 +1,20 @@
 {
   "$schema": "agentdash.tasklog.v1",
-  "wave": "W10",
-  "title": "W10 候选:0.8 产品化(多仓聚合 + digest + 自定义 gate)",
+  "wave": "W11",
+  "title": "W11 候选:配对启发 + agentstats + 契约文档化",
   "profile": "sdd",
-  "note": "定位评估已入册(docs/superpowers/reports/2026-09-16-w9-product-review.md):定位升级为「跨宿主 agent 工作契约及其仪表盘」;0.8 主打 01+02+03(自定义 gate 经用户决策升格),04-05 视进度进退。W9 全清(6/6)。宿主余量(2026-09-16 维护者实测):zcode hook 生命周期为串行阻塞——需上一个 hook 回复才能继续,兼容暂时搁置(README 矩阵 caveat 待收口文档补);cursor 端到端待 cursor-agent login。",
+  "note": "W10 已收口(2026-09-16,0.8.0):主打 01/02/03 全 done,审查均 Approved,延后 Minor 共 12 条(01×5 / 02×3 / 03×4);自定义 gate 活体入账(events 落 cargo-bench:嵌套 headless 会话真跑 cargo bench,词表命中用户命名;本宿主 Bash 载荷无退出码,Stop 折叠记 failed(exit unknown),W4 保守语义既定)。宿主余量:zcode hook 生命周期串行阻塞(需上一 hook 回复),兼容暂时搁置(README 矩阵 caveat 已补);cursor 端到端仍待 cursor-agent login。本波为候选池,启动时点由维护者定。",
   "lanes": [
-    {
-      "name": "0.8 主打",
-      "tasks": [
-        "01",
-        "02",
-        "03"
-      ]
-    },
-    {
-      "name": "候选扩展",
-      "tasks": [
-        "04",
-        "05"
-      ]
-    },
     {
       "name": "W11 候选",
       "tasks": [
+        "04",
+        "05",
         "06"
       ]
     }
   ],
   "tasks": {
-    "01": {
-      "label": "多仓聚合:render panel 支持 PATH glob",
-      "state": "done",
-      "note": "0bf3c84(2026-09-16):236 测试(+11);字节钉黄金自改前构建捕获;render_brief 单一真值复用 panel 计数;审查 Approved(5 Minor 测试补强级延后)"
-    },
-    "02": {
-      "label": "离场摘要:render digest",
-      "state": "done",
-      "note": "9d60f58(2026-09-16):242 测试(+6);零 ESC 三重钉;正文经 stats_slots 单一真值复用;--strict cmd 层纯谓词;审查 Approved(3 Minor 延后)"
-    },
-    "03": {
-      "label": "用户自定义 gate(.agentdash/config 声明词表)",
-      "state": "done",
-      "note": "fd71c06(2026-09-16):251 测试;15 态格式错表驱动钉整表回退;用户先查同名覆盖;proplist 联系点原封;审查 Approved(4 Minor 延后);活体验证归 T4"
-    },
     "04": {
       "label": "agentstats 观测面(宿主使用率/gate 通过率/任务周转)",
       "state": "pending",

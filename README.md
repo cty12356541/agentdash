@@ -40,9 +40,12 @@ hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo ins
 | Claude Code | `kits/claude-code`(插件市场) | hooks.json 四事件 | ✓ |
 | Codex CLI | `kits/codex` | `.codex/hooks.json`(repo 级;需 trust + `/hooks` 一次性审查) | ✓ |
 | opencode | `kits/opencode` | `.opencode/plugins/agentdash.js`(Bun 插件) | 待宿主子代理事件 |
-| ZCode(公司内部) | `kits/zcode` | `.zcode/config.json` → hooks(`enabled:true`,安装器置位;会话启动加载) | 待宿主子代理事件 |
+| ZCode(公司内部) | `kits/zcode` | `.zcode/config.json` → hooks(`enabled:true`,安装器置位;会话启动加载)。⚠ hook 生命周期串行阻塞(需上一 hook 回复),兼容暂时搁置(2026-09-16 维护者实测) | 待宿主子代理事件 |
 | Cursor | `kits/cursor` | `.cursor/hooks.json`(`version:1`;项目级需信任工作区) | ✓(`subagentStart/Stop` 原生) |
 | DeepSeek Harness | `kits/deepseek` | DSH 桥 `dsh-hooks-claude-code` 挂载,`configPath` 指向 `.deepseek/agentdash-hooks.json`(进程级,启动时读取) | ✓(桥原生 `SubagentStart/Stop`) |
+
+现状(2026-09-16):**5 宿主活跃,zcode 1 家暂时搁置**(行内 ⚠ caveat);搁置是
+兼容推进暂停,不动契约——六 kit 同写 `<repo>/.agentdash/` 的语义不变。
 
 **一致性保证**:六套 kit 写同一 `<repo>/.agentdash/`(同文件、同锁、同事件词表),
 事件带 `host` 字段归因,面板在跑行显示 `▶ <who> [host]`;harness 约定单源
@@ -89,6 +92,7 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 |---|---|
 | `agentdash render panel [PATH]` | 终端面板:页眉统计 → 健康(验证门/警告)→ 轨迹(里程碑进度条)→ 车道任务 |
 | `agentdash render graph [--format ansi|svg] [PATH]` | 任务 DAG 字符图(同车道链 + 屏障边,拓扑分层布局);`--format svg` 出矢量文档 |
+| `agentdash render digest [--strict] [PATH]` | 离场摘要:纯文本无 ANSI(失败门/在跑 agent/blocked/done 任务/⚠);`--strict` 存在失败门或 blocked 时退 1(cron 夜间监控) |
 | `agentdash oneline [PATH]` | 无 ANSI 单行 statusline:`[dash] <project> ✓d▶a·r ⚑s ·nag` |
 | `agentdash watch [--once] [PATH]` | 常驻 TUI(5s 刷新档,git 快照 30s 节流;`q`/Ctrl-C 退出);`--once` 或非 tty stdin 渲染一帧即退 |
 | `agentdash hook <EVENT>` | 消费宿主 hook 载荷(stdin),折叠后追加 `.agentdash/events.jsonl` |
@@ -132,6 +136,7 @@ go test、npm test、gh pr checks)开放——
 - **一期(W1–W3,0.2.0)**:Rust 内核(契约/事件/git 源/合并/渲染/TUI)+ claude-code-kit + gate 事件 + oneline + 三平台 CI(ubuntu / windows / macos);W2 交互跃迁(任务详情/多波次/过滤/台账写回/gh 远程源);W3 收口:多里程碑分组、面板屏障行、PreToolUse dispatched 入口、事件窗速度线。
 - **一期清偿(W4,0.3.0)**:评估清偿——gate 折叠保守化(exit 不可知记 failed,不虚报)、详情面板事件尾上板、渲染截断/子进程执行器双收敛、手搓解析器 proptest 性质面、Release 自动化(tag 触发四 triple 资产)。
 - **信任锚与可达性(W5–W6,0.4.0/0.5.0)**:done_at 契约加法(写回 `d` 键自动盖章)+ 物证 `?` 交叉核对(done 自报晚于最近通过门即亮,自报无物证非指控);`±HHMM` 基本格式容忍;`render graph --format svg` 矢量输出;安装器可执行位修复与 ps1 静态审查。
+- **0.8 产品化(W10,0.8.0,已完成)**:多仓聚合(`render panel` 多位置 + 自研 glob 展开,多仓出精要视图——每仓页眉统计/在跑/失败门/blocked/⚠,单仓输出逐字节不变)、离场摘要(`render digest [--strict]` 纯文本无 ANSI,`--strict` 有失败门或 blocked 退 1,cron 夜间监控)、用户自定义 gate(`.agentdash/config.json` 声明词表,验证门契约从内置六条开放,损坏整表静默回退,六宿主同一二进制自动受益)。
 - **二期**:codex-kit / opencode-kit(宿主扩展)、远程源扩展(PR / CI 缓存)、观察者兼底完善。
 - **三期**:分发矩阵铺满(Release 二进制 / 包管理器 / 插件市场)。
 
