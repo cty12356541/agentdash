@@ -10,6 +10,16 @@
         ]
       }
     ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentdash hook --host claude posttoolusefailure || true"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Task|Agent",

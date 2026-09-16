@@ -282,20 +282,29 @@ fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
         return;
     };
     let response = payload.get("tool_response");
-    // 失败证据:显式退出码优先;中断 130;失败事件在场即非零证据,缺码落 1
-    // (承 exit_code 的 is_error→1 约定,绝不落 0)
-    let exit = exit_code(response).unwrap_or_else(|| {
-        if payload.get("is_interrupt").and_then(Value::as_bool) == Some(true) {
-            130
-        } else {
-            1
-        }
-    });
+    // 失败证据链(W11-002 claude 实测补链):显式 response 码优先;其次 claude
+    // 形制顶层 `error` 串头的 `Exit code N`(该宿主失败侧无 tool_response,真码
+    // 在 error 串头);中断 130;全缺落 1——失败事件在场即非零证据,绝不落 0
+    let error_text = payload
+        .get("error")
+        .or_else(|| payload.get("error_message"))
+        .and_then(Value::as_str);
+    let exit = exit_code(response)
+        .or_else(|| error_text.and_then(exit_code_of_error_head))
+        .unwrap_or_else(|| {
+            if payload.get("is_interrupt").and_then(Value::as_bool) == Some(true) {
+                130
+            } else {
+                1
+            }
+        });
     let mut detail = summary_line(response);
     if detail.is_empty()
-        && let Some(msg) = payload.get("error_message").and_then(Value::as_str)
+        && let Some(msg) = error_text
     {
-        detail = clip(msg);
+        // 多行 error(claude 把合并输出整串放这里)取末非空行,承 summary_line 语义
+        let last = msg.lines().map(str::trim).rfind(|l| !l.is_empty());
+        detail = clip(last.unwrap_or_default());
     }
     with_lock(&dir, || {
         if supersede_pending_slot(&dir, gate.as_ref(), exit, &detail, session) {
@@ -939,6 +948,19 @@ fn summary_line(response: Option<&Value>) -> String {
         }
     }
     String::new()
+}
+
+/// claude 形制失败事件的退出码线索(W11-002 真机捕获):失败侧载荷**无
+/// `tool_response`**,真码在顶层 `error` 串头 —— `Exit code 101` 或
+/// `Error: Exit code 101` 前缀,后随合并输出。解析出**非零**码才认:失败事件
+/// 在场即非零证据,串头 `Exit code 0`/非数字码视同无码,走调用方默认链(绝不落 0)。
+fn exit_code_of_error_head(text: &str) -> Option<i64> {
+    let head = text.trim_start();
+    let head = head.strip_prefix("Error: ").unwrap_or(head).trim_start();
+    let rest = head.strip_prefix("Exit code ")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let code = digits.parse::<i64>().ok()?;
+    (code > 0).then_some(code)
 }
 
 /// 字符串 response 拆解(W9-003 实测 + dsh-shell 渲染契约):DSH 桥的 bash

@@ -119,7 +119,7 @@ else
 fi
 assert_f "共享指令块 kits/shared/AGENTDASH.md" "$root/kits/shared/AGENTDASH.md"
 
-# ---------- claude-code:四钩子 settings.json + CLAUDE.md + skill ----------
+# ---------- claude-code:五钩子 settings.json + CLAUDE.md + skill ----------
 section "claude-code kit"
 check_exec_bit claude-code
 t="$tmp/cc-main"
@@ -132,6 +132,8 @@ s="$t/.claude/settings.json"
 assert_f "settings.json 生成" "$s"
 assert_jq "PostToolUse 注册(--host claude)" "$s" \
   '.hooks.PostToolUse | length == 1 and (.[0].hooks[0].command | test("agentdash hook --host claude posttooluse"))'
+assert_jq "PostToolUseFailure 注册(--host claude,W11-002)" "$s" \
+  '.hooks.PostToolUseFailure | length == 1 and (.[0].hooks[0].command | test("agentdash hook --host claude posttoolusefailure"))'
 assert_jq "PreToolUse matcher=Task|Agent" "$s" \
   '.hooks.PreToolUse | length == 1 and .[0].matcher == "Task|Agent"'
 assert_jq "Stop 注册(--host claude)" "$s" \
@@ -145,8 +147,8 @@ else
 fi
 if run_installer claude-code "$t"; then ok "二次安装退出 0"; else bad "二次安装退出非 0"; fi
 check_instructions "CLAUDE.md(二次)" "$t/CLAUDE.md"
-assert "settings.json 自家注册不翻倍(4 处)" \
-  "$(grep -o 'agentdash hook --host claude' "$s" | wc -l | tr -d ' ')" "4"
+assert "settings.json 自家注册不翻倍(5 处)" \
+  "$(grep -o 'agentdash hook --host claude' "$s" | wc -l | tr -d ' ')" "5"
 # 既有内容保留:用户键 + 用户钩子并入不吞
 t="$tmp/cc-preserve"; mkdir -p "$t/.claude"
 printf '%s\n' '{"model":"sonnet","hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"echo user-keep"}]}]}}' \

@@ -742,14 +742,14 @@ fn pretooluse_dispatches_without_event_arg_via_payload_name() {
 }
 
 #[test]
-fn hooks_json_registers_four_events_with_binary_command() {
+fn hooks_json_registers_five_events_with_binary_command() {
     let path = Path::new(MANIFEST).join("kits/claude-code/hooks/hooks.json");
     let manifest: Value =
         serde_json::from_str(&fs::read_to_string(&path).expect("hooks.json readable"))
             .expect("hooks.json 合法 JSON");
     let hooks = manifest["hooks"].as_object().expect("hooks 对象");
-    assert_eq!(hooks.len(), 4, "恰注册四事件");
-    for event in ["PostToolUse", "Stop", "SubagentStop"] {
+    assert_eq!(hooks.len(), 5, "恰注册五事件");
+    for event in ["PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop"] {
         let blocks = hooks[event]
             .as_array()
             .unwrap_or_else(|| panic!("{event} 无注册块"));
@@ -1790,6 +1790,105 @@ fn failure_event_interrupted_maps_130() {
         evs[1]["exit"], 130,
         "is_interrupt 映射 130(承 interrupted 约定)"
     );
+}
+
+#[test]
+fn failure_event_claude_error_head_carries_real_exit() {
+    // claude 形制(W11-002 真机捕获):失败侧**无 tool_response**,真退出码在
+    // 顶层 `error` 串头 `Exit code 101`;fold 落 101 + error 尾行摘要,无尾注
+    let t = TempDir::new("failclaude");
+    let failure = json!({
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo test", "timeout": 600_000},
+        "error": "Exit code 101\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s\n\nrunning 1 test\ntest tests::t ... FAILED\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`",
+        "is_interrupt": false,
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "claude", "posttoolusefailure"],
+            &in_cwd(&failure, t.path()).to_string(),
+            t.path(),
+        ),
+        "claude failure 单发",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "claude", "stop"],
+            &in_cwd(&stop_payload(), t.path()).to_string(),
+            t.path(),
+        ),
+        "stop(折叠行 host 戳取自 stop 调用)",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[1]["state"], "failed");
+    assert_eq!(
+        evs[1]["exit"], 101,
+        "error 串头 Exit code N 即真退出码,不落猜测 1"
+    );
+    assert_eq!(
+        evs[1]["detail"], "error: test failed, to rerun pass `--lib`",
+        "error 串取末非空行摘要,无 (exit unknown) 尾注"
+    );
+    assert_eq!(evs[1]["host"], "claude");
+}
+
+#[test]
+fn failure_event_error_head_accepts_error_prefix_variant() {
+    // claude transcript 形制变体:`Error: Exit code 2` 前缀同样解析
+    let t = TempDir::new("failerrpre");
+    let failure = json!({
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo clippy -- -D warnings"},
+        "error": "Error: Exit code 2\nwarning: unused variable\ncould not compile",
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "claude", "posttoolusefailure"],
+            &in_cwd(&failure, t.path()).to_string(),
+            t.path(),
+        ),
+        "Error: 前缀变体",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs[1]["exit"], 2, "Error: Exit code N 变体解析");
+    assert_eq!(evs[1]["detail"], "could not compile", "末非空行摘要");
+}
+
+#[test]
+fn failure_event_error_head_zero_or_garbage_falls_to_nonzero_default() {
+    // 失败事件在场即非零证据(铁律):串头 `Exit code 0`/非数字码视同无码,落 1
+    let t = TempDir::new("failzero");
+    let failure = json!({
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo test"},
+        "error": "Exit code 0\nparadoxical failure",
+        "cwd": t.path().to_string_lossy()
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "claude", "posttoolusefailure"],
+            &in_cwd(&failure, t.path()).to_string(),
+            t.path(),
+        ),
+        "Exit code 0",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "stop",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs[1]["exit"], 1, "串头 0 不认,落默认 1");
+    assert_eq!(evs[1]["detail"], "paradoxical failure");
 }
 
 #[test]

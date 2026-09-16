@@ -1,7 +1,7 @@
 ﻿# agentdash · claude-code 集成包安装器(PowerShell 版;类 Unix shell 用 install.sh)
 # 前提:agentdash 二进制在 PATH——hook 直调二进制子命令,零 Python 前置(spec §6 修订)。
 # 用法:.\install.ps1 [-Target <目标项目目录>](默认当前目录)
-# 动作:skill 复制;settings.json 幂等注册四钩子(命令为常量,无路径 baked);
+# 动作:skill 复制;settings.json 幂等注册五钩子(命令为常量,无路径 baked);
 #       .gitignore 幂等追加 .agentdash/(M-2);清理老版本 Python 垫片残留。
 # 幂等:重复执行只刷新自家注册与文件,不动 settings.json 其他内容。
 # 兼容 Windows PowerShell 5.1+(::new 为 5.0+ 语法)。
@@ -81,10 +81,11 @@ if (-not ($data.PSObject.Properties['hooks'])) {
 $hooks = $data.hooks
 
 $commands = [ordered]@{
-    PostToolUse  = 'agentdash hook posttooluse || true'
-    PreToolUse   = 'agentdash hook pretooluse || true'
-    Stop         = 'agentdash hook stop || true'
-    SubagentStop = 'agentdash hook subagentstop || true'
+    PostToolUse         = 'agentdash hook --host claude posttooluse || true'
+    PostToolUseFailure  = 'agentdash hook --host claude posttoolusefailure || true'
+    PreToolUse          = 'agentdash hook --host claude pretooluse || true'
+    Stop                = 'agentdash hook --host claude stop || true'
+    SubagentStop        = 'agentdash hook --host claude subagentstop || true'
 }
 # matcher 限定(与 hooks.json 清单一致):PreToolUse 只拦 Task/Agent 派发;
 # 未列出的(PostToolUse/Stop/SubagentStop)不设 matcher = 全事件。
@@ -141,5 +142,5 @@ foreach ($event in $commands.Keys) {
 $json = $data | ConvertTo-Json -Depth 10
 # 无 BOM UTF-8(JSON 带 BOM 会毒化部分解析器)
 [System.IO.File]::WriteAllText($settingsPath, $json + "`n", [System.Text.UTF8Encoding]::new($false))
-Write-Host "[agentdash] hooks registered in $settingsPath : PostToolUse/PreToolUse/Stop/SubagentStop"
+Write-Host "[agentdash] hooks registered in $settingsPath : PostToolUse/PostToolUseFailure/PreToolUse/Stop/SubagentStop"
 Write-Host "[agentdash] installed into $Target\.claude (skill: /agentdash)"

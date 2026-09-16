@@ -17,7 +17,7 @@ agentdash --version                           # 自检
 
 | 文件 | 作用 |
 |---|---|
-| `hooks/hooks.json` | PostToolUse/PreToolUse/Stop/SubagentStop 四钩子注册(插件形态,直调 `agentdash hook <event>`) |
+| `hooks/hooks.json` | PostToolUse/PostToolUseFailure/PreToolUse/Stop/SubagentStop 五钩子注册(插件形态,直调 `agentdash hook <event>`) |
 | `skills/agentdash/SKILL.md` | `/agentdash` 点播渲染 + 状态跃迁附图约定 |
 | `install.sh` / `install.ps1` | 装进目标项目 `.claude/`:幂等注册 settings.json hooks + `.gitignore` 幂等追加 `.agentdash/` |
 | 仓库 `tests/hook.rs` | hook 套件:Rust 集成测试(fixture 回放 + 并发零丢失),Python 测试随垫片一并退役 |
@@ -41,14 +41,14 @@ claude plugin marketplace add cty12356541/agentdash
 claude plugin install agentdash@agentdash-marketplace
 ```
 
-插件体即本目录(`hooks/hooks.json` 四钩子 + `skills/agentdash/`),不用安装脚本、
+插件体即本目录(`hooks/hooks.json` 五钩子 + `skills/agentdash/`),不用安装脚本、
 不改目标项目 settings.json。**注意**:hooks.json 的 `agentdash hook <event>` 直调
 PATH 上的二进制,市场包**不内嵌二进制**——缺二进制时 hook 按降级铁律静默跳过,
 需先 `cargo install --path` 或从 Releases 下载放入 PATH(Windows release 资产
 后续手动挂;预构建分发策略见仓库 `bin/README.md`)。
 
 安装动作:检测 `agentdash` 在 PATH(缺失给安装指引并退出)→ skill 复制到
-`<目标>/.claude/skills/agentdash/` → 四钩子以固定命令 `agentdash hook <event> || true`
+`<目标>/.claude/skills/agentdash/` → 五钩子以固定命令 `agentdash hook <event> || true`
 幂等写入 `<目标>/.claude/settings.json`(**无路径 baked**;老版本 `record_event.py`
 的注册与文件残留一并清理)→ 目标仓 `.gitignore` 幂等追加 `.agentdash/`。
 
@@ -87,7 +87,7 @@ hook 套件是仓库的 Rust 集成测试(子进程回放真实二进制):
 cargo test --test hook
 ```
 
-覆盖:四钩子 fixture 回放(含 gate running→passed/failed 折叠、Task/Agent 派发
+覆盖:五钩子 fixture 回放(含 gate running→passed/failed 折叠、Task/Agent 派发
 dispatched 行)、gate 命令匹配表
 (词边界/多空白/复合命令)、退出码与摘要提取变体、UTF-8 中文往返、损坏输入降级、
-事件名回退分派、hooks.json 清单(四事件 + matcher + 二进制直调 + `|| true`)、并发零丢失。
+事件名回退分派、hooks.json 清单(五事件 + matcher + 二进制直调 + `|| true`)、并发零丢失。

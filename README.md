@@ -37,7 +37,7 @@ hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo ins
 
 | 宿主 | kit | 机制 | 在跑 agent 面板 |
 |---|---|---|---|
-| Claude Code | `kits/claude-code`(插件市场) | hooks.json 四事件 | ✓ |
+| Claude Code | `kits/claude-code`(插件市场) | hooks.json 五事件(含 `PostToolUseFailure`) | ✓ |
 | Codex CLI | `kits/codex` | `.codex/hooks.json`(repo 级;需 trust + `/hooks` 一次性审查) | ✓ |
 | opencode | `kits/opencode` | `.opencode/plugins/agentdash.js`(Bun 插件) | 待宿主子代理事件 |
 | ZCode(公司内部) | `kits/zcode` | `.zcode/config.json` → hooks(`enabled:true`,安装器置位;会话启动加载)。⚠ hook 生命周期串行阻塞(需上一 hook 回复),兼容暂时搁置(2026-09-16 维护者实测) | 待宿主子代理事件 |
@@ -53,11 +53,13 @@ hook 运行时直调 PATH 上的 `agentdash`;缺失时先补二进制(`cargo ins
 (Claude Code → `CLAUDE.md`,codex / opencode / zcode / cursor / deepseek →
 `AGENTS.md`)——换工具不换契约。Cursor 载荷词表(`afterShellExecution` 顶层
 `command`+`output`)由 hook 二进制归一成 bash 视图。**gate 终态证据按宿主
-载荷能力如实分级**:claude-code / deepseek(claude 形制回执)折叠出真实
-退出码;zcode/cursor 载荷无绿门禁的退出码证据,`passed` 侧维持
-`failed (exit unknown)` 不臆造;而 `PostToolUseFailure` 失败事件(W9-003,
-zcode/cursor 均注册)与在途 gate 配对后,失败侧升级为真证据(缺码落 1、
-中断 130),不再挂尾注。
+载荷能力如实分级(W11-002 真机实测入册)**:deepseek(DSH 桥字符串回执带
+`[exit code: N]` 尾契约)绿门禁折叠真实退出码;claude-code 的 PostToolUse
+`tool_response` 仅 `stdout/stderr/interrupted/isImage/noOutputExpected`
+五键、**无退出码字段**(W11-002 捕获原文,见 reports),绿门禁只能如实折叠
+`failed (exit unknown)`,不臆造 0;失败侧 `PostToolUseFailure` 事件(W9-003;
+zcode/cursor/claude-code 注册)与在途 gate 配对后升级真证据——claude 真码在
+顶层 `error` 串头 `Exit code N`(解析非零码入账,缺码落 1、中断 130),不再挂尾注。
 
 **一键巡检**:`bash scripts/verify-kits.sh` 在临时目录对六 kit 各跑一遍安装
 体验证(全新安装产物 → 已装钩子命令端到端事件落盘与 host 归属 → 二次安装
