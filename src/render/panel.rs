@@ -145,10 +145,10 @@ pub fn render_brief(dash: &Dashboard, width: usize) -> String {
     lines.join("\n")
 }
 
-/// 任务五态计数(panel 统计行与 W10-001 精要视图同源):▶ 含 active +
-/// stalled(承 Python 口径),· 含 pending + blocked 双计,⊘ 仅 blocked
-/// (W3-001 口径,与 · 双计)。
-struct Counts {
+/// 任务五态计数(panel 统计行与 W10-001 精要视图/W10-002 摘要同源):▶ 含
+/// active + stalled(承 Python 口径),· 含 pending + blocked 双计,⊘ 仅
+/// blocked(W3-001 口径,与 · 双计)。
+pub(super) struct Counts {
     done: usize,
     running: usize,
     stalled: usize,
@@ -156,8 +156,8 @@ struct Counts {
     blocked: usize,
 }
 
-/// [`Counts`] 原地复算(单一事实源,双视图共享)。
-fn counts(tasks: &[TaskView]) -> Counts {
+/// [`Counts`] 原地复算(单一事实源,panel/精要/摘要三视图共享)。
+pub(super) fn counts(tasks: &[TaskView]) -> Counts {
     let mut tally = Counts {
         done: 0,
         running: 0,
@@ -183,8 +183,8 @@ fn counts(tasks: &[TaskView]) -> Counts {
     tally
 }
 
-/// 页眉:项目 · 活跃里程碑(D3:project 读模型字段;panel 与精要视图同源)。
-fn head_line(dash: &Dashboard) -> String {
+/// 页眉:项目 · 活跃里程碑(D3:project 读模型字段;panel/精要/摘要同源)。
+pub(super) fn head_line(dash: &Dashboard) -> String {
     match active_milestone(dash) {
         Some(milestone) => format!(
             "{} · {} {}",
@@ -196,15 +196,38 @@ fn head_line(dash: &Dashboard) -> String {
     }
 }
 
-/// 统计行:`✓d ▶r ·rest ⚑st ⊘b · N agents · MM-DDTHH:MM`(panel 与精要
-/// 视图同格式;agents 计数即在跑表行数)。
+/// 统计槽位(单一事实源):(符号, 计数) 五槽——panel 着色版与 digest
+/// 纯文本版(W10-002)共同的上游,槽位序/口径改这里一处即两视图同步。
+fn stats_slots(tally: &Counts) -> [(char, usize); 5] {
+    [
+        ('✓', tally.done),
+        ('▶', tally.running),
+        ('·', tally.resting),
+        ('⚑', tally.stalled),
+        ('⊘', tally.blocked),
+    ]
+}
+
+/// 统计行正文(纯文本):`✓d ▶r ·rest ⚑st ⊘b · N agents · MM-DDTHH:MM`。
+/// digest(无 ANSI)直用;着色版([`stats_line`])逐槽着色同一槽位。
+pub(super) fn stats_body(tally: &Counts, agents: usize, clock: &str) -> String {
+    let slots = stats_slots(tally)
+        .map(|(mark, count)| format!("{mark}{count}"))
+        .join(" ");
+    format!("{slots} · {agents} agents · {clock}")
+}
+
+/// 统计行(着色,panel 与精要视图同格式):逐槽 ANSI 色,槽位与正文
+/// ([`stats_body`])同源;agents 计数即在跑表行数。
 fn stats_line(tally: &Counts, agents: usize, clock: &str) -> String {
-    format!(
-        "{C_DONE}✓{}{C_END} {C_ACTIVE}▶{}{C_END} {C_PENDING}·{}{C_END} \
-         {C_STALLED}⚑{}{C_END} {C_PENDING}⊘{}{C_END} \
-         · {agents} agents · {clock}",
-        tally.done, tally.running, tally.resting, tally.stalled, tally.blocked
-    )
+    let colors = [C_DONE, C_ACTIVE, C_PENDING, C_STALLED, C_PENDING];
+    let slots = stats_slots(tally)
+        .iter()
+        .zip(colors)
+        .map(|((mark, count), color)| format!("{color}{mark}{count}{C_END}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{slots} · {agents} agents · {clock}")
 }
 
 /// 屏障行(W3-002):`  ⇕ <after 逗号表> → <unlocks 逗号表>`,台账声明序;
@@ -339,8 +362,9 @@ fn task_line(task: &TaskView, dash: &Dashboard) -> String {
     )
 }
 
-/// 在跑 agent 行:`▶ <who>[ · <task>][ · <MM-DDTHH:MM>]`,超宽整行截断。
-fn agent_line(agent: &AgentView, width: usize) -> String {
+/// 在跑 agent 行正文(纯文本):`▶ <who>[ [<host>]][ · <task>][ ·
+/// <MM-DDTHH:MM>]`(着色版与 digest 纯文本版同源;宿主归属 W7-001)。
+pub(super) fn agent_body(agent: &AgentView) -> String {
     let mut line = format!("▶ {}", agent.who);
     if let Some(host) = agent.host.as_deref() {
         let _ = write!(line, " [{host}]"); // 宿主归属(W7-001)
@@ -351,21 +375,37 @@ fn agent_line(agent: &AgentView, width: usize) -> String {
     if !agent.since.is_empty() {
         let _ = write!(line, " · {}", clock_slice(&agent.since));
     }
-    format!("{C_ACTIVE}{}{C_END}", elide(&line, width))
+    line
 }
 
-/// 验证门行:running ▶ / passed ✓ / failed ✗,detail 非空时带尾注并按宽截断。
-fn gate_line(gate: &GateView, width: usize) -> String {
-    let (mark, color) = match gate.state.as_str() {
-        "passed" => ("✓", C_DONE),
-        "failed" => ("✗", C_STALLED),
-        _ => ("▶", C_ACTIVE), // running;未知态兜底按进行中呈现
+/// 在跑 agent 行(着色):正文([`agent_body`])按宽截断后套前景色。
+fn agent_line(agent: &AgentView, width: usize) -> String {
+    format!("{C_ACTIVE}{}{C_END}", elide(&agent_body(agent), width))
+}
+
+/// 验证门行正文(纯文本):`<mark> <name>[ · <detail>]`,running ▶ /
+/// passed ✓ / failed ✗;着色版与 digest 纯文本版同源。
+pub(super) fn gate_body(gate: &GateView) -> String {
+    let mark = match gate.state.as_str() {
+        "passed" => "✓",
+        "failed" => "✗",
+        _ => "▶", // running;未知态兜底按进行中呈现
     };
     let mut line = format!("{mark} {}", gate.name);
     if !gate.detail.is_empty() {
         let _ = write!(line, " · {}", gate.detail);
     }
-    format!("{color}{}{C_END}", elide(&line, width))
+    line
+}
+
+/// 验证门行(着色):正文([`gate_body`])按宽截断后套门态前景色。
+fn gate_line(gate: &GateView, width: usize) -> String {
+    let color = match gate.state.as_str() {
+        "passed" => C_DONE,
+        "failed" => C_STALLED,
+        _ => C_ACTIVE,
+    };
+    format!("{color}{}{C_END}", elide(&gate_body(gate), width))
 }
 
 /// PR check 行(W2-007,gh 词表原样直出不翻译):SUCCESS ✓ 绿 /

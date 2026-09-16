@@ -2,6 +2,7 @@
 //!
 //! - [`oneline::render_oneline`]:无 ANSI 单行(statusline);
 //! - [`panel::render_panel`]:面板——页眉统计 → 健康 → PR → 轨迹 → 车道;
+//! - [`digest::render_digest`]:离场摘要——纯文本无 ANSI(W10-002);
 //! - [`graph::render_graph`]:框化节点 DAG(┌─┐ 框、┬ 出线桩、▼ 入线箭头)。
 //!
 //! 算法移植自 claude-dash `dashlib/render_oneline.py` / `render_panel.py` /
@@ -10,19 +11,27 @@
 //! velocity(速度线)已随 W3-004 入模(`model::velocity`),barriers 随
 //! W1-007、project 随 W3-004(D3)入模。
 
+mod digest;
 pub mod graph;
 mod oneline;
 mod panel;
 
 // graph 面不做平铺 re-export:本模块被 bin 与各集成测试目标分别挂载,各目标
 // 消费面不同构(如 render_panel 目标不消费 graph 组),平铺必有逐目标未用
-// import;消费方一律走 `graph::` 路径。panel/oneline 各目标全消费,保持平铺。
+// import;消费方一律走 `graph::` 路径。panel/oneline 为既有渲染目标全消费,
+// 保持平铺(digest 测试目标 W10-002 起不消费 oneline,窄域放行承下)
+#[allow(unused_imports)]
 pub use oneline::render_oneline;
 // render_brief(W10-001):多仓聚合的每仓精要块。仅 bin(panel 多仓路由)与
 // render_panel 测试目标消费,其余挂载目标不消费——平铺 re-export 会逐目标
 // 报未用 import,窄域放行(与上面 graph 面不平铺是同一消费面分化,反向取用)
 #[allow(unused_imports)]
 pub use panel::{DEFAULT_PANEL_WIDTH, render_brief, render_panel};
+// render_digest / digest_needs_attention(W10-002):离场摘要 + --strict 判据。
+// 仅 bin(render digest 路由)与 digest 测试目标消费,其余挂载目标不消费——
+// 平铺 re-export 会逐目标报未用 import,窄域放行(承 render_brief 同理)
+#[allow(unused_imports)]
+pub use digest::{digest_needs_attention, render_digest};
 
 use crate::contract::TaskState;
 use crate::model::{Dashboard, MilestoneView, TaskView, rfc3339_to_secs};

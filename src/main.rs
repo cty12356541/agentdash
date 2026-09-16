@@ -90,7 +90,8 @@ fn parse_render_args(
     Ok((format, paths))
 }
 
-/// `render panel|graph [PATH]...`:打印对应渲染。宽度非 tty 用默认、tty 读
+/// `render panel|graph|digest [PATH]...`:打印对应渲染(digest 自带解析臂,
+/// 见 [`cmd_render_digest`])。宽度非 tty 用默认、tty 读
 /// 终端原始列:低于 40 列退化为 oneline 单行(AD-ERR-004),否则钳 40..120
 /// 出框化视图;模型走多源合并(损坏降级为警告行,不失败)。`--format svg`
 /// 仅 graph(W6-002):矢量 DAG 文档,其余同旧路径。panel 自 W10-001 起
@@ -101,6 +102,11 @@ fn cmd_render(rest: &[String], lang: lang::Lang) -> ExitCode {
         eprintln!("{}\n\n{}", lang.render_needs_view(), lang.usage());
         return ExitCode::from(2);
     };
+    // 离场摘要(W10-002):自带解析臂——`--strict` 旗标 + 至多一位置;不收
+    // `--format`(svg 是图视图专属,digest 无格式面),不走下方宽度面板路径
+    if view == "digest" {
+        return cmd_render_digest(&rest[1..], lang);
+    }
     let default_width = match view {
         "panel" => render::DEFAULT_PANEL_WIDTH,
         "graph" => render::graph::DEFAULT_GRAPH_WIDTH,
@@ -203,6 +209,41 @@ fn cmd_render_panel(paths: &[PathBuf], default_width: usize) -> ExitCode {
 /// 一行 ⚠ 而非崩溃)。
 fn nomatch_line(pattern: &str) -> String {
     format!("{}⚠ no match: {pattern}{}", render::C_WARN, render::C_END)
+}
+
+/// `render digest [--strict] [PATH]`(W10-002):离场摘要,纯文本无 ANSI。
+/// 单 PATH(oneline 同款缺省 `.`;多仓 digest 即用法错退 2,D2);`--strict`
+/// 是本仓首个内容性退出码——存在失败门或 blocked 任务退 1,否则 0。渲染与
+/// 判定分层:`render::render_digest` 只出文本,退出码在 cmd 层凭
+/// [`render::digest_needs_attention`] 收口。
+fn cmd_render_digest(rest: &[String], lang: lang::Lang) -> ExitCode {
+    let mut strict = false;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for arg in rest {
+        if arg == "--strict" {
+            strict = true;
+        } else if arg.starts_with('-') {
+            eprintln!("error: {}\n\n{}", lang.unexpected_flag(arg), lang.usage());
+            return ExitCode::from(2);
+        } else {
+            paths.push(PathBuf::from(arg));
+        }
+    }
+    if paths.len() > 1 {
+        eprintln!(
+            "error: {}\n\n{}",
+            lang.unexpected_extra("[PATH]"),
+            lang.usage()
+        );
+        return ExitCode::from(2);
+    }
+    let path = paths.pop().unwrap_or_else(|| PathBuf::from("."));
+    let dash = model::merge(&path);
+    println!("{}", render::render_digest(&dash));
+    if strict && render::digest_needs_attention(&dash) {
+        return ExitCode::FAILURE; // 1:失败门/blocked 在场(cron 监控用)
+    }
+    ExitCode::SUCCESS
 }
 
 /// `oneline [PATH]`:无 ANSI 单行 statusline。

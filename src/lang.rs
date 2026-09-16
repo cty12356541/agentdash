@@ -40,6 +40,7 @@ agentdash - agent 进度仪表盘(agent progress dashboard)
 命令:
   render panel|graph [--format ansi|svg] [PATH]
                                   渲染面板或任务 DAG(--format svg:矢量 DAG,仅 graph)
+  render digest [--strict] [PATH] 离场摘要(纯文本;--strict 遇失败门或阻塞退 1)
   oneline [PATH]                  打印单行状态摘要
   watch [--once] [SECONDS] [PATH] 常驻实时刷新(q/Ctrl-C 退出)
   hook <EVENT>                    从 stdin 消费宿主工具钩子载荷
@@ -65,6 +66,8 @@ Commands:
   render panel|graph [--format ansi|svg] [PATH]
                                   Render the dashboard panel or the task DAG
                                   (--format svg: vector DAG, graph only)
+  render digest [--strict] [PATH] Print a plain-text leave digest (--strict
+                                  exits 1 on failed gate or blocked task)
   oneline [PATH]                  Print a one-line status summary
   watch [--once] [SECONDS] [PATH] Watch a plan and refresh live (q/Ctrl-C quits)
   hook <EVENT>                    Consume a host-tool hook payload from stdin
@@ -94,16 +97,18 @@ Language/语言: English · AGENTDASH_LANG=zh 切换中文(switch to Chinese)"
     /// render 缺视图。
     pub(crate) fn render_needs_view(self) -> &'static str {
         match self {
-            Lang::Zh => "error: render 需要视图:`render panel|graph [PATH]`",
-            Lang::En => "error: render needs a view: `render panel|graph [PATH]`",
+            Lang::Zh => "error: render 需要视图:`render panel|graph|digest [PATH]`",
+            Lang::En => "error: render needs a view: `render panel|graph|digest [PATH]`",
         }
     }
 
     /// 未知 render 视图。
     pub(crate) fn unknown_view(self, view: &str) -> String {
         match self {
-            Lang::Zh => format!("error: 未知的 render 视图 `{view}`(应为 panel|graph)"),
-            Lang::En => format!("error: unknown render view `{view}` (expected panel|graph)"),
+            Lang::Zh => format!("error: 未知的 render 视图 `{view}`(应为 panel|graph|digest)"),
+            Lang::En => {
+                format!("error: unknown render view `{view}` (expected panel|graph|digest)")
+            }
         }
     }
 
