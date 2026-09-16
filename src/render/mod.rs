@@ -18,7 +18,11 @@ mod panel;
 // 消费面不同构(如 render_panel 目标不消费 graph 组),平铺必有逐目标未用
 // import;消费方一律走 `graph::` 路径。panel/oneline 各目标全消费,保持平铺。
 pub use oneline::render_oneline;
-pub use panel::{DEFAULT_PANEL_WIDTH, render_panel};
+// render_brief(W10-001):多仓聚合的每仓精要块。仅 bin(panel 多仓路由)与
+// render_panel 测试目标消费,其余挂载目标不消费——平铺 re-export 会逐目标
+// 报未用 import,窄域放行(与上面 graph 面不平铺是同一消费面分化,反向取用)
+#[allow(unused_imports)]
+pub use panel::{DEFAULT_PANEL_WIDTH, render_brief, render_panel};
 
 use crate::contract::TaskState;
 use crate::model::{Dashboard, MilestoneView, TaskView, rfc3339_to_secs};

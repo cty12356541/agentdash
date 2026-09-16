@@ -5,6 +5,8 @@ mod contract;
 // 待 W2 activity 车道消费,窄域放行(替代原 crate 级 allow)。
 #[allow(dead_code)]
 mod events;
+// W10-001:自研 glob(分量级 `*`/`?`),panel 多仓聚合的参数展开面
+mod glob;
 mod hook;
 mod lang;
 mod model;
@@ -53,14 +55,16 @@ enum RenderFormat {
     Svg,
 }
 
-/// `render` 参数解析(W6-002,纯函数):`--format ansi|svg`(或 `--format=X`,
-/// 缺省 ansi)+ 至多一个 [PATH]。`Err` 为已成型错误消息,调用方打印后退 2。
+/// `render` 参数解析(W6-002;W10-001 起多 PATH,纯函数):`--format
+/// ansi|svg`(或 `--format=X`,缺省 ansi)+ 任意个 [PATH];panel 侧逐参
+/// glob 展开,graph 侧仍限单个,由 [`cmd_render`] 收口。`Err` 为已成型
+/// 错误消息,调用方打印后退 2。
 fn parse_render_args(
     rest: &[String],
     lang: lang::Lang,
-) -> Result<(RenderFormat, Option<PathBuf>), String> {
+) -> Result<(RenderFormat, Vec<PathBuf>), String> {
     let mut format = RenderFormat::Ansi;
-    let mut path = None;
+    let mut paths = Vec::new();
     let mut iter = rest.iter();
     while let Some(arg) = iter.next() {
         if arg == "--format" {
@@ -79,19 +83,19 @@ fn parse_render_args(
             };
         } else if arg.starts_with('-') {
             return Err(lang.unexpected_flag(arg));
-        } else if path.is_none() {
-            path = Some(PathBuf::from(arg));
         } else {
-            return Err(lang.unexpected_extra("[PATH]"));
+            paths.push(PathBuf::from(arg));
         }
     }
-    Ok((format, path))
+    Ok((format, paths))
 }
 
-/// `render panel|graph [PATH]`:打印对应渲染。宽度非 tty 用默认、tty 读终端
-/// 原始列:低于 40 列退化为 oneline 单行(AD-ERR-004),否则钳 40..120 出
-/// 框化视图;模型走多源合并(损坏降级为警告行,不失败)。`--format svg`
-/// 仅 graph(W6-002):矢量 DAG 文档,其余同旧路径。
+/// `render panel|graph [PATH]...`:打印对应渲染。宽度非 tty 用默认、tty 读
+/// 终端原始列:低于 40 列退化为 oneline 单行(AD-ERR-004),否则钳 40..120
+/// 出框化视图;模型走多源合并(损坏降级为警告行,不失败)。`--format svg`
+/// 仅 graph(W6-002):矢量 DAG 文档,其余同旧路径。panel 自 W10-001 起
+/// 收多 PATH(逐参自研 glob 展开,多仓精要视图,见 [`cmd_render_panel`]);
+/// graph 仍至多一个 PATH,多余即用法错退 2。
 fn cmd_render(rest: &[String], lang: lang::Lang) -> ExitCode {
     let Some(view) = rest.first().map(String::as_str) else {
         eprintln!("{}\n\n{}", lang.render_needs_view(), lang.usage());
@@ -105,7 +109,7 @@ fn cmd_render(rest: &[String], lang: lang::Lang) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let (format, path) = match parse_render_args(&rest[1..], lang) {
+    let (format, paths) = match parse_render_args(&rest[1..], lang) {
         Ok(parsed) => parsed,
         Err(msg) => {
             eprintln!("error: {msg}\n\n{}", lang.usage());
@@ -116,23 +120,89 @@ fn cmd_render(rest: &[String], lang: lang::Lang) -> ExitCode {
         eprintln!("{}\n\n{}", lang.svg_only_graph(), lang.usage());
         return ExitCode::from(2);
     }
-    let path = path.unwrap_or_else(|| PathBuf::from("."));
+    // 多仓聚合仅 panel(D1):graph(与 oneline/watch)仍单 PATH,措辞承旧
+    if view != "panel" && paths.len() > 1 {
+        eprintln!(
+            "error: {}\n\n{}",
+            lang.unexpected_extra("[PATH]"),
+            lang.usage()
+        );
+        return ExitCode::from(2);
+    }
+    if view == "panel" {
+        let mut paths = paths;
+        if paths.is_empty() {
+            paths.push(PathBuf::from(".")); // 缺省 cwd(承现行)
+        }
+        return cmd_render_panel(&paths, default_width);
+    }
+    let path = paths
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PathBuf::from("."));
     let dash = model::merge(&path);
     match format {
         RenderFormat::Svg => println!("{}", render::graph::render_graph_svg(&dash)),
         RenderFormat::Ansi => match tui::output_form(tui::stdout_cols(), default_width) {
             tui::OutputForm::OneLine => println!("{}", render::render_oneline(&dash)),
             tui::OutputForm::Framed(width) => {
-                let rendered = if view == "panel" {
-                    render::render_panel(&dash, width)
-                } else {
-                    render::graph::render_graph(&dash, width)
-                };
-                println!("{rendered}");
+                println!("{}", render::graph::render_graph(&dash, width));
             }
         },
     }
     ExitCode::SUCCESS
+}
+
+/// panel 多 PATH 入口(W10-001):逐参自研 glob 展开(含 `*`/`?` 的分量,
+/// 字面前缀 `read_dir` 逐段匹配)。恰 1 仓(含展开后)= 现行全面板路径,
+/// 输出逐字节不变(黄金);N>1 逐仓精要块(空行分隔),无匹配 pattern 尾
+/// 随 ⚠ 行;0 仓(全模式无匹配)逐 pattern 一行 ⚠——恒退 0,不崩溃。
+/// 窄终端退化同现行:低于 40 列逐仓 oneline 单行。
+fn cmd_render_panel(paths: &[PathBuf], default_width: usize) -> ExitCode {
+    let (repos, nomatch) = glob::expand_args(paths);
+    match repos.len() {
+        0 => {
+            let lines: Vec<String> = nomatch
+                .iter()
+                .map(|pattern| nomatch_line(pattern))
+                .collect();
+            println!("{}", lines.join("\n"));
+        }
+        1 => {
+            let dash = model::merge(&repos[0]);
+            match tui::output_form(tui::stdout_cols(), default_width) {
+                tui::OutputForm::OneLine => println!("{}", render::render_oneline(&dash)),
+                tui::OutputForm::Framed(width) => {
+                    println!("{}", render::render_panel(&dash, width));
+                }
+            }
+        }
+        _ => match tui::output_form(tui::stdout_cols(), default_width) {
+            tui::OutputForm::OneLine => {
+                let mut lines: Vec<String> = repos
+                    .iter()
+                    .map(|path| render::render_oneline(&model::merge(path)))
+                    .collect();
+                lines.extend(nomatch.iter().map(|pattern| nomatch_line(pattern)));
+                println!("{}", lines.join("\n"));
+            }
+            tui::OutputForm::Framed(width) => {
+                let mut blocks: Vec<String> = repos
+                    .iter()
+                    .map(|path| render::render_brief(&model::merge(path), width))
+                    .collect();
+                blocks.extend(nomatch.iter().map(|pattern| nomatch_line(pattern)));
+                println!("{}", blocks.join("\n\n"));
+            }
+        },
+    }
+    ExitCode::SUCCESS
+}
+
+/// 无匹配 pattern 的 ⚠ 行(与 panel 警告行同款着色前缀;D1:模式无匹配产
+/// 一行 ⚠ 而非崩溃)。
+fn nomatch_line(pattern: &str) -> String {
+    format!("{}⚠ no match: {pattern}{}", render::C_WARN, render::C_END)
 }
 
 /// `oneline [PATH]`:无 ANSI 单行 statusline。

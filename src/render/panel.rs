@@ -26,48 +26,15 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     let width = clamp_width(width);
     let mut lines: Vec<String> = Vec::new();
 
-    let mut done = 0;
-    let mut running = 0; // active + stalled(▶ 计数承 Python口径)
-    let mut stalled = 0;
-    let mut resting = 0; // pending + blocked(· 计数,口径不变)
-    let mut blocked = 0; // 仅 blocked(⊘ 槽,W3-001;与 · 双计)
-    for task in &dash.tasks {
-        match visual(task.state) {
-            Visual::Done => done += 1,
-            Visual::Active => running += 1,
-            Visual::Stalled => {
-                running += 1;
-                stalled += 1;
-            }
-            Visual::Pending => resting += 1,
-            Visual::Blocked => {
-                resting += 1;
-                blocked += 1;
-            }
-        }
-    }
+    // 页眉:项目 · 活跃里程碑(D3:project 读模型字段;整行过 elide 钳宽)
+    lines.push(elide(&head_line(dash), width));
     // 页眉 agent 计数即在跑表行数;吞吐口径已入模型,见区块 B 速度线
     // (W3-006 起为事件活动窗真实吞吐,不再是里程碑计数近似)
-    let agents = dash.agents.len();
-
-    // 页眉:项目 · 活跃里程碑(D3:project 读模型字段;整行过 elide 钳宽)
-    let active_ms = active_milestone(dash);
-    let head = match active_ms {
-        Some(milestone) => format!(
-            "{} · {} {}",
-            dash.project,
-            ms_id(milestone),
-            milestone.title
-        ),
-        None => dash.project.clone(),
-    };
-    lines.push(elide(&head, width));
-    let clock = clock_slice(&dash.generated_at);
-    lines.push(format!(
-        "{C_DONE}✓{done}{C_END} {C_ACTIVE}▶{running}{C_END} \
-         {C_PENDING}·{resting}{C_END} {C_STALLED}⚑{stalled}{C_END} \
-         {C_PENDING}⊘{blocked}{C_END} \
-         · {agents} agents · {clock}"
+    let tally = counts(&dash.tasks);
+    lines.push(stats_line(
+        &tally,
+        dash.agents.len(),
+        &clock_slice(&dash.generated_at),
     ));
     lines.push("═".repeat(width));
 
@@ -116,6 +83,7 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
         .milestones
         .iter()
         .find(|milestone| milestone_state(milestone) == "planned");
+    let active_ms = active_milestone(dash);
     if let (Some(next), None) = (planned, active_ms) {
         lines.push(format!("  下一步:待启动 {}", ms_id(next)));
     } else if active_ms.is_some() {
@@ -135,6 +103,108 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
     // 台账声明序直出,语义与 graph 的 after→unlocks 边同向
     push_barrier_lines(&mut lines, &dash.barriers, width);
     lines.join("\n")
+}
+
+/// 精要视图(W10-001 多仓聚合):每仓一块——页眉(项目 · 活跃里程碑)→
+/// 统计行(与 [`render_panel`] 同口径同格式)→ 在跑 agents → 失败门 →
+/// blocked 任务 → ⚠ 警告。缺项零残留(不打空标题/空态占位),无区块分隔
+/// 线;块间空行由调用方拼装。宽度先经 40..120 钳位。
+#[must_use]
+pub fn render_brief(dash: &Dashboard, width: usize) -> String {
+    let width = clamp_width(width);
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push(elide(&head_line(dash), width));
+    let tally = counts(&dash.tasks);
+    lines.push(stats_line(
+        &tally,
+        dash.agents.len(),
+        &clock_slice(&dash.generated_at),
+    ));
+    for agent in &dash.agents {
+        lines.push(agent_line(agent, width));
+    }
+    // 失败门:✗ 名 · detail(门行复用全面板同款;passed/running 不上精要)
+    for gate in &dash.gates {
+        if gate.state == "failed" {
+            lines.push(gate_line(gate, width));
+        }
+    }
+    // blocked 任务(⊘ 行复用全面板同款;其余态不上精要)
+    for task in &dash.tasks {
+        if visual(task.state) == Visual::Blocked {
+            lines.push(task_line(task, dash));
+        }
+    }
+    for warning in &dash.warnings {
+        lines.push(format!(
+            "{C_WARN}⚠ {}{C_END}",
+            elide(warning, width.saturating_sub(2))
+        ));
+    }
+    lines.join("\n")
+}
+
+/// 任务五态计数(panel 统计行与 W10-001 精要视图同源):▶ 含 active +
+/// stalled(承 Python 口径),· 含 pending + blocked 双计,⊘ 仅 blocked
+/// (W3-001 口径,与 · 双计)。
+struct Counts {
+    done: usize,
+    running: usize,
+    stalled: usize,
+    resting: usize,
+    blocked: usize,
+}
+
+/// [`Counts`] 原地复算(单一事实源,双视图共享)。
+fn counts(tasks: &[TaskView]) -> Counts {
+    let mut tally = Counts {
+        done: 0,
+        running: 0,
+        stalled: 0,
+        resting: 0,
+        blocked: 0,
+    };
+    for task in tasks {
+        match visual(task.state) {
+            Visual::Done => tally.done += 1,
+            Visual::Active => tally.running += 1,
+            Visual::Stalled => {
+                tally.running += 1;
+                tally.stalled += 1;
+            }
+            Visual::Pending => tally.resting += 1,
+            Visual::Blocked => {
+                tally.resting += 1;
+                tally.blocked += 1;
+            }
+        }
+    }
+    tally
+}
+
+/// 页眉:项目 · 活跃里程碑(D3:project 读模型字段;panel 与精要视图同源)。
+fn head_line(dash: &Dashboard) -> String {
+    match active_milestone(dash) {
+        Some(milestone) => format!(
+            "{} · {} {}",
+            dash.project,
+            ms_id(milestone),
+            milestone.title
+        ),
+        None => dash.project.clone(),
+    }
+}
+
+/// 统计行:`✓d ▶r ·rest ⚑st ⊘b · N agents · MM-DDTHH:MM`(panel 与精要
+/// 视图同格式;agents 计数即在跑表行数)。
+fn stats_line(tally: &Counts, agents: usize, clock: &str) -> String {
+    format!(
+        "{C_DONE}✓{}{C_END} {C_ACTIVE}▶{}{C_END} {C_PENDING}·{}{C_END} \
+         {C_STALLED}⚑{}{C_END} {C_PENDING}⊘{}{C_END} \
+         · {agents} agents · {clock}",
+        tally.done, tally.running, tally.resting, tally.stalled, tally.blocked
+    )
 }
 
 /// 屏障行(W3-002):`  ⇕ <after 逗号表> → <unlocks 逗号表>`,台账声明序;

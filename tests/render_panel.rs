@@ -1252,3 +1252,101 @@ fn agent_line_shows_host_tag() {
         "在跑行应含宿主标: {out}"
     );
 }
+
+// ---------- W10-001 多仓聚合:单仓字节钉 + 精要视图(render_brief) ----------
+
+/// W10-001 字节钉(黄金不变量):单仓全面板输出**含 ANSI 逐字节**等于改造前
+/// 捕获的黄金串(捕获自基线 e985029 现行代码 + 同一 w25 fixture,见任务报告)
+/// ——任何触及 panel 内部或单仓渲染路由的改动在此炸出。
+#[test]
+fn single_path_panel_byte_pin_w10() {
+    const PIN: &str = "agentdash\n\
+\x1b[32m✓4\x1b[0m \x1b[34m▶0\x1b[0m \x1b[90m·0\x1b[0m \x1b[33m⚑0\x1b[0m \x1b[90m⊘0\x1b[0m · 0 agents · 09-13T08:30\n\
+════════════════════════════════════════════════════════════════\n\
+\x1b[1m在跑 / 健康\x1b[0m\n\
+\x1b[32m✓ 无活跃/卡死\x1b[0m\n\
+────────────────────────────────────────────────────────────────\n\
+\x1b[1m轨迹 · 1 里程碑\x1b[0m\n\
+\x20\x20\x1b[32mW25 并行车道冲刺 ▓▓▓▓▓▓▓▓▓▓ 4/4 done\x1b[0m\n\
+\x20\x20—\n\
+────────────────────────────────────────────────────────────────\n\
+\x1b[1m车道 / 任务\x1b[0m\n\
+\x1b[1mA\x1b[0m\n\
+\x1b[32m✓ T1 fiber join 即回收\x1b[0m\n\
+\x1b[1mB\x1b[0m\n\
+\x1b[32m✓ T2 scope by_id 索引\x1b[0m\n\
+\x1b[1mC\x1b[0m\n\
+\x1b[32m✓ T3 orphan 上界\x1b[0m\n\
+\x1b[1mD\x1b[0m\n\
+\x1b[32m✓ T4 集成收尾\x1b[0m";
+    assert_eq!(
+        render_panel(&w25_dash(), DEFAULT_PANEL_WIDTH),
+        PIN,
+        "单仓全面板必须与 W10 改造前逐字节一致(含 ANSI)"
+    );
+}
+
+/// W10-001 精要视图四要素:统计行(与全面板同口径)+ 在跑 agent + 失败门 +
+/// blocked 任务 + ⚠ 警告齐上板;passed 门、非 blocked 任务、轨迹/车道区块、
+/// 分隔线全部零残留(缺项零残留,不打空标题)。
+#[test]
+fn brief_view_renders_four_elements_with_zero_residue() {
+    let mut dash = w25_dash();
+    dash.milestones[0].done = 2; // W25 转 active → 页眉携带
+    dash.tasks[1].state = TaskState::Active; // T2 在跑(非 blocked,不上精要)
+    dash.tasks[2].state = TaskState::Blocked; // T3 blocked(上精要)
+    dash.agents = vec![agent("alice", Some("冲 W10"), "2026-09-13T08:30:00Z")];
+    dash.gates = vec![
+        GateView {
+            name: "build".into(),
+            state: "passed".into(),
+            detail: String::new(),
+        },
+        GateView {
+            name: "test".into(),
+            state: "failed".into(),
+            detail: "2 failed".into(),
+        },
+    ];
+    dash.warnings = vec!["ledger: 未知字段".to_owned()];
+
+    let plain = strip_ansi(&render::render_brief(&dash, DEFAULT_PANEL_WIDTH));
+    let lines: Vec<&str> = plain.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "agentdash · W25 并行车道冲刺",
+            "✓2 ▶1 ·1 ⚑0 ⊘1 · 1 agents · 09-13T08:30",
+            "▶ alice · 冲 W10 · 09-13T08:30",
+            "✗ test · 2 failed",
+            "⊘ T3 orphan 上界",
+            "⚠ ledger: 未知字段",
+        ],
+        "精要视图六行:页眉/统计/在跑/失败门/blocked/⚠,零残留: {plain}"
+    );
+    for line in plain.lines() {
+        assert!(
+            display_width(line) <= DEFAULT_PANEL_WIDTH,
+            "精要块零溢出: {line:?}"
+        );
+    }
+    assert!(!plain.contains('═') && !plain.contains('─'), "无区块分隔线");
+    assert!(
+        !plain.contains("车道 / 任务") && !plain.contains("轨迹"),
+        "无全面板区块头"
+    );
+}
+
+/// W10-001 空仓零残留:无 agent / 门 / blocked / 警告的仓,精要视图只出
+/// 页眉 + 统计两行,不打任何空态占位。
+#[test]
+fn brief_view_empty_repo_renders_two_lines_only() {
+    let dash = w25_dash(); // 全 done、无活跃里程碑、无 agent/门/警告
+    let plain = strip_ansi(&render::render_brief(&dash, DEFAULT_PANEL_WIDTH));
+    let lines: Vec<&str> = plain.lines().collect();
+    assert_eq!(
+        lines,
+        vec!["agentdash", "✓4 ▶0 ·0 ⚑0 ⊘0 · 0 agents · 09-13T08:30",],
+        "空仓仅页眉+统计两行: {plain}"
+    );
+}

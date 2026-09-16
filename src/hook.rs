@@ -245,10 +245,10 @@ fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
         }
     });
     let mut detail = summary_line(response);
-    if detail.is_empty() {
-        if let Some(msg) = payload.get("error_message").and_then(Value::as_str) {
-            detail = clip(msg);
-        }
+    if detail.is_empty()
+        && let Some(msg) = payload.get("error_message").and_then(Value::as_str)
+    {
+        detail = clip(msg);
     }
     with_lock(&dir, || {
         if supersede_pending_slot(&dir, gate, exit, &detail) {
@@ -295,7 +295,7 @@ fn supersede_pending_slot(dir: &Path, gate: &str, exit: i64, detail: &str) -> bo
         .and_then(|text| serde_json::from_str::<Value>(&text).ok());
     let mut slots = pending_slots(existing);
     let mut hit = false;
-    for slot in slots.iter_mut() {
+    for slot in &mut slots {
         if slot.get("gate").and_then(Value::as_str) == Some(gate) {
             slot["exit"] = json!(exit);
             slot["detail"] = json!(clip(detail));
@@ -794,10 +794,10 @@ fn split_string_response(text: &str) -> (&str, Option<i64>) {
         }
     }
     // 标记独占全串的退化形(正文为空):"\n[exit code: N]" 去掉首 \n 后即头锚
-    if let Some(rest) = trimmed.strip_prefix("[exit code: ") {
-        if let Some(n) = rest.strip_suffix(']').and_then(|d| d.parse::<i64>().ok()) {
-            return ("", Some(n));
-        }
+    if let Some(rest) = trimmed.strip_prefix("[exit code: ")
+        && let Some(n) = rest.strip_suffix(']').and_then(|d| d.parse::<i64>().ok())
+    {
+        return ("", Some(n));
     }
     (trimmed, None)
 }
