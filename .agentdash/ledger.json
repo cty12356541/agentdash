@@ -35,13 +35,13 @@
     },
     "02": {
       "label": "离场摘要:render digest",
-      "state": "active",
-      "note": "W10-002 派发(2026-09-16):纯文本零 ESC;--strict 内容性退出码首个;节序=统计/失败门/在跑/blocked/done+?物证/⚠"
+      "state": "done",
+      "note": "9d60f58(2026-09-16):242 测试(+6);零 ESC 三重钉;正文经 stats_slots 单一真值复用;--strict cmd 层纯谓词;审查 Approved(3 Minor 延后)"
     },
     "03": {
       "label": "用户自定义 gate(.agentdash/config 声明词表)",
-      "state": "pending",
-      "note": "已定档 0.8 主打(2026-09-16 用户决策):验证门契约从内置 6 条模式(cargo test/clippy/fmt、go test、npm test、gh pr checks,src/hook.rs gate_name)开放为 .agentdash/config 用户声明词表;钩子按 cwd 读同目录配置与内置合并,损坏按降级铁律静默回退内置(绝不阻塞宿主);渲染侧零改动(gate 字段本为自由字符串);补词边界/连续性性质测试"
+      "state": "active",
+      "note": "W10-003 派发(2026-09-16):config.json 词序列(非正则,零新依赖);用户表先查;损坏整表静默回退;六 kit 巡检照常"
     },
     "04": {
       "label": "agentstats 观测面(宿主使用率/gate 通过率/任务周转)",
