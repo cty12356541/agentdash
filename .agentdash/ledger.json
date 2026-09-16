@@ -24,8 +24,8 @@
   "tasks": {
     "01": {
       "label": "多仓聚合:render panel 支持 PATH glob",
-      "state": "pending",
-      "note": "render panel ~/projects/*/ 一屏看全部仓的在跑/失败/阻塞;纯渲染层,数据已就位;0.8 主打"
+      "state": "active",
+      "note": "W10-001 派发(2026-09-16):单仓黄金字节不变;精要视图四要素;glob 自研分量级 *;spec 83aaf8d"
     },
     "02": {
       "label": "离场摘要:render digest",
