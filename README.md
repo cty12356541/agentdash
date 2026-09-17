@@ -67,6 +67,9 @@ zcode/cursor/claude-code 注册)与在途 gate 配对后升级真证据——cla
 `--keep` 保留现场供人工检查。jq 缺失时 JSON 类断言自动降级 SKIP,与安装器
 的无-jq 降级语义一致。改动 `src/` 后先 `cargo install --path .` 重装再巡检
 (巡检的是 PATH 上已装二进制)。
+**手工实测**:逐宿主"安装 → 真跑 → 对事件"的验证手册见
+[`docs/host-testing-guide.md`](docs/host-testing-guide.md)(每宿主期望结果、
+观测面速查、模拟载荷二进制测试与排障表)。
 
 ### claude-code 集成包(可选)
 
