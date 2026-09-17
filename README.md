@@ -70,6 +70,9 @@ zcode/cursor/claude-code 注册)与在途 gate 配对后升级真证据——cla
 **手工实测**:逐宿主"安装 → 真跑 → 对事件"的验证手册见
 [`docs/host-testing-guide.md`](docs/host-testing-guide.md)(每宿主期望结果、
 观测面速查、模拟载荷二进制测试与排障表)。
+**接入其他项目**:安装手册见
+[`docs/kit-install-guide.md`](docs/kit-install-guide.md)(逐宿主安装命令、
+宿主侧一次性动作、卸载与 FAQ)。
 
 ### claude-code 集成包(可选)
 
