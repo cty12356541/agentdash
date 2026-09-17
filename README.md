@@ -154,6 +154,7 @@ go test、npm test、gh pr checks)开放——
 - **信任锚与可达性(W5–W6,0.4.0/0.5.0)**:done_at 契约加法(写回 `d` 键自动盖章)+ 物证 `?` 交叉核对(done 自报晚于最近通过门即亮,自报无物证非指控);`±HHMM` 基本格式容忍;`render graph --format svg` 矢量输出;安装器可执行位修复与 ps1 静态审查。
 - **0.8 产品化(W10,0.8.0,已完成)**:多仓聚合(`render panel` 多位置 + 自研 glob 展开,多仓出精要视图——每仓页眉统计/在跑/失败门/blocked/⚠,单仓输出逐字节不变)、离场摘要(`render digest [--strict]` 纯文本无 ANSI,`--strict` 有失败门或 blocked 退 1,cron 夜间监控)、用户自定义 gate(`.agentdash/config.json` 声明词表,验证门契约从内置六条开放,损坏整表静默回退,六宿主同一二进制自动受益)。
 - **0.9 证据闭环(W11,0.9.0,已完成)**:pending 池会话归属(gate 槽位记录归属会话,Stop 只折叠本会话——嵌套双会话真机实证互不污染)、claude 宿主退出码实证入册 + 红侧 error 串头解析(绿侧证据分级句校准,不臆造 0)、无 who completed 配对启发(缺省配最老在跑并标 `(inferred)`,`--no-infer` 关掉回严格)、`agentdash stats` 观测面(宿主使用率/gate 通过率/任务周转三表,`--host` 过滤,纯文本恒退 0)、契约 v1.0 公开版([`docs/contract.md`](docs/contract.md))。
+- **0.10 观测可读性与 TUI 交互(W12,0.10.0,已完成)**:面板 unknown 第三态(`exit=null` 折叠——如 zcode 绿侧——渲染暗色 `? … (unknown)`,与有码真失败 ✗ 视觉可辨,panel/digest 同源,stats 三列既有)、watch TUI 点击交互(面板视图左键点击任务行聚焦——行映射与渲染同源零漂移;滚轮滚动主区/详情右栏按列路由;换视图滚移归零;图视图点击守卫修复漏算页眉行)。
 - **二期**:codex-kit / opencode-kit(宿主扩展)、远程源扩展(PR / CI 缓存)、观察者兼底完善。
 - **三期**:分发矩阵铺满(Release 二进制 / 包管理器 / 插件市场)。
 

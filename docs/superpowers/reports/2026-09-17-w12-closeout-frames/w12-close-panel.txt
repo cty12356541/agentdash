@@ -1,0 +1,23 @@
+agentdash
+[32m✓7[0m [34m▶0[0m [90m·0[0m [33m⚑0[0m [90m⊘0[0m · 0 agents · 09-17T12:39
+════════════════════════════════════════════════════════════════
+[1m在跑 / 健康[0m
+[90m· 无活跃[0m
+[90m? cargo-clippy · 1380 | |     scroll_out: &mut u16, (unknown)[0m
+[90m? cargo-fmt · fmt clean (unknown)[0m
+[34m▶ cargo-test[0m
+────────────────────────────────────────────────────────────────
+[1m轨迹 · 1 里程碑[0m
+  [32mW12 W12:观测可读性(unknown 第三态) + TUI  ▓▓▓▓▓▓▓▓▓▓ 7/7 done[0m
+  —
+────────────────────────────────────────────────────────────────
+[1m车道 / 任务[0m
+[1mW12 进行中[0m
+[32m✓ 09 面板 unknown 第三态:无证据折叠与真失败视觉可分 · W12-009:GateState::Failed 加 unknown 标志(events 层按 exit 证据有无置位)→ GateView.unknown 透传 → panel/digest 第三态渲染(? + (unknown) 尾注,暗色不占红;旧 detail 尾注剥离防双注);stats 面既有三分口径不动;oneline 无门态面不涉及;docs/contract.md §5 增渲染语义。渲染 only,事件语义/exit_code 解析零改动;279 测试(+5) ?[0m
+[32m✓ 10 TUI 点击交互优化(watch 常驻视图) · W12-010:watch 面板视图左键点击任务行聚焦(行映射 render_panel_rows 与渲染同源零漂移)、滚轮滚动主区/详情右栏(按列路由,scroll_step/scroll_max 纯函数钳位)、换视图/关详情滚移归零;顺手修图视图点击旧守卫漏算页眉行(末行误拒);键盘路径与 --no-infer 零改动;render_main 合并收口修 clippy 8 参/超行;pty 活体冒烟过;282 测试(+2);contract.md §5 增 TUI 交互语义 ?[0m
+[1m无车道[0m
+[32m✓ 04 agentstats 观测面(宿主使用率/gate 通过率/任务周转) · 62c1a13(2026-09-16):277 测试(+8);replay 底账纯加法;周转表不虚构时长;N==1 ⚠ 修复钉死;审查 Approved(M1 ③表不滤 host 经控制器追认:诚实>字面)[0m
+[32m✓ 05 契约文档化:schema/事件词表公开版本化 · 67f29bb(2026-09-16):docs/contract.md 348 行契约 v1.0 公开版;七项高风险主张逐条对账源码无一错;逮住 README 四→五钩子漏改并校准;审查 Approved(4 Minor 措辞级延后)[0m
+[32m✓ 06 无 who completed 配对启发 · 132dcd1(2026-09-16):269 测试(+10);FIFO 按位配对+▶⇢✓(inferred) 标注;--no-infer 与旧二进制字节等价;活体:警告 236→221、卡行配对归零在跑;审查 Approved(4 Minor 延后)[0m
+[32m✓ 07 pending 池会话归属 · 128a594(2026-09-16):256 测试(+5);Stop 折叠同池,真机嵌套双会话实证互不污染;verify-kits 130/0(顺手修 cygpath 根因);审查 Approved(3 Minor 延后)[0m
+[32m✓ 08 claude 宿主退出码证据 + README 证据分级句校准 · 1f048ca(2026-09-16):259 测试;红侧 error 串头解析(活体 exit:101)+绿侧 README 校准(铁律不臆造 0);09-14 passed=前 W4 乐观默认之谜解;kit 增第五事件五面一致;审查 Approved[0m

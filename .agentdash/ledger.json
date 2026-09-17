@@ -1,9 +1,9 @@
 {
   "$schema": "agentdash.tasklog.v1",
   "wave": "W12",
-  "title": "W12:观测可读性(unknown 第三态) + TUI 点击交互",
+  "title": "W12 已收口:观测可读性(unknown 第三态) + TUI 点击交互",
   "profile": "sdd",
-  "note": "W12 开工(2026-09-17,两项均为 09-17 提报的用户决策):09 面板 unknown 第三态 + 10 TUI 点击交互。约束:事件语义与 exit_code 解析零改动(09)/键盘路径与 --no-infer 不破坏(10);降级铁律全程适用。docs/contract.md 增补随任务走。",
+  "note": "W12 开工(2026-09-17,两项均为 09-17 提报的用户决策):09 面板 unknown 第三态 + 10 TUI 点击交互。约束:事件语义与 exit_code 解析零改动(09)/键盘路径与 --no-infer 不破坏(10);降级铁律全程适用。docs/contract.md 增补随任务走。 W12 已收口(2026-09-17,0.10.0):双任务 done,282 测试全绿,verify-kits 六 kit 130 断言 exit 0,活体帧三张入册(帧内可见 unknown 第三态与 stats 三列),报告 docs/superpowers/reports/2026-09-17-w12-closeout.md;tag v0.10.0。宿主余量结转:zcode 绿侧真证据待宿主语义、cursor 待 login、失败配对待重开复核。",
   "lanes": [
     {
       "name": "W12 进行中",

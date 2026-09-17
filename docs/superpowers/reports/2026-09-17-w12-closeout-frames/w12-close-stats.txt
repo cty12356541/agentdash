@@ -1,0 +1,17 @@
+宿主使用率(生效事件按 host 戳计数;无戳归 unknown)
+  claude   12
+  zcode    417
+  unknown  20
+gate 通过率(终态折叠计数;unknown = exit 不可知折叠)
+  gate          host     passed  failed  unknown
+  cargo-clippy  claude        3       0        0
+  cargo-clippy  zcode         0       0        3
+  cargo-clippy  unknown       5       0        0
+  cargo-fmt     zcode         0       0        1
+  cargo-test    claude        3       0        0
+  cargo-test    zcode         0       0       34
+  cargo-test    unknown       5       0        0
+任务周转: 契约无 started_at,仅列完成时刻(不虚构时长)
+  09 面板 unknown 第三态:无证据折叠与真失败视觉可分 · 2026-09-17T10:28:03+0800
+  10 TUI 点击交互优化(watch 常驻视图) · 2026-09-17T10:48:22+0800
+  N/A(无 done_at): 5
