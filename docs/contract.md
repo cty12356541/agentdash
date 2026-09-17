@@ -286,6 +286,10 @@ agentdash hook [--host <name>] <event> || true
 - 消费端可凭 `exit` 是否为数字区分「真失败」与「证据缺失」(stats 面 `failed`/`unknown`
   分桶);绿侧 `passed` 的可达性取决于宿主:需真码的宿主可让命令回显 `$?` 或采用
   字符串尾契约。
+- **渲染语义(W12-009)**:`state=failed` 且 `exit=null` 的折叠在各观测面渲染为
+  第三态 `? <gate> · <detail> (unknown)`(panel/digest 暗色,不占真失败红);
+  有码真失败保持 `✗`。事件语义与 `exit_code` 解析零改动,本条只约定渲染;
+  oneline 无门态面、stats 面保持既有 passed/failed/unknown 三列口径。
 - 注册面参考:claude-code 五事件(含 `PostToolUseFailure`)、cursor 五事件
   (`afterShellExecution`/`postToolUseFailure`/`subagentStart`/`subagentStop`/`stop`)、
   deepseek 五事件、codex 四事件、zcode 四事件(`PostToolUse`/`PostToolUseFailure`/

@@ -60,6 +60,7 @@ fn gate(name: &str, state: &str, detail: &str) -> GateView {
         name: name.into(),
         state: state.into(),
         detail: detail.into(),
+        unknown: false,
     }
 }
 
@@ -382,4 +383,19 @@ fn cli_digest_usage_errors_exit_two() {
         assert_eq!(out.status.code(), Some(2), "args={args:?} 应退 2");
         assert!(!out.stderr.is_empty(), "args={args:?} 应有错误说明");
     }
+}
+
+#[test]
+fn digest_unknown_failed_gate_carries_third_state() {
+    // W12-009:exit=null 折叠(zcode 绿侧路径)在 digest 同源渲染第三态
+    let mut d = quiet_dash();
+    let mut g = gate("cargo-fmt", "failed", "fmt clean");
+    g.unknown = true;
+    d.gates = vec![g];
+    let text = render_digest(&d);
+    assert!(
+        text.contains("? cargo-fmt · fmt clean (unknown)"),
+        "digest 同源第三态:\n{text}"
+    );
+    assert!(!text.contains("✗ cargo-fmt"), "无证据不得渲染真失败 ✗");
 }

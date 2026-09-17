@@ -276,16 +276,19 @@ fn gates_fill_health_section() {
             name: "build".into(),
             state: "running".into(),
             detail: String::new(),
+            unknown: false,
         },
         GateView {
             name: "lint".into(),
             state: "failed".into(),
             detail: String::new(),
+            unknown: false,
         },
         GateView {
             name: "test".into(),
             state: "passed".into(),
             detail: "3 passed".into(),
+            unknown: false,
         },
     ];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
@@ -313,6 +316,7 @@ fn gate_detail_truncates_with_ellipsis_within_width() {
         name: "test".into(),
         state: "failed".into(),
         detail: long.clone(),
+        unknown: false,
     }];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
     for line in plain.lines() {
@@ -1302,11 +1306,13 @@ fn brief_view_renders_four_elements_with_zero_residue() {
             name: "build".into(),
             state: "passed".into(),
             detail: String::new(),
+            unknown: false,
         },
         GateView {
             name: "test".into(),
             state: "failed".into(),
             detail: "2 failed".into(),
+            unknown: false,
         },
     ];
     dash.warnings = vec!["ledger: 未知字段".to_owned()];
@@ -1389,4 +1395,59 @@ fn oneline_excludes_inferred_agents_from_running_count() {
         "[dash] agentdash ✓4▶0·0 ⚑0 ·1ag",
         "·Nag 只算真在跑"
     );
+}
+
+// ------------------------------------------------------------ unknown 第三态(W12-009)
+
+#[test]
+fn failed_gate_without_exit_evidence_renders_unknown_third_state() {
+    // exit=null 折叠(zcode 绿侧路径):? + (unknown) 尾注,不冒 ✗ 真失败
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    dash.gates = vec![GateView {
+        name: "cargo-fmt".into(),
+        state: "failed".into(),
+        detail: "fmt clean".into(),
+        unknown: true,
+    }];
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("? cargo-fmt · fmt clean (unknown)"),
+        "unknown 第三态:? + detail + 尾注:\n{plain}"
+    );
+    assert!(!plain.contains("✗ cargo-fmt"), "无证据不得渲染真失败 ✗");
+}
+
+#[test]
+fn failed_gate_with_exit_evidence_keeps_real_failure_mark() {
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    dash.gates = vec![GateView {
+        name: "cargo-test".into(),
+        state: "failed".into(),
+        detail: "3 failed".into(),
+        unknown: false,
+    }];
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("✗ cargo-test · 3 failed"),
+        "有码真失败保持 ✗"
+    );
+    assert!(!plain.contains("(unknown)"), "有码不得挂 unknown 尾注");
+}
+
+#[test]
+fn unknown_gate_strips_legacy_tailnote_from_detail() {
+    // 旧折叠 detail 自带 `(exit unknown)` 尾注:第三态渲染剥掉,不双注
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    dash.gates = vec![GateView {
+        name: "cargo-fmt".into(),
+        state: "failed".into(),
+        detail: "fmt clean (exit unknown)".into(),
+        unknown: true,
+    }];
+    let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(
+        plain.contains("? cargo-fmt · fmt clean (unknown)"),
+        "尾注只出一次:\n{plain}"
+    );
+    assert!(!plain.contains("(exit unknown)"), "旧尾注不重复出现");
 }

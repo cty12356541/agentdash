@@ -392,25 +392,39 @@ fn agent_line(agent: &AgentView, width: usize) -> String {
     format!("{color}{}{C_END}", elide(&agent_body(agent), width))
 }
 
-/// 验证门行正文(纯文本):`<mark> <name>[ · <detail>]`,running ▶ /
-/// passed ✓ / failed ✗;着色版与 digest 纯文本版同源。
+/// 验证门行正文(纯文本):`<mark> <name>[ · <detail>][ (unknown)]`,running ▶ /
+/// passed ✓ / failed ✗;W12-009 起失败分两态——有退出码证据 ✗(红,真失败),
+/// 无证据 `?` + `(unknown)` 尾注(暗,承 W11-003 `(inferred)` 先例:标注是
+/// 显示真相);着色版与 digest 纯文本版同源。
 pub(super) fn gate_body(gate: &GateView) -> String {
-    let mark = match gate.state.as_str() {
-        "passed" => "✓",
-        "failed" => "✗",
-        _ => "▶", // running;未知态兜底按进行中呈现
+    let (mark, unknown) = match gate.state.as_str() {
+        "passed" => ("✓", false),
+        "failed" if gate.unknown => ("?", true),
+        "failed" => ("✗", false),
+        _ => ("▶", false), // running;未知态兜底按进行中呈现
     };
+    // 旧折叠把 `(exit unknown)` 写进 detail 尾(events 契约原文);第三态下
+    // 尾注由渲染统一表达,剥掉避免双注
+    let detail = gate
+        .detail
+        .strip_suffix(" (exit unknown)")
+        .unwrap_or(&gate.detail);
     let mut line = format!("{mark} {}", gate.name);
-    if !gate.detail.is_empty() {
-        let _ = write!(line, " · {}", gate.detail);
+    if !detail.is_empty() {
+        let _ = write!(line, " · {detail}");
+    }
+    if unknown {
+        line.push_str(" (unknown)");
     }
     line
 }
 
-/// 验证门行(着色):正文([`gate_body`])按宽截断后套门态前景色。
+/// 验证门行(着色):正文([`gate_body`])按宽截断后套门态前景色——
+/// unknown 第三态走暗色,不占红(真失败)也不冒绿(通过)。
 fn gate_line(gate: &GateView, width: usize) -> String {
     let color = match gate.state.as_str() {
         "passed" => C_DONE,
+        "failed" if gate.unknown => C_PENDING,
         "failed" => C_STALLED,
         _ => C_ACTIVE,
     };

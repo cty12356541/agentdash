@@ -43,6 +43,7 @@ fn gate_states_fold_last_write_wins() {
         "cargo-test".to_string(),
         GateState::Failed {
             detail: "3 failed".to_string(),
+            unknown: true,
         },
     );
     expect.insert("cargo-clippy".to_string(), GateState::Running);

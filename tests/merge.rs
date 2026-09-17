@@ -177,6 +177,7 @@ fn three_sources_merge_into_dashboard() {
             name: "test".to_owned(),
             state: "passed".to_owned(),
             detail: "3 passed".to_owned(),
+            unknown: false,
         }],
         "gate 视图按名排序、state 取事件词表"
     );
@@ -310,6 +311,7 @@ fn corrupt_ledger_warns_and_event_layer_still_merges() {
             name: "review".to_owned(),
             state: "passed".to_owned(),
             detail: "ok".to_owned(),
+            unknown: false,
         }],
         "事件层不受契约损坏影响,照常合并"
     );
@@ -371,6 +373,7 @@ fn agents_and_gates_project_into_dashboard_sorted() {
             name: "test".to_owned(),
             state: "passed".to_owned(),
             detail: "5 passed".to_owned(),
+            unknown: false,
         }],
         "gate 由重放终态映射,detail 原样携带"
     );
@@ -524,6 +527,7 @@ fn missing_ledger_warns_and_other_sources_still_merge() {
             name: "review".to_owned(),
             state: "passed".to_owned(),
             detail: "ok".to_owned(),
+            unknown: false,
         }],
         "事件层不受契约缺失影响,照常合并"
     );

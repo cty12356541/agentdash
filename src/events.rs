@@ -32,8 +32,15 @@ pub struct GateFoldTally {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateState {
     Running,
-    Passed { detail: String },
-    Failed { detail: String },
+    Passed {
+        detail: String,
+    },
+    /// `unknown`:折叠无退出码证据(W4-001 D1 的 exit=null 路径)——
+    /// 渲染层据此分第三态(W12-009),真失败与无证据视觉可辨。
+    Failed {
+        detail: String,
+        unknown: bool,
+    },
 }
 
 /// 仍活跃的子代理:`dispatched` 按 `who` 首见入表(同 who 再派刷新 task 注记,
@@ -200,6 +207,9 @@ fn apply_gate(model: &mut EventModel, raw: RawEvent, line_no: usize) {
             "failed",
             GateState::Failed {
                 detail: raw.detail.unwrap_or_default(),
+                // W12-009:折叠无退出码证据(exit=null,W4-001 D1 路径)→
+                // unknown 置位,渲染层分第三态
+                unknown: !matches!(raw.exit, Some(serde_json::Value::Number(_))),
             },
         ),
         _ => {

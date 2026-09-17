@@ -111,6 +111,9 @@ pub struct GateView {
     pub state: String,
     /// 终态 detail 原样携带(`running` 恒为空串)。
     pub detail: String,
+    /// W12-009:`failed` 且折叠无退出码证据(exit=null)为真——渲染第三态
+    /// `? (unknown)`,与有码真失败 ✗ 视觉可辨;passed/running 恒假。
+    pub unknown: bool,
 }
 
 /// 详情面板事件尾条目视图(W4-002;[`events::EventModel::tail`] 直投影:
@@ -357,15 +360,16 @@ fn event_views(model: events::EventModel) -> EventViews {
         .gates
         .into_iter()
         .map(|(name, state)| {
-            let (state, detail) = match state {
-                GateState::Running => ("running", String::new()),
-                GateState::Passed { detail } => ("passed", detail),
-                GateState::Failed { detail } => ("failed", detail),
+            let (state, detail, unknown) = match state {
+                GateState::Running => ("running", String::new(), false),
+                GateState::Passed { detail } => ("passed", detail, false),
+                GateState::Failed { detail, unknown } => ("failed", detail, unknown),
             };
             GateView {
                 name,
                 state: state.to_owned(),
                 detail,
+                unknown,
             }
         })
         .collect();

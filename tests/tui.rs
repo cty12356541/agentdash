@@ -554,11 +554,13 @@ fn detail_dash() -> Dashboard {
                 name: "pre-merge".into(),
                 state: "passed".into(),
                 detail: "test+clippy".into(),
+                unknown: false,
             },
             GateView {
                 name: "ship".into(),
                 state: "failed".into(),
                 detail: "1 red".into(),
+                unknown: false,
             },
         ],
         remote: None,
