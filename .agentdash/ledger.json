@@ -3,7 +3,7 @@
   "wave": "W11",
   "title": "W11 已收口:证据闭环 + 观测面 + 契约公开",
   "profile": "sdd",
-  "note": "W11 已收口(2026-09-16,0.9.0):五任务(07/08/06/04/05 依赖序)全 done,审查均 Approved;延后 Minor 共 16 条(W11-001×3 / 002×2 / 003×4 / 004×3 / 005×4,随触即清不单开)。主打:pending 池会话归属(嵌套双会话真机实证互不污染)、claude 宿主退出码实证入册 + 红侧 error 串头解析(绿侧 README 证据分级校准)、无 who completed 配对启发(--no-infer 可关)、agentstats 观测面(stats 三表)、契约 v1.0 公开版(docs/contract.md)。宿主余量结转:cursor 端到端仍待 cursor-agent login;zcode hook 串行阻塞兼容搁置(README caveat 在册);watch 常驻视图不支持 --no-infer。W12 候选已提报 1 项(09 unknown 第三态,2026-09-17 用户决策;提报制下其余待报)。",
+  "note": "W11 已收口(2026-09-16,0.9.0):五任务(07/08/06/04/05 依赖序)全 done,审查均 Approved;延后 Minor 共 16 条(W11-001×3 / 002×2 / 003×4 / 004×3 / 005×4,随触即清不单开)。主打:pending 池会话归属(嵌套双会话真机实证互不污染)、claude 宿主退出码实证入册 + 红侧 error 串头解析(绿侧 README 证据分级校准)、无 who completed 配对启发(--no-infer 可关)、agentstats 观测面(stats 三表)、契约 v1.0 公开版(docs/contract.md)。宿主余量结转:cursor 端到端仍待 cursor-agent login;zcode hook 串行阻塞兼容搁置(README caveat 在册);watch 常驻视图不支持 --no-infer。W12 候选已提报 2 项(09 unknown 第三态、10 TUI 点击交互,均 2026-09-17 用户决策;提报制下其余待报)。",
   "lanes": [
     {
       "name": "W11 已收口",
@@ -18,7 +18,8 @@
     {
       "name": "W12 候选",
       "tasks": [
-        "09"
+        "09",
+        "10"
       ]
     }
   ],
@@ -52,6 +53,11 @@
       "label": "面板 unknown 第三态:无证据折叠与真失败视觉可分",
       "state": "pending",
       "note": "提报(2026-09-17 用户决策):zcode 绿侧折叠 state=failed 且 exit=null,detail 实为成功输出,面板 ✗ 与真失败不可辨。渲染层区分第三态(如 ✗? / · unknown,承 W11-006 inferred 标注先例),panel/oneline/stats/digest 四观测面一致;事件语义与 exit_code 解析零改动,仅渲染;docs/contract.md 契约增补渲染语义。真解(zcode 绿侧真证据)仍待宿主官方语义,本项只解可读性"
+    },
+    "10": {
+      "label": "TUI 点击交互优化(watch 常驻视图)",
+      "state": "pending",
+      "note": "提报(2026-09-17 用户决策):watch 视图经 crossterm mouse capture 支持点击交互——候选方向:点击选中任务/门行、滚动、聚焦过滤输入框、行展开细节;ratatui mouse events 原生支持,零新依赖。约束:交互失败静默降级(降级铁律同源),键盘路径与 --no-infer 语义不破坏;具体交互清单启动时与维护者细化"
     }
   },
   "barriers": []
