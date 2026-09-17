@@ -23,36 +23,63 @@ const STALE_THRESHOLD_SECS: u64 = 2 * 60 * 60;
 /// 面板:页眉统计 → 健康 → 轨迹 → 车道任务区。宽度先经 40..120 钳位。
 #[must_use]
 pub fn render_panel(dash: &Dashboard, width: usize) -> String {
+    panel_lines(dash, width)
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 行级面板产物(W12-010 TUI 点击命中):每行 `(文本, 任务 id)`——任务行
+/// `Some(id)`,其余行(页眉/健康/轨迹/车道头/警告/屏障)`None`。与
+/// [`render_panel`] 同一构建路径,命中测试与渲染零漂移。
+#[must_use]
+pub fn render_panel_rows(dash: &Dashboard, width: usize) -> (String, Vec<Option<String>>) {
+    let lines = panel_lines(dash, width);
+    let rows = lines.iter().map(|(_, id)| id.clone()).collect();
+    let text = lines
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (text, rows)
+}
+
+/// 面板行构建(单一事实源):`(文本, 任务 id)` 对,id 见 [`render_panel_rows`]。
+fn panel_lines(dash: &Dashboard, width: usize) -> Vec<(String, Option<String>)> {
     let width = clamp_width(width);
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines: Vec<(String, Option<String>)> = Vec::new();
 
     // 页眉:项目 · 活跃里程碑(D3:project 读模型字段;整行过 elide 钳宽)
-    lines.push(elide(&head_line(dash), width));
+    plain(&mut lines, elide(&head_line(dash), width));
     // 页眉 agent 计数即在跑表行数;吞吐口径已入模型,见区块 B 速度线
     // (W3-006 起为事件活动窗真实吞吐,不再是里程碑计数近似)
     let tally = counts(&dash.tasks);
-    lines.push(stats_line(
-        &tally,
-        dash.running_agents(),
-        &clock_slice(&dash.generated_at),
-    ));
-    lines.push("═".repeat(width));
+    plain(
+        &mut lines,
+        stats_line(
+            &tally,
+            dash.running_agents(),
+            &clock_slice(&dash.generated_at),
+        ),
+    );
+    plain(&mut lines, "═".repeat(width));
 
     // 区块 A:在跑 / 健康(在跑 agents → 验证门终态;W11-003 起推断配对行
     // 随行带显式标注,计数与空态判定都只看未推断行)
-    lines.push(format!("{C_BOLD}在跑 / 健康{C_END}"));
+    plain(&mut lines, format!("{C_BOLD}在跑 / 健康{C_END}"));
     if dash.agents.is_empty() && dash.gates.is_empty() {
-        lines.push(format!("{C_DONE}✓ 无活跃/卡死{C_END}"));
+        plain(&mut lines, format!("{C_DONE}✓ 无活跃/卡死{C_END}"));
     } else {
         if dash.running_agents() == 0 {
-            lines.push(format!("{C_PENDING}· 无活跃{C_END}"));
+            plain(&mut lines, format!("{C_PENDING}· 无活跃{C_END}"));
         }
         for agent in &dash.agents {
-            lines.push(agent_line(agent, width));
+            plain(&mut lines, agent_line(agent, width));
         }
         // 模型层保证 gates 按门名字典序,此处按存储序直出
         for gate in &dash.gates {
-            lines.push(gate_line(gate, width));
+            plain(&mut lines, gate_line(gate, width));
         }
     }
     // 区块 A′:PR / 远程(W2-007;remote 缺省 = 探测降级,整块不打不虚占版面)
@@ -60,12 +87,15 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
         push_remote_block(&mut lines, remote, width);
     }
     for warning in &dash.warnings {
-        lines.push(format!(
-            "{C_WARN}⚠ {}{C_END}",
-            elide(warning, width.saturating_sub(2))
-        ));
+        plain(
+            &mut lines,
+            format!(
+                "{C_WARN}⚠ {}{C_END}",
+                elide(warning, width.saturating_sub(2))
+            ),
+        );
     }
-    lines.push("─".repeat(width));
+    plain(&mut lines, "─".repeat(width));
 
     // 区块 B:轨迹
     let done_ms = dash
@@ -73,12 +103,15 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
         .iter()
         .filter(|milestone| milestone_state(milestone) == "done")
         .count();
-    lines.push(format!("{C_BOLD}轨迹 · {done_ms} 里程碑{C_END}"));
+    plain(
+        &mut lines,
+        format!("{C_BOLD}轨迹 · {done_ms} 里程碑{C_END}"),
+    );
     for milestone in dash.milestones.iter().rev().take(5).rev() {
-        lines.push(milestone_line(milestone, width));
+        plain(&mut lines, milestone_line(milestone, width));
     }
     if let Some(speed) = speed_line(dash) {
-        lines.push(speed);
+        plain(&mut lines, speed);
     }
     let planned = dash
         .milestones
@@ -86,24 +119,24 @@ pub fn render_panel(dash: &Dashboard, width: usize) -> String {
         .find(|milestone| milestone_state(milestone) == "planned");
     let active_ms = active_milestone(dash);
     if let (Some(next), None) = (planned, active_ms) {
-        lines.push(format!("  下一步:待启动 {}", ms_id(next)));
+        plain(&mut lines, format!("  下一步:待启动 {}", ms_id(next)));
     } else if active_ms.is_some() {
-        lines.push("  进行中".to_owned());
+        plain(&mut lines, "  进行中".to_owned());
     } else {
-        lines.push("  —".to_owned()); // 全部完成/全新仓库:中性占位,不虚报"进行中"
+        plain(&mut lines, "  —".to_owned()); // 全部完成/全新仓库:中性占位,不虚报"进行中"
     }
-    lines.push("─".repeat(width));
+    plain(&mut lines, "─".repeat(width));
 
     // 区块 C:车道 / 任务
     if !dash.tasks.is_empty() {
-        lines.push(format!("{C_BOLD}车道 / 任务{C_END}"));
+        plain(&mut lines, format!("{C_BOLD}车道 / 任务{C_END}"));
         let lane_groups = lane_groups(&dash.tasks);
         push_lane_lines(&mut lines, &lane_groups, dash);
     }
     // 区块 C′:屏障行(W3-002;claude-dash `  {barrier}`)——车道区之后按
     // 台账声明序直出,语义与 graph 的 after→unlocks 边同向
     push_barrier_lines(&mut lines, &dash.barriers, width);
-    lines.join("\n")
+    lines
 }
 
 /// 精要视图(W10-001 多仓聚合):每仓一块——页眉(项目 · 活跃里程碑)→
@@ -236,33 +269,42 @@ fn stats_line(tally: &Counts, agents: usize, clock: &str) -> String {
 /// ([`BarrierEdges`] 只承载 after/unlocks),不虚标 `B<N>`。after/unlocks
 /// 按台账声明原样直出(graph 侧对未知 id 的过滤是布局约束,面板是声明
 /// 视图,照单全收)。超宽整行截断。
-fn push_barrier_lines(lines: &mut Vec<String>, barriers: &[BarrierEdges], width: usize) {
+fn push_barrier_lines(
+    lines: &mut Vec<(String, Option<String>)>,
+    barriers: &[BarrierEdges],
+    width: usize,
+) {
     for barrier in barriers {
         let body = format!(
             "  ⇕ {} → {}",
             barrier.after.join(","),
             barrier.unlocks.join(",")
         );
-        lines.push(format!("{C_PENDING}{}{C_END}", elide(&body, width)));
+        lines.push((format!("{C_PENDING}{}{C_END}", elide(&body, width)), None));
     }
 }
 
 /// PR / 远程区块(W2-007):`#<号> <标题>` + 逐 check 行;超宽整行截断。
 fn push_remote_block(
-    lines: &mut Vec<String>,
+    lines: &mut Vec<(String, Option<String>)>,
     remote: &crate::sources::remote::RemoteFacts,
     width: usize,
 ) {
-    lines.push(format!("{C_BOLD}PR / 远程{C_END}"));
+    plain(lines, format!("{C_BOLD}PR / 远程{C_END}"));
     if remote.pr_number == 0 {
-        lines.push(format!("{C_PENDING}· 无关联 PR{C_END}"));
+        plain(lines, format!("{C_PENDING}· 无关联 PR{C_END}"));
     } else {
         let head = format!("#{} {}", remote.pr_number, remote.pr_title);
-        lines.push(format!("{C_ACTIVE}{}{C_END}", elide(&head, width)));
+        plain(lines, format!("{C_ACTIVE}{}{C_END}", elide(&head, width)));
     }
     for (name, state) in &remote.checks {
-        lines.push(check_line(name, state, width));
+        plain(lines, check_line(name, state, width));
     }
+}
+
+/// 非任务行入列(健康/轨迹/警告等,id 恒 `None`)。
+fn plain(lines: &mut Vec<(String, Option<String>)>, text: String) {
+    lines.push((text, None));
 }
 
 /// 车道分组(首见序;无车道任务归"无车道"组)。
@@ -279,16 +321,24 @@ fn lane_groups(tasks: &[TaskView]) -> Vec<(String, Vec<&TaskView>)> {
 }
 
 /// 车道行输出:折叠车道(W2-005,视图层发空 id 伪任务)出
-/// `▸ 车道名 (N done)` 单行;其余车道头 + 逐任务行照旧。
-fn push_lane_lines(lines: &mut Vec<String>, groups: &[(String, Vec<&TaskView>)], dash: &Dashboard) {
+/// `▸ 车道名 (N done)` 单行;其余车道头 + 逐任务行照旧(任务行带 id,
+/// W12-010 点击命中用)。
+fn push_lane_lines(
+    lines: &mut Vec<(String, Option<String>)>,
+    groups: &[(String, Vec<&TaskView>)],
+    dash: &Dashboard,
+) {
     for (name, members) in groups {
         if members.len() == 1 && is_lane_marker(members[0]) {
-            lines.push(format!("{C_BOLD}▸ {name} {}{C_END}", members[0].label));
+            plain(
+                lines,
+                format!("{C_BOLD}▸ {name} {}{C_END}", members[0].label),
+            );
             continue;
         }
-        lines.push(format!("{C_BOLD}{name}{C_END}"));
+        plain(lines, format!("{C_BOLD}{name}{C_END}"));
         for task in members {
-            lines.push(task_line(task, dash));
+            lines.push((task_line(task, dash), Some(task.id.clone())));
         }
     }
 }

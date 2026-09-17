@@ -26,7 +26,7 @@ pub use oneline::render_oneline;
 // render_panel 测试目标消费,其余挂载目标不消费——平铺 re-export 会逐目标
 // 报未用 import,窄域放行(与上面 graph 面不平铺是同一消费面分化,反向取用)
 #[allow(unused_imports)]
-pub use panel::{DEFAULT_PANEL_WIDTH, render_brief, render_panel};
+pub use panel::{DEFAULT_PANEL_WIDTH, render_brief, render_panel, render_panel_rows};
 // render_digest / digest_needs_attention(W10-002):离场摘要 + --strict 判据。
 // 仅 bin(render digest 路由)与 digest 测试目标消费,其余挂载目标不消费——
 // 平铺 re-export 会逐目标报未用 import,窄域放行(承 render_brief 同理)

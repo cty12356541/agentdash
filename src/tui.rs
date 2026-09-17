@@ -295,6 +295,24 @@ pub fn handle_click(
     )
 }
 
+/// 滚移上限(W12-010 纯函数):`内容行数 - 视口高`,下取 0(内容不足一屏
+/// 时滚不动)。
+#[must_use]
+pub fn scroll_max(content_lines: usize, viewport: u16) -> u16 {
+    u16::try_from(content_lines.saturating_sub(usize::from(viewport))).unwrap_or(u16::MAX)
+}
+
+/// 滚轮一步(W12-010 纯函数):上滚向顶、下滚向底,钳在 `[0, scroll_max]`。
+#[must_use]
+pub fn scroll_step(current: u16, up: bool, content_lines: usize, viewport: u16) -> u16 {
+    let max = scroll_max(content_lines, viewport);
+    if up {
+        current.saturating_sub(1).min(max)
+    } else {
+        current.saturating_add(1).min(max)
+    }
+}
+
 /// 聚焦提示投递方式:`DASH_TMUX_TARGET` 存在且 tmux 可用 → send-keys;
 /// 否则写 `<repo>/.agentdash/prompt.txt`(W2-008 Windows 送对话通道)。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -732,6 +750,8 @@ pub fn help_lines() -> Vec<String> {
         "m      聚焦任务写备注(⏎ 提交 · Esc 取消)".to_owned(),
         "Esc    返回列表(详情态)".to_owned(),
         "↑/↓    切换选中波次(↑ 上一波,↓ 下一波)".to_owned(),
+        "滚轮   滚动面板/详情(W12-010;面板行点击即聚焦)".to_owned(),
+        "左键   点击任务行聚焦(图视图点击节点)".to_owned(),
         "?      本帮助(任意键关闭)".to_owned(),
         "q      退出(Ctrl-C 任意态)".to_owned(),
     ]
@@ -851,6 +871,15 @@ fn run_loop(terminal: &mut Tui, repo: &Path, interval_secs: u64) -> io::Result<(
             {
                 app.on_click(mouse);
             }
+            // W12-010:滚轮滚动(上/下),面板主区与详情右栏按列路由
+            Event::Mouse(mouse)
+                if matches!(
+                    mouse.kind,
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                ) =>
+            {
+                app.on_wheel(mouse.kind == MouseEventKind::ScrollUp, mouse.column);
+            }
             _ => {}
         }
         if app.quit {
@@ -911,6 +940,20 @@ struct Watch {
     view_height: u16,
     /// 页眉行高(0/1;draw 时更新,点击坐标换算用)。
     header_rows: u16,
+    /// 面板主区滚移(W12-010;行数,0 = 顶)。
+    scroll: u16,
+    /// 详情右栏滚移(W12-010;独立于主区)。
+    detail_scroll: u16,
+    /// 面板行 → 任务 id 映射(draw 每帧更新;None 行点击不命中)。
+    panel_rows: Vec<Option<String>>,
+    /// 主区内容行数(滚移钳位用;draw 每帧更新)。
+    content_lines: usize,
+    /// 主区宽(详情态 = 左栏宽;滚轮路由与点击列界用)。
+    main_width: u16,
+    /// 详情栏起点列 / 高度 / 内容行数(滚轮路由与钳位;draw 每帧更新)。
+    detail_x: u16,
+    detail_height: u16,
+    detail_lines: usize,
 }
 
 impl Watch {
@@ -929,7 +972,7 @@ impl Watch {
             mode: InputMode::Normal,
             input: String::new(),
             focused: None,
-            message: "就绪:g 换视图 f 聚焦 / 过滤 tab 折叠 ⏎ 详情 d/b/m 写回 ↑↓ 波次 ? 帮助 q 退出"
+            message: "就绪:g 换视图 f 聚焦 / 过滤 tab 折叠 ⏎ 详情 d/b/m 写回 ↑↓ 波次 滚轮滚动 点击聚焦 ? 帮助 q 退出"
                 .to_owned(),
             quit: false,
             clock: Instant::now(),
@@ -940,6 +983,14 @@ impl Watch {
             layers: Vec::new(),
             view_height: 0,
             header_rows: 0,
+            scroll: 0,
+            detail_scroll: 0,
+            panel_rows: Vec::new(),
+            content_lines: 0,
+            main_width: 0,
+            detail_x: 0,
+            detail_height: 0,
+            detail_lines: 0,
         }
     }
 
@@ -1062,6 +1113,8 @@ impl Watch {
                     View::Panel => View::Graph,
                     View::Graph => View::Panel,
                 };
+                // W12-010:换视图滚移归零(两视图滚移语义独立)
+                self.reset_scrolls();
                 self.message = match self.view {
                     View::Panel => "面板视图".to_owned(),
                     View::Graph => "图视图:点击节点可聚焦".to_owned(),
@@ -1134,7 +1187,14 @@ impl Watch {
     /// 关详情返回列表。
     fn close_detail(&mut self) {
         self.detail = false;
+        self.detail_scroll = 0;
         self.message = String::from("返回列表");
+    }
+
+    /// 滚移归零(W12-010):换视图等场景,两视图滚移语义独立。
+    fn reset_scrolls(&mut self) {
+        self.scroll = 0;
+        self.detail_scroll = 0;
     }
 
     /// 波次滚动(W2-004):`down` 为真走 ↓ 下一波,否则 ↑ 上一波;界内钳位,
@@ -1154,18 +1214,49 @@ impl Watch {
     /// SGR 左键:图视图命中节点即聚焦;面板视图无节点几何,忽略;折叠
     /// 标记行(空 id 哨兵)不可聚焦。
     fn on_click(&mut self, mouse: MouseEvent) {
-        if self.view != View::Graph || mouse.row >= self.view_height {
+        if self.view == View::Graph {
+            // 旧守卫 `mouse.row >= view_height` 漏算页眉行:末行点击被误拒
+            if mouse.row >= self.header_rows.saturating_add(self.view_height) {
+                return;
+            }
+            let Some(id) = handle_click(&self.layers, mouse.column, mouse.row, 0, self.header_rows)
+            else {
+                return;
+            };
+            if id.is_empty() {
+                return;
+            }
+            self.message = format!("点击命中 {id}");
+            self.focused = Some(id);
             return;
         }
-        let Some(id) = handle_click(&self.layers, mouse.column, mouse.row, 0, self.header_rows)
-        else {
+        // 面板视图(W12-010):行命中聚焦任务;详情态限主栏列
+        if mouse.row < self.header_rows || (self.detail && mouse.column >= self.main_width) {
+            return;
+        }
+        let row = usize::from(mouse.row - self.header_rows) + usize::from(self.scroll);
+        let Some(Some(id)) = self.panel_rows.get(row) else {
             return;
         };
-        if id.is_empty() {
+        self.focused = Some(id.clone());
+        self.message = format!("点击聚焦 {id}");
+    }
+
+    /// 滚轮(W12-010):详情态下按列路由——右栏滚详情,其余滚主区(面板
+    /// 有效;图视图无滚移,命中几何按未滚坐标)。步进与钳位见 [`scroll_step`]。
+    fn on_wheel(&mut self, up: bool, column: u16) {
+        if self.detail && column >= self.detail_x {
+            self.detail_scroll = scroll_step(
+                self.detail_scroll,
+                up,
+                self.detail_lines,
+                self.detail_height,
+            );
             return;
         }
-        self.message = format!("点击命中 {id}");
-        self.focused = Some(id);
+        if self.view == View::Panel {
+            self.scroll = scroll_step(self.scroll, up, self.content_lines, self.view_height);
+        }
     }
 
     /// 状态行(单行):键位帮助(含 ?)+ 视图/详情态 + 波次标注 + 聚焦 +
@@ -1243,10 +1334,14 @@ fn draw(frame: &mut Frame, app: &mut Watch) {
     if app.detail {
         let cols = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
             .split(rows[1]);
-        render_main(frame, cols[0], &view_dash, app.view, &app.filter);
+        app.main_width = cols[0].width;
+        render_main_scrolled(frame, cols[0], &view_dash, app);
+        app.detail_x = cols[1].x;
+        app.detail_height = cols[1].height;
         render_detail(frame, cols[1], app);
     } else {
-        render_main(frame, rows[1], &view_dash, app.view, &app.filter);
+        app.main_width = rows[1].width;
+        render_main_scrolled(frame, rows[1], &view_dash, app);
     }
     frame.render_widget(app.status_line(), rows[2]);
     if app.mode == InputMode::Help {
@@ -1259,40 +1354,48 @@ fn lines_of(spans: Vec<Span<'static>>) -> Line<'static> {
     Line::from(spans)
 }
 
-/// 主视图区:过滤空结果显式提示;窄态退化 oneline;否则面板/图。
-fn render_main(frame: &mut Frame, area: Rect, dash: &Dashboard, view: View, filter: &str) {
-    if !filter.is_empty() && dash.tasks.is_empty() {
+/// 主视图区(滚移版,W12-010):面板路径走行级产物,顺带回写
+/// 行 → 任务 id 映射与内容行数(命中测试与滚移钳位共用);图路径维持
+/// 旧径不滚(命中几何按未滚坐标)。滚移每帧钳到 `内容行数 - 视口高`。
+fn render_main_scrolled(frame: &mut Frame, area: Rect, view_dash: &Dashboard, app: &mut Watch) {
+    if !app.filter.is_empty() && view_dash.tasks.is_empty() {
         // W2-005 空结果显式提示:不白板、不出破图框架
-        frame.render_widget(Paragraph::new(filter_empty_notice(filter)), area);
+        frame.render_widget(Paragraph::new(filter_empty_notice(&app.filter)), area);
+        app.panel_rows.clear();
+        app.scroll = 0;
         return;
     }
     let width = usize::from(area.width).max(1);
-    let rendered = if width < render::MIN_WIDTH {
-        render::render_oneline(dash)
+    let (rendered, gate_rows) = if width < render::MIN_WIDTH {
+        (render::render_oneline(view_dash), Vec::new())
     } else {
-        match view {
-            View::Panel => render::render_panel(dash, width),
-            View::Graph => render::graph::render_graph(dash, width),
+        match app.view {
+            View::Panel => render::render_panel_rows(view_dash, width),
+            View::Graph => (render::graph::render_graph(view_dash, width), Vec::new()),
         }
     };
     let lines: Vec<_> = rendered
         .lines()
         .map(|line| Line::from(spans_from_ansi(line)))
         .collect();
-    frame.render_widget(Paragraph::new(lines), area);
+    app.panel_rows = gate_rows;
+    let scroll = app.scroll.min(scroll_max(lines.len(), area.height));
+    app.scroll = scroll;
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
 }
 
 /// 详情右栏(40%):聚焦任务的详情卡片;聚焦任务被模型刷新洗掉时框内给
 /// 提示行(不白板)。裁定(W4-002 D2):详情恒查全量模型(`app.dash.tasks`
 /// 原表),与主视图的波次/过滤/折叠折算解耦——聚焦是用户显式动作,不随
 /// 视图折算丢失。
-fn render_detail(frame: &mut Frame, area: Rect, app: &Watch) {
+fn render_detail(frame: &mut Frame, area: Rect, app: &mut Watch) {
     let Some(task) = app
         .focused
         .as_deref()
         .and_then(|id| app.dash.tasks.iter().find(|task| task.id == id))
     else {
         let block = Block::default().borders(Borders::ALL).title("详情");
+        app.detail_lines = 1;
         frame.render_widget(Paragraph::new("聚焦任务不在当前模型").block(block), area);
         return;
     };
@@ -1304,7 +1407,9 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &Watch) {
         .into_iter()
         .map(|line| Line::from(spans_from_ansi(&line)))
         .collect();
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    app.detail_lines = lines.len();
+    let scroll = app.detail_scroll.min(scroll_max(lines.len(), area.height));
+    frame.render_widget(Paragraph::new(lines).block(block).scroll((scroll, 0)), area);
 }
 
 /// 帮助覆盖层(W2-004):居中键位卡片;关闭由 [`Watch::on_key`] 的模态吞键。

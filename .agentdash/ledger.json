@@ -47,8 +47,9 @@
     },
     "10": {
       "label": "TUI 点击交互优化(watch 常驻视图)",
-      "state": "active",
-      "note": "提报(2026-09-17 用户决策):watch 视图经 crossterm mouse capture 支持点击交互——候选方向:点击选中任务/门行、滚动、聚焦过滤输入框、行展开细节;ratatui mouse events 原生支持,零新依赖。约束:交互失败静默降级(降级铁律同源),键盘路径与 --no-infer 语义不破坏;具体交互清单启动时与维护者细化"
+      "state": "done",
+      "note": "W12-010:watch 面板视图左键点击任务行聚焦(行映射 render_panel_rows 与渲染同源零漂移)、滚轮滚动主区/详情右栏(按列路由,scroll_step/scroll_max 纯函数钳位)、换视图/关详情滚移归零;顺手修图视图点击旧守卫漏算页眉行(末行误拒);键盘路径与 --no-infer 零改动;render_main 合并收口修 clippy 8 参/超行;pty 活体冒烟过;282 测试(+2);contract.md §5 增 TUI 交互语义",
+      "done_at": "2026-09-17T10:48:22+0800"
     }
   },
   "barriers": []

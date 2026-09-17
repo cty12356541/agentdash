@@ -1451,3 +1451,41 @@ fn unknown_gate_strips_legacy_tailnote_from_detail() {
     );
     assert!(!plain.contains("(exit unknown)"), "旧尾注不重复出现");
 }
+
+#[test]
+fn panel_rows_map_task_lines_to_ids() {
+    // W12-010:行级产物——任务行 Some(id),页眉/健康/车道头等 None;
+    // render_panel 与 render_panel_rows 同源,文本逐行一致
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A"), task("T2", "收口", "A")]);
+    dash.gates = vec![GateView {
+        name: "cargo-test".into(),
+        state: "passed".into(),
+        detail: "3 passed".into(),
+        unknown: false,
+    }];
+    let (text, rows) = render::render_panel_rows(&dash, DEFAULT_PANEL_WIDTH);
+    assert_eq!(
+        text,
+        render::render_panel(&dash, DEFAULT_PANEL_WIDTH),
+        "行级产物与纯文本面板同源"
+    );
+    let task_rows: Vec<Option<&String>> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| id.is_some())
+        .map(|(_, id)| Some(id.as_ref().expect("已过滤")))
+        .collect();
+    let ids: Vec<&str> = task_rows
+        .iter()
+        .map(|id| id.as_ref().expect("已过滤").as_str())
+        .collect();
+    assert_eq!(ids, ["T1", "T2"], "恰两行携带任务 id,序同车道内声明序");
+    assert!(
+        rows.iter().take(3).all(std::option::Option::is_none),
+        "页眉/统计/分隔行不携带 id"
+    );
+    assert!(
+        rows.iter().any(|id| id.is_none()),
+        "非任务行存在(None 占位)"
+    );
+}

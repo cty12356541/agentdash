@@ -1145,3 +1145,15 @@ fn detail_attestation_lines_cover_all_states() {
         lines[6]
     );
 }
+
+#[test]
+fn scroll_step_clamps_to_content_and_zero() {
+    // W12-010:上滚到顶即停,下滚到 `内容 - 视口` 即停
+    assert_eq!(tui::scroll_step(0, true, 100, 10), 0, "顶不减");
+    assert_eq!(tui::scroll_step(3, true, 100, 10), 2, "上滚向顶");
+    assert_eq!(tui::scroll_step(3, false, 100, 10), 4, "下滚向底");
+    assert_eq!(tui::scroll_step(90, false, 100, 10), 90, "底即钳住");
+    assert_eq!(tui::scroll_step(90, false, 5, 10), 0, "内容不足一屏滚不动");
+    assert_eq!(tui::scroll_max(100, 10), 90, "上限 = 内容 - 视口");
+    assert_eq!(tui::scroll_max(5, 10), 0, "内容短于视口上限 0");
+}

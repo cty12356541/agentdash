@@ -290,6 +290,10 @@ agentdash hook [--host <name>] <event> || true
   第三态 `? <gate> · <detail> (unknown)`(panel/digest 暗色,不占真失败红);
   有码真失败保持 `✗`。事件语义与 `exit_code` 解析零改动,本条只约定渲染;
   oneline 无门态面、stats 面保持既有 passed/failed/unknown 三列口径。
+- **watch TUI 交互语义(W12-010)**:滚轮滚动面板主区与详情右栏(按列路由),
+  面板视图左键点击任务行即聚焦(与键盘 `f` 聚焦同语义),图视图点击节点
+  沿旧径;换视图/关详情滚移归零。交互失败静默降级(§0),键盘路径与
+  `--no-infer` 语义不变;`render_panel_rows` 行映射与渲染同源零漂移。
 - 注册面参考:claude-code 五事件(含 `PostToolUseFailure`)、cursor 五事件
   (`afterShellExecution`/`postToolUseFailure`/`subagentStart`/`subagentStop`/`stop`)、
   deepseek 五事件、codex 四事件、zcode 四事件(`PostToolUse`/`PostToolUseFailure`/
