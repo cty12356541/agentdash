@@ -110,9 +110,13 @@ pub fn run(rest: &[String]) -> ExitCode {
 }
 
 /// 宿主归属戳(W7-001):host 显式传入时写入事件,未传字段省略(向后兼容)。
-fn stamp(mut event: Value, host: Option<&str>) -> Value {
+/// session_id 自报时写入事件行(ADE 归因);缺席不落字段,与遗留行逐字节同形。
+fn stamp(mut event: Value, host: Option<&str>, session: Option<&str>) -> Value {
     if let Some(h) = host {
         event["host"] = Value::String(h.to_owned());
+    }
+    if let Some(s) = session {
+        event["session_id"] = Value::String(s.to_owned());
     }
     event
 }
@@ -203,7 +207,7 @@ fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
                 })
         })
         .unwrap_or_default();
-    append_tool_event(&dir, &tool, response, summary, host);
+    append_tool_event(&dir, &tool, response, summary, host, session);
 }
 
 /// Cursor `afterShellExecution` 载荷识别(W9):CLI 事件名归一为 posttooluse 后,
@@ -249,6 +253,7 @@ fn bash_receipt(
                         "state": "running"
                     }),
                     host,
+                    session,
                 ),
             );
             append_pending_slot(
@@ -263,7 +268,7 @@ fn bash_receipt(
         });
         return;
     }
-    append_tool_event(dir, "bash", response, command, host);
+    append_tool_event(dir, "bash", response, command, host, session);
 }
 
 /// PostToolUseFailure(zcode/cursor 宿主,W9-003):工具失败事件与在途 gate
@@ -320,6 +325,7 @@ fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
                     "state": "running"
                 }),
                 host,
+                session,
             ),
         );
         append_pending_slot(
@@ -420,7 +426,8 @@ fn on_pre_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
         event["task"] = json!(clip(task));
     }
     let dir = events_dir(payload);
-    with_lock(&dir, || append_line(&dir, &stamp(event, host)));
+    let session = session_id_of(payload);
+    with_lock(&dir, || append_line(&dir, &stamp(event, host, session)));
 }
 
 /// `tool` 事件:phase=end + exit + 一行摘要(截 80)。
@@ -430,6 +437,7 @@ fn append_tool_event(
     response: Option<&Value>,
     summary: &str,
     host: Option<&str>,
+    session: Option<&str>,
 ) {
     with_lock(dir, || {
         append_line(
@@ -444,6 +452,7 @@ fn append_tool_event(
                     "summary": clip(summary),
                 }),
                 host,
+                session,
             ),
         );
     });
@@ -510,6 +519,7 @@ fn on_stop(payload: &Map<String, Value>, host: Option<&str>) {
                         "detail": detail,
                     }),
                     host,
+                    session,
                 ),
             );
         }
@@ -528,13 +538,16 @@ fn on_subagent_stop(payload: &Map<String, Value>, host: Option<&str>) {
                 .filter(|w| !w.is_empty())
         });
     let dir = events_dir(payload);
+    let session = session_id_of(payload);
     let mut event = json!({ "ts": ts_now(), "kind": "agent", "event": "completed" });
     if let Some(who) = who {
         event["who"] = json!(clip(who));
     }
     // 注:events.rs 重放以 `who` 为 agent 事件主键,`task` 只是可选注记;
     // 宿主 SubagentStop 载荷天然无 task,本行只发 who 即满足重放契约。
-    with_lock(&dir, || append_line(&dir, &stamp(event, host)));
+    with_lock(&dir, || append_line(&dir, &stamp(event, host, session)));
+    // ADE: 子智能体会话结束也折叠该 session 的 pending 槽(复用 Stop 逻辑)。
+    on_stop(payload, host);
 }
 
 /// SubagentStart(codex 等原生事件,W7-001):`agent` dispatched 行。who 取
@@ -557,7 +570,8 @@ fn on_agent_dispatched(payload: &Map<String, Value>, host: Option<&str>) {
         "who": clip(who),
     });
     let dir = events_dir(payload);
-    with_lock(&dir, || append_line(&dir, &stamp(event, host)));
+    let session = session_id_of(payload);
+    with_lock(&dir, || append_line(&dir, &stamp(event, host, session)));
 }
 
 /// 临界区包装:拿到 `.lock`(`create_new` 自旋,陈锁自愈,超时退化)后执行 `f`,
@@ -922,6 +936,14 @@ fn exit_code(response: Option<&Value>) -> Option<i64> {
     for key in ["status", "exit_code", "exit"] {
         if let Some(code) = obj.get(key).and_then(Value::as_i64) {
             return Some(code);
+        }
+    }
+    // opencode bash: StructuredOutput.exit lives under metadata (vendor bash.ts)
+    if let Some(meta) = obj.get("metadata").and_then(Value::as_object) {
+        for key in ["exit", "exit_code", "exitCode", "status"] {
+            if let Some(code) = meta.get(key).and_then(Value::as_i64) {
+                return Some(code);
+            }
         }
     }
     (obj.get("is_error").and_then(Value::as_bool) == Some(true)).then_some(1)

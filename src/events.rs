@@ -129,6 +129,9 @@ struct RawEvent {
     /// W11-004 stats:门折叠行的退出码证据(hook 落盘为数字或 `null`;
     /// running 行无此字段)。`null`/缺失 = exit 不可知。
     exit: Option<serde_json::Value>,
+    /// ADE 归因:载荷自报时落盘;缺席兼容旧行。
+    #[allow(dead_code)]
+    session_id: Option<String>,
 }
 
 /// 重放事件流:按到达序逐行折叠出模型(缺省开启无 who completed 配对

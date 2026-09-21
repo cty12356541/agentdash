@@ -1,7 +1,7 @@
-// agentdash · opencode 插件(W7-004)
-// tool.execute.after → agentdash hook posttooluse;session.idle → stop。
+// agentdash · opencode 插件(W7-004 + ADE attribution)
+// tool.execute.after → agentdash hook posttooluse;session.status(idle) → stop。
 // 与 claude-code/codex 两 kit 写同一份 <repo>/.agentdash/(台账一致性),
-// 事件带 --host opencode 归属(多宿主混用可归因)。
+// 事件带 --host opencode 归属(多宿主混用可归因)。sessionID 写入载荷 session_id。
 //
 // 降级铁律:本插件任何失败(agentdash 缺失 / spawn 失败 / 写流失败)一律
 // 静默吞掉,绝不阻塞宿主工具执行。
@@ -27,18 +27,20 @@ export const Agentdash = async ({ directory }) => {
   }
 
   return {
-    // 工具执行后:opencode 的 input.tool 为小写名("bash"/"read"/…),
-    // agentdash 的 gate 匹配对大小写容忍,无需归一
     "tool.execute.after": async (input, output) => {
       feed("posttooluse", {
+        session_id: input.sessionID,
         tool_name: input.tool,
         tool_input: output.args ?? {},
         tool_response: output.result ?? {},
       })
     },
-    // turn 结束(session.idle):折叠在途 gate(与宿主 Stop 事件同语义)
-    "session.idle": async () => {
-      feed("stop", {})
+    // session.idle 已废弃;idle/busy/retry 走 session.status,仅 idle 折叠门禁。
+    "session.status": async (input) => {
+      const typ = input?.status?.type || input?.status
+      if (typ === "idle") {
+        feed("stop", { session_id: input.sessionID })
+      }
     },
   }
 }
