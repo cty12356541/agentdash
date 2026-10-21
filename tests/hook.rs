@@ -2373,9 +2373,15 @@ fn session_id_persists_on_tool_gate_and_agent_lines() {
         "stop fold",
     );
     let evs = read_events(t.path());
-    assert!(evs.iter().any(|e| e["kind"] == "gate" && e["state"] == "running"));
+    assert!(
+        evs.iter()
+            .any(|e| e["kind"] == "gate" && e["state"] == "running")
+    );
     assert!(evs.iter().any(|e| e["kind"] == "tool"));
-    assert!(evs.iter().any(|e| e["kind"] == "gate" && e["state"] != "running"));
+    assert!(
+        evs.iter()
+            .any(|e| e["kind"] == "gate" && e["state"] != "running")
+    );
     for ev in &evs {
         assert_eq!(
             ev["session_id"], "s-w1-008",
@@ -2476,4 +2482,3 @@ fn opencode_kit_uses_session_status_not_idle() {
         "deprecated session.idle must not remain as a hook key"
     );
 }
-

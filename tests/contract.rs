@@ -90,14 +90,14 @@ fn minimal_core_with_empty_tasks_is_legal() {
     assert_eq!(ledger.wave, None);
     assert_eq!(ledger.profile, None);
     assert!(ledger.tasks.is_empty());
-    assert!(ledger.lanes.is_empty());
-    assert!(ledger.barriers.is_empty());
-    assert!(ledger.warnings.is_empty());
+    assert_eq!(ledger.lanes, [] as [contract::Lane; 0]);
+    assert_eq!(ledger.barriers, [] as [contract::Barrier; 0]);
+    assert_eq!(ledger.warnings, [] as [std::string::String; 0]);
 
     let explicit = parse_ledger(r#"{"$schema": "agentdash.tasklog.v1", "title": "x"}"#)
         .expect("known $schema must parse");
     assert!(explicit.tasks.is_empty());
-    assert!(explicit.warnings.is_empty());
+    assert_eq!(explicit.warnings, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn rich_states_with_declared_profile_stay_rich() {
     let ledger = parse_ledger(text).expect("declared rich states are legal");
     assert_eq!(ledger.tasks["1"].state, TaskState::Review);
     assert_eq!(ledger.tasks["2"].state, TaskState::FixRound);
-    assert!(ledger.warnings.is_empty());
+    assert_eq!(ledger.warnings, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn milestones_field_parses_and_defaults_to_empty() {
         "任务引用沿用 lanes 先例:整数统一收字符串"
     );
     assert_eq!(ledger.milestones[1].id, "M2", "tasks 缺省为空组,不要求非空");
-    assert!(ledger.milestones[1].tasks.is_empty());
+    assert_eq!(ledger.milestones[1].tasks, [] as [std::string::String; 0]);
     assert!(
         ledger.warnings.is_empty(),
         "合法 milestones 不得告警: {:?}",
@@ -203,7 +203,7 @@ fn milestones_field_parses_and_defaults_to_empty() {
         bare.milestones.is_empty(),
         "缺省 = 空表(模型层据此走 v1 合成)"
     );
-    assert!(bare.warnings.is_empty());
+    assert_eq!(bare.warnings, [] as [std::string::String; 0]);
 }
 
 /// W3-004 降级铁律(契约侧):`milestones` 结构损坏(非数组 / 缺必填 /
@@ -322,7 +322,7 @@ fn schema_file_agrees_with_parser() {
         );
         let ledger = parse_ledger(&doc).expect("every schema state must parse");
         assert_eq!(ledger.tasks["1"].state.as_str(), state.as_str());
-        assert!(ledger.warnings.is_empty());
+        assert_eq!(ledger.warnings, [] as [std::string::String; 0]);
     }
 
     // W3-004:schema 与解析器同步携带可选 `milestones`(id/title 必填,tasks

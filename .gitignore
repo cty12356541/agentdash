@@ -5,3 +5,4 @@ __pycache__/
 /.agentdash/*
 !/.agentdash/ledger.json
 !/.agentdash/config.json
+.dash/

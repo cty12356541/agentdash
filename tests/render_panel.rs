@@ -1485,7 +1485,7 @@ fn panel_rows_map_task_lines_to_ids() {
         "页眉/统计/分隔行不携带 id"
     );
     assert!(
-        rows.iter().any(|id| id.is_none()),
+        rows.iter().any(std::option::Option::is_none),
         "非任务行存在(None 占位)"
     );
 }

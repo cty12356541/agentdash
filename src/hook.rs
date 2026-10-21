@@ -110,7 +110,7 @@ pub fn run(rest: &[String]) -> ExitCode {
 }
 
 /// 宿主归属戳(W7-001):host 显式传入时写入事件,未传字段省略(向后兼容)。
-/// session_id 自报时写入事件行(ADE 归因);缺席不落字段,与遗留行逐字节同形。
+/// `session_id` 自报时写入事件行(ADE 归因);缺席不落字段,与遗留行逐字节同形。
 fn stamp(mut event: Value, host: Option<&str>, session: Option<&str>) -> Value {
     if let Some(h) = host {
         event["host"] = Value::String(h.to_owned());

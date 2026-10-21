@@ -199,7 +199,7 @@ fn three_sources_merge_into_dashboard() {
     // (`±HH:MM` 收尾,发现 9;W2 时代的 UTC `Z` 断言随本批退役)
     assert!(dash.git.present);
     assert_eq!(dash.git.recent.len(), 2);
-    assert!(!dash.generated_at.is_empty());
+    assert_ne!(dash.generated_at, "");
     let tz = dash.generated_at.as_bytes();
     assert!(
         dash.generated_at.len() == 25 && (tz[19] == b'+' || tz[19] == b'-') && tz[22] == b':',
@@ -245,8 +245,8 @@ fn git_only_repo_builds_pseudo_task_chain() {
         "git 在场而契约缺失必须出警告行(AD-ERR-001): {:?}",
         dash.warnings
     );
-    assert!(dash.gates.is_empty());
-    assert!(dash.agents.is_empty());
+    assert_eq!(dash.gates, [] as [model::GateView; 0]);
+    assert_eq!(dash.agents, [] as [model::AgentView; 0]);
     assert!(dash.git.present);
     cleanup(&repo);
 }
@@ -260,9 +260,9 @@ fn nothing_at_all_yields_guidance() {
     let dash = model::merge(&dir);
 
     assert_eq!(dash.tasks, Vec::<TaskView>::new());
-    assert!(dash.milestones.is_empty());
-    assert!(dash.gates.is_empty());
-    assert!(dash.agents.is_empty());
+    assert_eq!(dash.milestones, [] as [model::MilestoneView; 0]);
+    assert_eq!(dash.gates, [] as [model::GateView; 0]);
+    assert_eq!(dash.agents, [] as [model::AgentView; 0]);
     assert_eq!(dash.git, GitFacts::absent());
     assert!(
         dash.warnings
@@ -279,7 +279,7 @@ fn nothing_at_all_yields_guidance() {
         "三源全无只出空态引导,不叠加契约缺失警告: {:?}",
         dash.warnings
     );
-    assert!(!dash.generated_at.is_empty());
+    assert_ne!(dash.generated_at, "");
     cleanup(&dir);
 }
 
@@ -323,7 +323,7 @@ fn corrupt_ledger_warns_and_event_layer_still_merges() {
             .all(|t| t.since.is_none() && t.fix_round.is_none()),
         "兜底伪任务不带 since/fix_round"
     );
-    assert!(dash.milestones.is_empty());
+    assert_eq!(dash.milestones, [] as [model::MilestoneView; 0]);
     assert!(
         !dash.warnings.iter().any(|w| w.contains("no data sources")),
         "git 在场时不得出现全无引导: {:?}",
