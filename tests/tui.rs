@@ -759,7 +759,7 @@ fn select_wave_filters_tasks_and_clamps() {
     let bare = empty_dash();
     let (idx, visible) = tui::select_wave(&bare, 7);
     assert_eq!(idx, 0, "无里程碑索引归零");
-    assert!(visible.is_empty());
+    assert_eq!(visible, [] as [&model::TaskView; 0]);
 }
 
 #[test]

@@ -2344,3 +2344,141 @@ fn empty_gates_array_is_valid_means_builtins_only() {
     );
     assert_eq!(evs[1]["gate"], "cargo-test");
 }
+
+// ---------------------------------------------------------------- ADE attribution (feat/ade-attribution)
+
+#[test]
+fn session_id_persists_on_tool_gate_and_agent_lines() {
+    let t = TempDir::new("ade-sid");
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "gate running",
+    );
+    let edit = json!({
+        "session_id": "s-w1-008",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "a.rs"},
+        "tool_response": {}
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&edit, t.path()), t.path()),
+        "tool",
+    );
+    assert_silent_success(
+        &feed_payload("stop", &in_cwd(&stop_payload(), t.path()), t.path()),
+        "stop fold",
+    );
+    let evs = read_events(t.path());
+    assert!(
+        evs.iter()
+            .any(|e| e["kind"] == "gate" && e["state"] == "running")
+    );
+    assert!(evs.iter().any(|e| e["kind"] == "tool"));
+    assert!(
+        evs.iter()
+            .any(|e| e["kind"] == "gate" && e["state"] != "running")
+    );
+    for ev in &evs {
+        assert_eq!(
+            ev["session_id"], "s-w1-008",
+            "session_id must persist on kind={}",
+            ev["kind"]
+        );
+    }
+}
+
+#[test]
+fn missing_session_id_stays_legacy_shape() {
+    let t = TempDir::new("ade-nosid");
+    let payload = json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo hi"},
+        "tool_response": {"stdout": "hi"}
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+        "legacy tool",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["kind"], "tool");
+    assert!(
+        evs[0].get("session_id").is_none(),
+        "legacy payload must not grow a session_id field"
+    );
+}
+
+#[test]
+fn subagentstop_folds_pending_for_that_session() {
+    let t = TempDir::new("ade-subfold");
+    assert_silent_success(
+        &feed_payload(
+            "posttooluse",
+            &in_cwd(&cargo_test_post(), t.path()),
+            t.path(),
+        ),
+        "open gate",
+    );
+    let pending = fs::read_to_string(pending_path(t.path())).expect("pending exists");
+    assert!(pending.contains("s-w1-008"), "slot keyed by session");
+    let stop = json!({
+        "session_id": "s-w1-008",
+        "hook_event_name": "SubagentStop",
+        "agent_name": "worker"
+    });
+    assert_silent_success(
+        &feed_payload("subagentstop", &in_cwd(&stop, t.path()), t.path()),
+        "subagentstop should fold",
+    );
+    assert!(
+        !pending_path(t.path()).exists()
+            || fs::read_to_string(pending_path(t.path())).unwrap_or_default() == "[]",
+        "session slot must be folded away"
+    );
+    let evs = read_events(t.path());
+    assert!(
+        evs.iter()
+            .any(|e| e["kind"] == "gate" && e["state"] != "running"),
+        "folded gate terminal line"
+    );
+}
+
+#[test]
+fn opencode_metadata_exit_code() {
+    let t = TempDir::new("ade-meta-exit");
+    let payload = json!({
+        "session_id": "s-oc",
+        "tool_name": "bash",
+        "tool_input": {"command": "false"},
+        "tool_response": {
+            "output": "boom",
+            "metadata": {"exit": 2, "truncated": false}
+        }
+    });
+    assert_silent_success(
+        &feed_payload("posttooluse", &in_cwd(&payload, t.path()), t.path()),
+        "metadata exit",
+    );
+    let evs = read_events(t.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["kind"], "tool");
+    assert_eq!(evs[0]["exit"], 2);
+}
+
+#[test]
+fn opencode_kit_uses_session_status_not_idle() {
+    let src = fs::read_to_string(Path::new(MANIFEST).join("kits/opencode/plugins/agentdash.js"))
+        .expect("kit plugin");
+    assert!(
+        src.contains("\"session.status\""),
+        "kit must hook session.status"
+    );
+    assert!(
+        !src.contains("\"session.idle\""),
+        "deprecated session.idle must not remain as a hook key"
+    );
+}

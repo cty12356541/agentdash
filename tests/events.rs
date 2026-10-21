@@ -54,7 +54,7 @@ fn gate_states_fold_last_write_wins() {
         },
     );
     assert_eq!(model.gates, expect);
-    assert!(model.warnings.is_empty());
+    assert_eq!(model.warnings, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn agent_dispatch_completed_pairing() {
             },
         ]
     );
-    assert!(model.warnings.is_empty());
+    assert_eq!(model.warnings, [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn hook_agent_line_with_only_who_lands_in_active_table() {
             inferred: false,
         }]
     );
-    assert!(model.warnings.is_empty());
+    assert_eq!(model.warnings, [] as [std::string::String; 0]);
 }
 
 #[test]
