@@ -1,0 +1,12 @@
+{
+  "name": "agentdash",
+  "displayName": "AgentDash Orchestrator",
+  "version": "0.11.0",
+  "description": "Contract-driven multi-lane DAG task ledger, verification gate tracker, and terminal dashboard for Antigravity workspaces and subagents.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Render the AgentDash task panel, DAG graph, and gate status for this workspace",
+    "Set up AgentDash hooks, custom verification gates, and a wave ledger for this repository",
+    "Orchestrate the active wave in .agentdash/ledger.json across isolated subagent worktrees"
+  ]
+}
