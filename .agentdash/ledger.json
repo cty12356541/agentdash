@@ -1,56 +1,222 @@
 {
-  "$schema": "agentdash.tasklog.v1",
-  "wave": "W12",
-  "title": "W12 已收口:观测可读性(unknown 第三态) + TUI 点击交互",
-  "profile": "sdd",
-  "note": "W12 开工(2026-09-17,两项均为 09-17 提报的用户决策):09 面板 unknown 第三态 + 10 TUI 点击交互。约束:事件语义与 exit_code 解析零改动(09)/键盘路径与 --no-infer 不破坏(10);降级铁律全程适用。docs/contract.md 增补随任务走。 W12 已收口(2026-09-17,0.10.0):双任务 done,282 测试全绿,verify-kits 六 kit 130 断言 exit 0,活体帧三张入册(帧内可见 unknown 第三态与 stats 三列),报告 docs/superpowers/reports/2026-09-17-w12-closeout.md;tag v0.10.0。宿主余量结转:zcode 绿侧真证据待宿主语义、cursor 待 login、失败配对待重开复核。",
-  "lanes": [
-    {
-      "name": "W12 进行中",
-      "tasks": [
-        "09",
-        "10"
-      ]
-    }
-  ],
-  "tasks": {
-    "04": {
-      "label": "agentstats 观测面(宿主使用率/gate 通过率/任务周转)",
-      "state": "done",
-      "note": "62c1a13(2026-09-16):277 测试(+8);replay 底账纯加法;周转表不虚构时长;N==1 ⚠ 修复钉死;审查 Approved(M1 ③表不滤 host 经控制器追认:诚实>字面)"
-    },
-    "05": {
-      "label": "契约文档化:schema/事件词表公开版本化",
-      "state": "done",
-      "note": "67f29bb(2026-09-16):docs/contract.md 348 行契约 v1.0 公开版;七项高风险主张逐条对账源码无一错;逮住 README 四→五钩子漏改并校准;审查 Approved(4 Minor 措辞级延后)"
-    },
-    "06": {
-      "label": "无 who completed 配对启发",
-      "state": "done",
-      "note": "132dcd1(2026-09-16):269 测试(+10);FIFO 按位配对+▶⇢✓(inferred) 标注;--no-infer 与旧二进制字节等价;活体:警告 236→221、卡行配对归零在跑;审查 Approved(4 Minor 延后)"
-    },
-    "07": {
-      "label": "pending 池会话归属",
-      "state": "done",
-      "note": "128a594(2026-09-16):256 测试(+5);Stop 折叠同池,真机嵌套双会话实证互不污染;verify-kits 130/0(顺手修 cygpath 根因);审查 Approved(3 Minor 延后)"
-    },
-    "08": {
-      "label": "claude 宿主退出码证据 + README 证据分级句校准",
-      "state": "done",
-      "note": "1f048ca(2026-09-16):259 测试;红侧 error 串头解析(活体 exit:101)+绿侧 README 校准(铁律不臆造 0);09-14 passed=前 W4 乐观默认之谜解;kit 增第五事件五面一致;审查 Approved"
-    },
-    "09": {
-      "label": "面板 unknown 第三态:无证据折叠与真失败视觉可分",
-      "state": "done",
-      "note": "W12-009:GateState::Failed 加 unknown 标志(events 层按 exit 证据有无置位)→ GateView.unknown 透传 → panel/digest 第三态渲染(? + (unknown) 尾注,暗色不占红;旧 detail 尾注剥离防双注);stats 面既有三分口径不动;oneline 无门态面不涉及;docs/contract.md §5 增渲染语义。渲染 only,事件语义/exit_code 解析零改动;279 测试(+5)",
-      "done_at": "2026-09-17T10:28:03+0800"
-    },
-    "10": {
-      "label": "TUI 点击交互优化(watch 常驻视图)",
-      "state": "done",
-      "note": "W12-010:watch 面板视图左键点击任务行聚焦(行映射 render_panel_rows 与渲染同源零漂移)、滚轮滚动主区/详情右栏(按列路由,scroll_step/scroll_max 纯函数钳位)、换视图/关详情滚移归零;顺手修图视图点击旧守卫漏算页眉行(末行误拒);键盘路径与 --no-infer 零改动;render_main 合并收口修 clippy 8 参/超行;pty 活体冒烟过;282 测试(+2);contract.md §5 增 TUI 交互语义",
-      "done_at": "2026-09-17T10:48:22+0800"
-    }
+ "title": "W14: 缺陷清零 + 契约 v1.1 + Antigravity 第七宿主插件与多轨编排",
+ "wave": "W14",
+ "profile": "sdd",
+ "note": "ADE 本仓台账。与迁移主仓台账隔离。依赖只写 barriers。",
+ "lanes": [
+  {
+   "name": "A-agy-host",
+   "tasks": [
+    "W14-01",
+    "W14-05",
+    "W14-09"
+   ]
   },
-  "barriers": []
+  {
+   "name": "B-graph-tui",
+   "tasks": [
+    "W14-02",
+    "W14-06"
+   ]
+  },
+  {
+   "name": "C-contract-stats",
+   "tasks": [
+    "W14-03",
+    "W14-07"
+   ]
+  },
+  {
+   "name": "D-events-plugin",
+   "tasks": [
+    "W14-04",
+    "W14-08",
+    "W14-10"
+   ]
+  }
+ ],
+ "tasks": {
+  "W14-01": {
+   "label": "Antigravity(--host agy) hook 协议与载荷适配",
+   "state": "done",
+   "note": "3648c32 · hook 77/77, 298/298 total, clippy+fmt clean",
+   "spec": "docs/contract.md",
+   "tests": "tests/hook.rs",
+   "gate": "cargo-test",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T11:56:23+08:00"
+  },
+  "W14-02": {
+   "label": "宽 DAG 动态画布解除 240 列截断与超宽测试",
+   "state": "done",
+   "note": "792ad76 · render_graph 18/18, clippy+fmt clean",
+   "spec": "src/render/graph.rs",
+   "tests": "tests/render_graph.rs",
+   "gate": "cargo-clippy",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T11:43:24+08:00"
+  },
+  "W14-03": {
+   "label": "契约 v1.1 started_at 字段与 JSON Schema 演进",
+   "state": "done",
+   "note": "10990ac · contract 16/16, clippy+fmt clean",
+   "spec": "docs/superpowers/specs/2026-09-16-agentdash-w12-delta.md",
+   "tests": "tests/contract.rs",
+   "gate": "cargo-test",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T11:46:06+08:00"
+  },
+  "W14-04": {
+   "label": "事件流完成时刻/双语警告与 digest --strict 严判",
+   "state": "done",
+   "note": "0fb1bf0 · events/merge/digest 292/292, clippy+fmt clean",
+   "spec": "docs/superpowers/specs/2026-09-16-agentdash-w12-delta.md",
+   "tests": "tests/events.rs",
+   "gate": "cargo-test",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T11:47:21+08:00"
+  },
+  "W14-05": {
+   "label": "kits/antigravity 第七宿主套件与 verify-kits 巡检",
+   "state": "done",
+   "note": "dbf9756 · verify-kits PASS 158 / FAIL 0",
+   "spec": "docs/kit-install-guide.md",
+   "tests": "scripts/verify-kits.sh",
+   "gate": "verify-kits",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T12:14:22+08:00"
+  },
+  "W14-06": {
+   "label": "TUI 详情 unknown 第三态 + 里程碑过滤 + watch --no-infer",
+   "state": "done",
+   "note": "e6ded2a · tui 42/42, 299/299 total, clippy+fmt clean",
+   "spec": "docs/superpowers/specs/2026-09-16-agentdash-w12-delta.md",
+   "tests": "tests/tui.rs",
+   "gate": "cargo-test",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T12:11:47+08:00"
+  },
+  "W14-07": {
+   "label": "stats 真实周转时长 + CJK 列宽对齐 + 空事件渲染",
+   "state": "done",
+   "note": "1e19feb · stats 13/13, clippy+fmt clean",
+   "spec": "docs/superpowers/specs/2026-09-16-agentdash-w12-delta.md",
+   "tests": "tests/stats.rs",
+   "gate": "cargo-test",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T12:04:48+08:00"
+  },
+  "W14-08": {
+   "label": "反重力全局插件包组装注册与编排技能(SKILL.md)",
+   "state": "done",
+   "note": "GetAllPlugins ingested: skills=[agentdash,agentdash-orchestrate,agentdash-setup], hooksLoaded=True",
+   "spec": "kits/antigravity/README.md",
+   "tests": "scripts/verify-kits.sh",
+   "gate": "verify-kits",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T12:10:42+08:00"
+  },
+  "W14-09": {
+   "label": "0.12.0 升版 + 契约 v1.1 文档同步 + 全量重编安装",
+   "state": "done",
+   "note": "f4a2a7e · 0.12.0 installed, 318/318 tests, clippy+fmt clean",
+   "spec": "docs/contract.md",
+   "tests": "tests/version.rs",
+   "gate": "cargo-test",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T12:28:22+08:00"
+  },
+  "W14-10": {
+   "label": "ADE 采集桥跨仓联调回归 + W14 收口报告与入库",
+   "state": "done",
+   "note": "ADE pytest 7/7 + verify-kits 158/158 + 318/318 Rust tests",
+   "spec": "docs/superpowers/reports/2026-10-28-w14-closeout.md",
+   "tests": "tests/test_collector_contract.py",
+   "gate": "pytest",
+   "round": 1,
+   "max_rounds": 3,
+   "attempts": [],
+   "done_at": "2026-10-28T12:30:05+08:00"
+  }
+ },
+ "barriers": [
+  {
+   "id": "b-W14-05",
+   "after": [
+    "W14-01"
+   ],
+   "unlocks": [
+    "W14-05"
+   ]
+  },
+  {
+   "id": "b-W14-06",
+   "after": [
+    "W14-04",
+    "W14-02"
+   ],
+   "unlocks": [
+    "W14-06"
+   ]
+  },
+  {
+   "id": "b-W14-07",
+   "after": [
+    "W14-03"
+   ],
+   "unlocks": [
+    "W14-07"
+   ]
+  },
+  {
+   "id": "b-W14-08",
+   "after": [
+    "W14-04",
+    "W14-01"
+   ],
+   "unlocks": [
+    "W14-08"
+   ]
+  },
+  {
+   "id": "b-W14-09",
+   "after": [
+    "W14-08",
+    "W14-05",
+    "W14-06",
+    "W14-07"
+   ],
+   "unlocks": [
+    "W14-09"
+   ]
+  },
+  {
+   "id": "b-W14-10",
+   "after": [
+    "W14-09"
+   ],
+   "unlocks": [
+    "W14-10"
+   ]
+  }
+ ],
+ "milestones": []
 }
