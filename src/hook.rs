@@ -5,9 +5,10 @@
 //!   → `gate` running 行 + 退出码/一行摘要暂存 `pending_gate.json` **槽位数组**
 //!   (同刻多个在途 gate 各占一槽,Stop 折叠须经落盘交接;旧单对象格式读入兼容;
 //!   槽位记录归属会话,W11-001);
-//!   否则 `tool` phase=end + exit + summary。载荷词表两家:Claude/ZCode 系
+//!   否则 `tool` phase=end + exit + summary。载荷词表三家:Claude/ZCode 系
 //!   `tool_name`+`tool_input`/`tool_response`;Cursor 系 `afterShellExecution`
-//!   顶层 `command`+`output`(W9,归一成 bash 视图)
+//!   顶层 `command`+`output`(W9,归一成 bash 视图);Antigravity 系(`--host agy`,
+//!   W14-01)`toolCall`+有界 `transcriptPath` 退出码提取
 //! - posttoolusefailure(zcode/cursor,W9-003):工具失败事件与在途 gate 配对,
 //!   暂存槽顶替为真失败证据(缺码落 1、中断 130);无在途槽补 running+暂存对
 //! - stop:把在途 gate 逐槽折叠为各自 passed/failed(exit + detail 摘要行),消费后删除暂存;
@@ -15,9 +16,9 @@
 //!   不虚报通过(W4-001 D1)。折叠按**会话池**(W11-001):载荷自报 `session_id`
 //!   的槽只由同会话的 Stop 折叠,并发会话不再互折退出证据;无 `session_id` 的
 //!   槽(default 池,与遗留格式同形)任意 Stop 可折叠,行为与昔日一致
-//! - pretooluse:子代理派发工具(`Task`/`Agent`)→ `agent` dispatched(who=
-//!   `agentType`/`subagent_type`/`name`,缺省 `agent`;task=`description` 截 80,
-//!   缺省省略)
+//! - pretooluse:子代理派发工具(`Task`/`Agent`/`invoke_subagent`)→ `agent` dispatched(who=
+//!   `agentType`/`subagent_type`/`name` 或 `Role`/`TypeName`,缺省 `agent`;task=`description`/
+//!   `Prompt` 截 80,缺省省略)
 //! - subagentstop:`agent` completed(载荷带 `agent_name`/`who` 则透传)
 //!
 //! events.jsonl 轮转(W2-008):追加前检查文件大小,超过 5MB 滚动为
@@ -35,7 +36,7 @@
 
 use std::borrow::Cow;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime};
@@ -67,6 +68,8 @@ const GATE_MAX_NAME_CHARS: usize = 40;
 /// 配置文件大小上限(合法 32 条远小于该值;超出视同形状错整表回退——
 /// 单 hook 有界工作量,绝不读无界文件)。
 const GATE_CONFIG_MAX_BYTES: u64 = 64 * 1024;
+/// Antigravity `transcript.jsonl` 尾部读取上限(W14-01):单次最多读末尾 64KB。
+const TRANSCRIPT_TAIL_BYTES: u64 = 65_536;
 
 /// hook 子命令入口(W7-001):`agentdash hook [--host <name>] <event>`——旗标
 /// 与事件名顺序容忍;`host` 显式传入时盖到本进程产出的每条事件上(多宿主
@@ -86,18 +89,31 @@ pub fn run(rest: &[String]) -> ExitCode {
         }
     }
     let host = host.as_deref();
+    let agy = is_agy_host(host);
+    let cli_event = event
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_ascii_lowercase);
     // 读失败不退出:按空载荷降级,后面 JSON 解析自然跳过
     let mut bytes = Vec::new();
     let _ = std::io::stdin().read_to_end(&mut bytes);
     // 非 UTF-8 字节按 replacement 降级(承 Python 版 stdio errors=replace),保住可解析部分
     let raw = String::from_utf8_lossy(&bytes);
     let Ok(payload) = serde_json::from_str::<Value>(&raw) else {
+        if agy {
+            emit_agy_stdout(cli_event.as_deref());
+        }
         return ExitCode::SUCCESS; // 损坏/空 stdin:静默
     };
     let Some(obj) = payload.as_object() else {
+        if agy {
+            emit_agy_stdout(cli_event.as_deref());
+        }
         return ExitCode::SUCCESS; // 非对象载荷:静默
     };
-    match resolve_event(event.as_deref(), obj).as_deref() {
+    let resolved = resolve_event(event.as_deref(), obj);
+    match resolved.as_deref() {
         Some("posttooluse") => on_post_tool_use(obj, host),
         Some("posttoolusefailure") => on_post_tool_use_failure(obj, host),
         Some("pretooluse") => on_pre_tool_use(obj, host),
@@ -106,7 +122,30 @@ pub fn run(rest: &[String]) -> ExitCode {
         Some("subagentstop") => on_subagent_stop(obj, host),
         _ => {} // 未知事件名:静默
     }
+    if agy {
+        emit_agy_stdout(resolved.as_deref());
+    }
     ExitCode::SUCCESS
+}
+
+/// Antigravity 宿主判定(W14-01):`--host agy` / `--host antigravity`
+/// (trim 后 ASCII 大小写不敏感)。
+fn is_agy_host(host: Option<&str>) -> bool {
+    host.map(str::trim)
+        .is_some_and(|h| h.eq_ignore_ascii_case("agy") || h.eq_ignore_ascii_case("antigravity"))
+}
+
+/// Antigravity 协议 stdout 回执(W14-01):宿主把 hook stdout 当 JSON 解析,
+/// 任何出口(含空/损坏 stdin、非对象 JSON、未知事件)都必须回单行合法 JSON。
+fn emit_agy_stdout(resolved_event: Option<&str>) {
+    let line = match resolved_event {
+        Some("pretooluse") => "{\"decision\":\"allow\"}\n",
+        Some("stop" | "subagentstop") => "{\"decision\":\"stop\"}\n",
+        _ => "{}\n",
+    };
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(line.as_bytes());
+    let _ = out.flush();
 }
 
 /// 宿主归属戳(W7-001):host 显式传入时写入事件,未传字段省略(向后兼容)。
@@ -145,28 +184,51 @@ fn resolve_event(arg: Option<&str>, payload: &Map<String, Value>) -> Option<Stri
     None
 }
 
-/// 事件目录:载荷 `cwd` 优先,退化进程当前目录。
+/// 事件目录:载荷 `cwd` 优先,其次 Antigravity `workspacePaths`(W14-01:优先
+/// 已含 `.agentdash` 的根,否则取首个非空项),退化进程当前目录。
 fn events_dir(payload: &Map<String, Value>) -> PathBuf {
     let base = match payload.get("cwd").and_then(Value::as_str) {
         Some(cwd) if !cwd.trim().is_empty() => PathBuf::from(cwd),
-        _ => std::env::current_dir().unwrap_or_default(), // 取不到时为相对路径,仍指向进程 cwd
+        _ => workspace_base(payload).unwrap_or_else(|| std::env::current_dir().unwrap_or_default()), // 取不到时为相对路径,仍指向进程 cwd
     };
     base.join(".agentdash")
 }
 
-/// 会话归属(W11-001):载荷顶层 `session_id`(claude 形制既有字段)非空即取;
-/// 缺席/空白 → `None`(default 池)。
-fn session_id_of(payload: &Map<String, Value>) -> Option<&str> {
-    payload
-        .get("session_id")
-        .and_then(Value::as_str)
+/// Antigravity `workspacePaths` 多根工作区选取(W14-01):优先首个存在
+/// `.agentdash` 的目录,否则使用首个非空目录。
+fn workspace_base(payload: &Map<String, Value>) -> Option<PathBuf> {
+    let items = payload.get("workspacePaths")?.as_array()?;
+    let paths: Vec<&str> = items
+        .iter()
+        .filter_map(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .collect();
+    if let Some(hit) = paths
+        .iter()
+        .find(|p| Path::new(p).join(".agentdash").exists())
+    {
+        return Some(PathBuf::from(hit));
+    }
+    paths.first().map(PathBuf::from)
 }
 
-/// PostToolUse:gate 提取或 tool 行。载荷词表两家:Claude/ZCode 系(`tool_name`
-/// + `tool_input`/`tool_response`)与 Cursor 系(`afterShellExecution` 顶层
-///   `command`+`output`,W9),后者归一成 bash 视图走同一条路。
+/// 会话归属(W11-001;W14-01 补 Antigravity `conversationId` 回退):载荷顶层
+/// `session_id` 优先,缺席回退 `conversationId`(trim 后非空);缺席/空白 →
+/// `None`(default 池)。
+fn session_id_of(payload: &Map<String, Value>) -> Option<&str> {
+    ["session_id", "conversationId"].iter().find_map(|key| {
+        payload
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    })
+}
+
+/// PostToolUse:gate 提取或 tool 行。载荷词表三家:Claude/ZCode 系(`tool_name`+
+/// `tool_input`/`tool_response`)、Cursor 系(`afterShellExecution` 顶层
+/// `command`+`output`,W9)与 Antigravity 系(`toolCall`,W14-01)。
 fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
     let dir = events_dir(payload);
     let session = session_id_of(payload);
@@ -175,6 +237,11 @@ fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
     if let Some((command, output)) = cursor_shell_payload(payload) {
         let view = json!({ "stdout": output });
         bash_receipt(&dir, &command, Some(&view), host, session);
+        return;
+    }
+    // Antigravity 宿主(W14-01):`toolCall` 对象承载工具名与参数
+    if let Some(tc) = payload.get("toolCall").and_then(Value::as_object) {
+        on_agy_post_tool_call(payload, tc, &dir, host, session);
         return;
     }
     let Some(tool) = payload
@@ -210,6 +277,117 @@ fn on_post_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
     append_tool_event(&dir, &tool, response, summary, host, session);
 }
 
+/// Antigravity `PostToolUse` 载荷适配(W14-01):
+/// - `run_command`:提取 `CommandLine`/`command`,按顶层 `error` → 结构化回执 →
+///   `transcriptPath` 有界尾部提取 `(exit, detail)`,皆无保持 `exit = None`;
+///   经 [`bash_receipt_ext`] 走统一验证门/工具分流,缺码时在暂存槽附带
+///   `transcript`/`step_idx` 供 `Stop` 延迟补查。
+/// - 其余非空工具:提取常见路径/查询摘要,带顶层 `error` 时记 `exit = 1`。
+fn on_agy_post_tool_call(
+    payload: &Map<String, Value>,
+    tc: &Map<String, Value>,
+    dir: &Path,
+    host: Option<&str>,
+    session: Option<&str>,
+) {
+    let Some(raw_name) = tc
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    else {
+        return;
+    };
+    let tool = raw_name.to_ascii_lowercase();
+    let args = tc.get("args").and_then(Value::as_object);
+    let top_error = payload
+        .get("error")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty());
+
+    if tool == "run_command" {
+        let command = args
+            .and_then(|a| {
+                ["CommandLine", "command"].iter().find_map(|key| {
+                    a.get(*key)
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                })
+            })
+            .unwrap_or_default();
+        let transcript_path = payload
+            .get("transcriptPath")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let step_idx = payload.get("stepIdx").and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str()?.trim().parse::<i64>().ok())
+        });
+        let structured = payload
+            .get("tool_response")
+            .or_else(|| payload.get("result"));
+
+        let (resolved_exit, resolved_detail) = if let Some(err) = top_error {
+            (
+                parse_error_exit_code(err).or(Some(1)),
+                clip(first_nonempty_line(err)),
+            )
+        } else if let Some(code) = exit_code(structured) {
+            (Some(code), summary_line(structured))
+        } else if let Some((code, detail)) =
+            transcript_path.and_then(|tp| agy_transcript_outcome(tp, step_idx))
+        {
+            (Some(code), detail)
+        } else {
+            (None, summary_line(structured))
+        };
+
+        let synth = match resolved_exit {
+            Some(code) => Some(json!({
+                "exit_code": code,
+                "stdout": resolved_detail,
+            })),
+            None if !resolved_detail.is_empty() => Some(json!({
+                "stdout": resolved_detail,
+            })),
+            None => None,
+        };
+        let deferred = if resolved_exit.is_none() {
+            transcript_path.map(|tp| (tp, step_idx))
+        } else {
+            None
+        };
+        bash_receipt_ext(dir, command, synth.as_ref(), deferred, host, session);
+        return;
+    }
+
+    let summary = args
+        .and_then(|a| {
+            [
+                "Path",
+                "TargetFile",
+                "SearchPath",
+                "toolSummary",
+                "Query",
+                "query",
+                "Role",
+                "Url",
+                "CommandLine",
+            ]
+            .iter()
+            .find_map(|key| {
+                a.get(*key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            })
+        })
+        .unwrap_or_default();
+    let synth_err = top_error.map(|err| json!({ "is_error": true, "error": err }));
+    append_tool_event(dir, &tool, synth_err.as_ref(), summary, host, session);
+}
+
 /// Cursor `afterShellExecution` 载荷识别(W9):CLI 事件名归一为 posttooluse 后,
 /// 载荷 `hook_event_name` 保留宿主原名,据此 + 顶层非空 `command` 判定——不靠
 /// "顶层恰好有 command"的宽松形状,避免与未来其他宿主的同名词段误撞。
@@ -239,6 +417,20 @@ fn bash_receipt(
     host: Option<&str>,
     session: Option<&str>,
 ) {
+    bash_receipt_ext(dir, command, response, None, host, session);
+}
+
+/// [`bash_receipt`] 扩展入口(W14-01):当 gate 暂存 `exit` 为 `None` 且调用方
+/// 提供 `deferred_transcript`(`transcriptPath` + 可选 `stepIdx`)时,随槽记录
+/// 以便 `Stop` 折叠前延迟补查宿主稍后刷盘的 `transcript.jsonl`。
+fn bash_receipt_ext(
+    dir: &Path,
+    command: &str,
+    response: Option<&Value>,
+    deferred_transcript: Option<(&str, Option<i64>)>,
+    host: Option<&str>,
+    session: Option<&str>,
+) {
     let custom = load_custom_gates(dir);
     if let Some(gate) = gate_name_with(command, &custom) {
         // running 行与暂存同临界区:保证 Stop 折叠读到的暂存与 running 行配对
@@ -256,15 +448,21 @@ fn bash_receipt(
                     session,
                 ),
             );
-            append_pending_slot(
-                dir,
-                &json!({
-                    "gate": gate.as_ref(),
-                    "exit": exit_code(response),
-                    "detail": summary_line(response),
-                }),
-                session,
-            );
+            let exit = exit_code(response);
+            let mut slot = json!({
+                "gate": gate.as_ref(),
+                "exit": exit,
+                "detail": summary_line(response),
+            });
+            if exit.is_none()
+                && let Some((tp, step_idx)) = deferred_transcript
+            {
+                slot["transcript"] = json!(tp);
+                if let Some(idx) = step_idx {
+                    slot["step_idx"] = json!(idx);
+                }
+            }
+            append_pending_slot(dir, &slot, session);
         });
         return;
     }
@@ -337,7 +535,8 @@ fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
 }
 
 /// 失败载荷的命令归因(W9-003):claude/zcode 词表走 `tool_input.command`,
-/// cursor 词表走顶层 `command`。皆无或空白 → 不可归因。
+/// cursor 词表走顶层 `command`,Antigravity 走 `toolCall(run_command)`.
+/// 皆无或空白 → 不可归因。
 fn failure_command(payload: &Map<String, Value>) -> Option<String> {
     for key in ["tool_input", "command"] {
         let value = match key {
@@ -349,6 +548,23 @@ fn failure_command(payload: &Map<String, Value>) -> Option<String> {
         };
         if let Some(c) = value.filter(|c| !c.trim().is_empty()) {
             return Some(c.to_owned());
+        }
+    }
+    if let Some(tc) = payload.get("toolCall").and_then(Value::as_object)
+        && tc
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|n| n.trim().eq_ignore_ascii_case("run_command"))
+        && let Some(args) = tc.get("args").and_then(Value::as_object)
+    {
+        for key in ["CommandLine", "command"] {
+            if let Some(c) = args
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|c| !c.trim().is_empty())
+            {
+                return Some(c.to_owned());
+            }
         }
     }
     None
@@ -374,6 +590,10 @@ fn supersede_pending_slot(
         {
             slot["exit"] = json!(exit);
             slot["detail"] = json!(clip(detail));
+            if let Some(obj) = slot.as_object_mut() {
+                obj.remove("transcript");
+                obj.remove("step_idx");
+            }
             hit = true;
         }
     }
@@ -384,44 +604,85 @@ fn supersede_pending_slot(
     write_pending_slots(dir, &slots)
 }
 
-/// PreToolUse:子代理派发工具(`Task`/`Agent` 新旧名)→ `agent` dispatched 行,
-/// "在跑 agent"画面闭环(W3-003)。who 取 `tool_input` 的 `agentType`/`subagent_type`/
-/// `name`,皆无回退 `agent`;task 取 `description` 截 80,缺省整字段省略。其余工具
-/// 零写入静默(matcher 只由宿主兜着,此处防御 matcher 之外直调也不产事件)。
-/// 复用既有文件锁/追加/降级铁律,零新依赖。
+/// PreToolUse:子代理派发工具(`Task`/`Agent` 新旧名与 Antigravity
+/// `invoke_subagent`)→ `agent` dispatched 行,"在跑 agent"画面闭环(W3-003;
+/// W14-01)。Claude 系 who 取 `tool_input` 的 `agentType`/`subagent_type`/
+/// `name`,task 取 `description`;Antigravity `invoke_subagent` who 取 `args`
+/// 的 `Role`/`TypeName`,task 取 `Prompt`;皆无回退 `agent`,task 缺省整字段省略。
+/// 其余工具零写入静默。复用既有文件锁/追加/降级铁律,零新依赖。
 fn on_pre_tool_use(payload: &Map<String, Value>, host: Option<&str>) {
+    let tool_call = payload.get("toolCall").and_then(Value::as_object);
     let tool = payload
         .get("tool_name")
         .and_then(Value::as_str)
+        .or_else(|| {
+            tool_call
+                .and_then(|tc| tc.get("name"))
+                .and_then(Value::as_str)
+        })
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .map(str::to_ascii_lowercase);
-    if !matches!(tool.as_deref(), Some("task" | "agent")) {
-        return; // 非 agent 工具:零写入静默
-    }
-    let input = payload.get("tool_input").and_then(Value::as_object);
-    let who = input
-        .and_then(|i| {
-            ["agentType", "subagent_type", "name"]
-                .iter()
-                .find_map(|key| {
-                    i.get(*key)
-                        .and_then(Value::as_str)
-                        .filter(|w| !w.is_empty())
+
+    let (who, task) = match tool.as_deref() {
+        Some("task" | "agent") => {
+            let input = payload
+                .get("tool_input")
+                .and_then(Value::as_object)
+                .or_else(|| {
+                    tool_call
+                        .and_then(|tc| tc.get("args"))
+                        .and_then(Value::as_object)
+                });
+            let who = input
+                .and_then(|i| {
+                    ["agentType", "subagent_type", "name"]
+                        .iter()
+                        .find_map(|key| {
+                            i.get(*key)
+                                .and_then(Value::as_str)
+                                .filter(|w| !w.is_empty())
+                        })
                 })
-        })
-        .unwrap_or("agent");
+                .unwrap_or("agent");
+            let task = input
+                .and_then(|i| i.get("description"))
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty());
+            (who, task)
+        }
+        Some("invoke_subagent") => {
+            let args = tool_call
+                .and_then(|tc| tc.get("args"))
+                .and_then(Value::as_object)
+                .or_else(|| payload.get("tool_input").and_then(Value::as_object));
+            let who = args
+                .and_then(|a| {
+                    ["Role", "TypeName"].iter().find_map(|key| {
+                        a.get(*key)
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|w| !w.is_empty())
+                    })
+                })
+                .unwrap_or("agent");
+            let task = args
+                .and_then(|a| a.get("Prompt"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|t| !t.is_empty());
+            (who, task)
+        }
+        _ => return, // 非 agent 工具:零写入静默
+    };
+
     let mut event = json!({
         "ts": ts_now(),
         "kind": "agent",
         "event": "dispatched",
         "who": clip(who),
     });
-    if let Some(task) = input
-        .and_then(|i| i.get("description"))
-        .and_then(Value::as_str)
-        .filter(|t| !t.is_empty())
-    {
+    if let Some(task) = task {
         // 注:events.rs 重放以 `who` 为 agent 事件主键,`task` 只是可选注记
         event["task"] = json!(clip(task));
     }
@@ -463,10 +724,13 @@ fn append_tool_event(
 /// 无 `session_id` 的槽=default 池,任意 Stop 可折,行为与昔日一致);他会话
 /// 槽原位写回暂存,由其归属会话的 Stop 折叠。暂存无论解析成败都消费删除
 /// (写回失败按降级铁律整体消费——折叠仍只做一次)。槽缺 `gate` 字段跳过,
-/// 不产生幽灵事件。
+/// 不产生幽灵事件。W14-01 起支持延迟补查槽位 `transcript` 与 Antigravity
+/// 子会话 `fullyIdle` 完成归并。
 fn on_stop(payload: &Map<String, Value>, host: Option<&str>) {
     let dir = events_dir(payload);
     let session = session_id_of(payload);
+    let agy_fully_idle =
+        is_agy_host(host) && payload.get("fullyIdle").and_then(Value::as_bool) == Some(true);
     with_lock(&dir, || {
         let pending = fs::read_to_string(dir.join(PENDING_NAME))
             .ok()
@@ -478,20 +742,31 @@ fn on_stop(payload: &Map<String, Value>, host: Option<&str>) {
         if !foreign.is_empty() {
             write_pending_slots(&dir, &foreign); // 他会话在途槽原位保留
         }
-        if folding.is_empty() {
-            return; // 本池无在途 gate / 暂存损坏:不产生幽灵事件
-        }
         for slot in folding {
             let gate = slot.get("gate").and_then(Value::as_str).unwrap_or_default();
             if gate.is_empty() {
                 continue;
             }
-            let exit = slot.get("exit").and_then(Value::as_i64);
-            let detail = clip(
+            let mut exit = slot.get("exit").and_then(Value::as_i64);
+            let mut detail = clip(
                 slot.get("detail")
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
             );
+            if exit.is_none()
+                && let Some(tp) = slot
+                    .get("transcript")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                && let Some((recovered_code, recovered_detail)) =
+                    agy_transcript_outcome(tp, slot.get("step_idx").and_then(Value::as_i64))
+            {
+                exit = Some(recovered_code);
+                if !recovered_detail.is_empty() || detail.is_empty() {
+                    detail = recovered_detail;
+                }
+            }
             // 折叠语义(W4-001 D1):显式 0 才 passed;非零(含 interrupted 130)
             // failed;不可知(null)同样 failed——宁可误报失败,不虚报通过。
             // 尾注 `(exit unknown)` 只加在不可知路径,区分"真失败"与"证据缺失"。
@@ -523,7 +798,95 @@ fn on_stop(payload: &Map<String, Value>, host: Option<&str>) {
                 ),
             );
         }
+        if agy_fully_idle && let Some(sid) = session {
+            maybe_complete_agy_subagent(&dir, host, sid);
+        }
     });
+}
+
+/// Antigravity 子智能体 `Stop` 完成归并(W14-01):子代理无独立 `SubagentStop`
+/// 事件,仅以自身 `conversationId` + `fullyIdle: true` 发 `Stop`。在锁内有界
+/// 扫描 `events.jsonl`(≤5MB),模拟活跃派发池:若存在未闭合派发、本会话非派发
+/// 发起方且尚未发过 `completed`,追加一条匿名 `completed`。
+fn maybe_complete_agy_subagent(dir: &Path, host: Option<&str>, sid: &str) {
+    let events_file = dir.join(EVENTS_NAME);
+    let Ok(meta) = fs::metadata(&events_file) else {
+        return;
+    };
+    if meta.len() > ROTATE_BYTES {
+        return;
+    }
+    let Ok(content) = fs::read_to_string(&events_file) else {
+        return;
+    };
+    let mut is_dispatcher = false;
+    let mut already_completed = false;
+    let mut active: Vec<(String, bool)> = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        if obj.get("kind").and_then(Value::as_str) != Some("agent") {
+            continue;
+        }
+        let ev = obj.get("event").and_then(Value::as_str);
+        let line_sid = obj
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let who = obj
+            .get("who")
+            .and_then(Value::as_str)
+            .filter(|w| !w.is_empty());
+
+        match ev {
+            Some("dispatched") => {
+                if line_sid == Some(sid) {
+                    is_dispatcher = true;
+                }
+                if let Some(w) = who {
+                    if let Some(entry) = active.iter_mut().find(|(name, _)| name == w) {
+                        entry.1 = false;
+                    } else {
+                        active.push((w.to_owned(), false));
+                    }
+                }
+            }
+            Some("completed") => {
+                if line_sid == Some(sid) {
+                    already_completed = true;
+                }
+                if let Some(w) = who {
+                    active.retain(|(name, _)| name != w);
+                } else if let Some(entry) = active.iter_mut().find(|(_, inferred)| !*inferred) {
+                    entry.1 = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let open_dispatches = active.iter().filter(|(_, inferred)| !*inferred).count();
+    if open_dispatches > 0 && !is_dispatcher && !already_completed {
+        append_line(
+            dir,
+            &stamp(
+                json!({
+                    "ts": ts_now(),
+                    "kind": "agent",
+                    "event": "completed",
+                }),
+                host,
+                Some(sid),
+            ),
+        );
+    }
 }
 
 /// `SubagentStop`:`agent` completed 行;载荷带 `agent_name`/`subagent_type`/`who`
@@ -983,6 +1346,139 @@ fn exit_code_of_error_head(text: &str) -> Option<i64> {
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     let code = digits.parse::<i64>().ok()?;
     (code > 0).then_some(code)
+}
+
+/// Antigravity `transcript.jsonl` 有界尾部提取(W14-01):定位至末尾最多 64KB,
+/// 逆序扫描 JSON 行,匹配 `"type" == "GENERIC"`(传入 `step_idx` 时要求
+/// `step_index` 相等),从 `"content"` 提取 `"Command exited with code N"` 真实
+/// 退出码与 `"Command output:"` 后末条非空行摘要。缺档/不可读/未命中恒返 `None`。
+fn agy_transcript_outcome(transcript_path: &str, step_idx: Option<i64>) -> Option<(i64, String)> {
+    const EXIT_MARKER: &str = "Command exited with code ";
+    const OUTPUT_MARKER: &str = "Command output:";
+
+    let path = transcript_path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(TRANSCRIPT_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    file.take(TRANSCRIPT_TAIL_BYTES + 4096)
+        .read_to_end(&mut buf)
+        .ok()?;
+    let tail = String::from_utf8_lossy(&buf);
+
+    for line in tail.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        if obj.get("type").and_then(Value::as_str) != Some("GENERIC") {
+            continue;
+        }
+        if let Some(idx) = step_idx
+            && obj.get("step_index").and_then(Value::as_i64) != Some(idx)
+        {
+            continue;
+        }
+        let Some(content) = obj.get("content").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(pos) = content.find(EXIT_MARKER) else {
+            continue;
+        };
+        let after = &content[pos + EXIT_MARKER.len()..];
+        let Some(code) = parse_transcript_exit_int(after) else {
+            continue;
+        };
+        let mut detail = content
+            .find(OUTPUT_MARKER)
+            .map(|out_pos| {
+                let slice = &content[out_pos + OUTPUT_MARKER.len()..];
+                clip(last_nonempty_line(slice))
+            })
+            .unwrap_or_default();
+        if detail.is_empty() && code != 0 {
+            detail = format!("exit {code}");
+        }
+        return Some((code, detail));
+    }
+    None
+}
+
+/// 解析 `"Command exited with code "` 后的有符号/无符号整数(止于 `.`、空白或串尾)。
+fn parse_transcript_exit_int(s: &str) -> Option<i64> {
+    let bytes = s.as_bytes();
+    let len = bytes
+        .iter()
+        .enumerate()
+        .take_while(|(i, b)| (*i == 0 && **b == b'-') || b.is_ascii_digit())
+        .count();
+    if len == 0 {
+        return None;
+    }
+    match bytes.get(len) {
+        None => {}
+        Some(b) if *b == b'.' || b.is_ascii_whitespace() => {}
+        Some(_) => return None,
+    }
+    s[..len].parse::<i64>().ok()
+}
+
+/// 从顶层 `error` 串提取非零退出码(W14-01):兼容 `Exit code N` 串头、
+/// `Command exited with code N`、`exit status N` 等常见格式;无码或 0 返 `None`
+/// 由调用方 `.or(Some(1))` 兜底(error 在场绝不落 0)。
+fn parse_error_exit_code(err: &str) -> Option<i64> {
+    if let Some(code) = exit_code_of_error_head(err) {
+        return Some(code);
+    }
+    let lower = err.to_ascii_lowercase();
+    for marker in [
+        "command exited with code ",
+        "exited with code ",
+        "exit code: ",
+        "exit code ",
+        "exit status ",
+    ] {
+        if let Some(pos) = lower.find(marker) {
+            let after = &lower[pos + marker.len()..];
+            let bytes = after.as_bytes();
+            let len = bytes
+                .iter()
+                .enumerate()
+                .take_while(|(i, b)| (*i == 0 && **b == b'-') || b.is_ascii_digit())
+                .count();
+            if len > 0
+                && bytes
+                    .get(len)
+                    .is_none_or(|b| !b.is_ascii_alphabetic() && *b != b'_')
+                && let Ok(code) = after[..len].parse::<i64>()
+                && code != 0
+            {
+                return Some(code);
+            }
+        }
+    }
+    None
+}
+
+fn first_nonempty_line(text: &str) -> &str {
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or_default()
+}
+
+fn last_nonempty_line(text: &str) -> &str {
+    text.lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .unwrap_or_default()
 }
 
 /// 字符串 response 拆解(W9-003 实测 + dsh-shell 渲染契约):DSH 桥的 bash

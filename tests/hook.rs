@@ -2482,3 +2482,703 @@ fn opencode_kit_uses_session_status_not_idle() {
         "deprecated session.idle must not remain as a hook key"
     );
 }
+
+// ---------------------------------------------------------------- Antigravity (--host agy, W14-01)
+
+/// 成功回放且校验 stdout 原文(Antigravity 要求每条出口返回单行 JSON)。
+fn assert_agy_stdout(out: &Output, expected_stdout: &str, context: &str) {
+    assert_silent_success(out, context);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        expected_stdout,
+        "{context}: agy stdout JSON 不符"
+    );
+}
+
+#[test]
+fn agy_stdout_json_protocol_and_other_hosts_silent() {
+    let t = TempDir::new("agy-stdout");
+    let valid_obj = json!({
+        "conversationId": "conv-stdout",
+        "workspacePaths": [t.path().to_string_lossy()],
+    })
+    .to_string();
+
+    // --host agy / --host Antigravity(大小写不敏感)在正常、空、损坏、非对象载荷下均输出合法单行 JSON
+    for host_arg in ["agy", "Antigravity"] {
+        for raw in [valid_obj.as_str(), "", "{{{corrupt", "[\"array\"]"] {
+            assert_agy_stdout(
+                &feed(&["hook", "--host", host_arg, "pretooluse"], raw, t.path()),
+                "{\"decision\":\"allow\"}\n",
+                "agy pretooluse stdout",
+            );
+            assert_agy_stdout(
+                &feed(&["hook", "--host", host_arg, "posttooluse"], raw, t.path()),
+                "{}\n",
+                "agy posttooluse stdout",
+            );
+            assert_agy_stdout(
+                &feed(
+                    &["hook", "--host", host_arg, "posttoolusefailure"],
+                    raw,
+                    t.path(),
+                ),
+                "{}\n",
+                "agy posttoolusefailure stdout",
+            );
+            assert_agy_stdout(
+                &feed(&["hook", "--host", host_arg, "stop"], raw, t.path()),
+                "{\"decision\":\"stop\"}\n",
+                "agy stop stdout",
+            );
+            assert_agy_stdout(
+                &feed(&["hook", "--host", host_arg, "subagentstop"], raw, t.path()),
+                "{\"decision\":\"stop\"}\n",
+                "agy subagentstop stdout",
+            );
+            assert_agy_stdout(
+                &feed(&["hook", "--host", host_arg, "unknown-ev"], raw, t.path()),
+                "{}\n",
+                "agy unknown event stdout",
+            );
+        }
+    }
+
+    // 非 Antigravity 宿主必须继续保持 stdout 零字节
+    for args in [
+        &["hook", "pretooluse"][..],
+        &["hook", "--host", "claude", "pretooluse"][..],
+        &["hook", "--host", "claude", "posttooluse"][..],
+        &["hook", "--host", "claude", "stop"][..],
+        &["hook", "--host", "cursor", "stop"][..],
+        &["hook", "--host", "opencode", "posttooluse"][..],
+    ] {
+        let out = feed(args, &valid_obj, t.path());
+        assert_silent_success(&out, "non-agy host");
+        assert!(
+            out.stdout.is_empty(),
+            "non-agy args={args:?} must emit 0 stdout bytes, got {:?}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
+#[test]
+fn agy_workspace_paths_prefers_root_with_agentdash() {
+    let proc_cwd = TempDir::new("agy-ws-proc");
+    let ws_plain = TempDir::new("agy-ws-plain");
+    let ws_tracked = TempDir::new("agy-ws-tracked");
+    fs::create_dir_all(ws_tracked.path().join(".agentdash")).expect("mkdir .agentdash");
+
+    let payload = json!({
+        "conversationId": "conv-ws",
+        "workspacePaths": [
+            ws_plain.path().to_string_lossy(),
+            ws_tracked.path().to_string_lossy()
+        ],
+        "toolCall": {
+            "name": "read_file",
+            "args": {"Path": "src/hook.rs"}
+        }
+    });
+    let out = feed(
+        &["hook", "--host", "agy", "posttooluse"],
+        &payload.to_string(),
+        proc_cwd.path(),
+    );
+    assert_agy_stdout(&out, "{}\n", "workspacePaths multi-root");
+    assert!(
+        !events_path(ws_plain.path()).exists(),
+        "无 .agentdash 的首根不应抢走事件"
+    );
+    assert!(
+        !events_path(proc_cwd.path()).exists(),
+        "workspacePaths 在场时不应落回进程 cwd"
+    );
+    let evs = read_events(ws_tracked.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["summary"], "src/hook.rs");
+
+    // 均无 .agentdash 时退取首个非空 workspacePaths
+    let ws_first = TempDir::new("agy-ws-first");
+    let ws_second = TempDir::new("agy-ws-second");
+    let payload_fresh = json!({
+        "conversationId": "conv-ws-2",
+        "workspacePaths": [
+            "   ",
+            ws_first.path().to_string_lossy(),
+            ws_second.path().to_string_lossy()
+        ],
+        "toolCall": {
+            "name": "read_file",
+            "args": {"Path": "README.md"}
+        }
+    });
+    let out2 = feed(
+        &["hook", "--host", "agy", "posttooluse"],
+        &payload_fresh.to_string(),
+        proc_cwd.path(),
+    );
+    assert_agy_stdout(&out2, "{}\n", "workspacePaths fresh fallback");
+    let evs_first = read_events(ws_first.path());
+    assert_eq!(evs_first.len(), 1);
+    assert_eq!(evs_first[0]["summary"], "README.md");
+}
+
+#[test]
+fn agy_run_command_gate_reads_transcript_passed() {
+    // 按 stepIdx 精确命中 transcript.jsonl(忽略前序失败步)
+    let repo_pass = TempDir::new("agy-gate-pass");
+    let transcript_pass = repo_pass.path().join("transcript.jsonl");
+    let lines_pass = [
+        json!({
+            "step_index": 3,
+            "type": "GENERIC",
+            "content": "Command exited with code 1.\n\nCommand output:\nearlier failure\n"
+        })
+        .to_string(),
+        json!({
+            "step_index": 4,
+            "type": "GENERIC",
+            "content": "Created At: 2026-10-28T11:00:00Z\nCommand exited with code 0.\n\nCommand output:\nrunning 12 tests\ntest result: ok. 12 passed; 0 failed\n"
+        })
+        .to_string(),
+    ];
+    fs::write(&transcript_pass, format!("{}\n", lines_pass.join("\n")))
+        .expect("write transcript pass");
+
+    let post_pass = json!({
+        "conversationId": "conv-pass",
+        "workspacePaths": [repo_pass.path().to_string_lossy()],
+        "transcriptPath": transcript_pass.to_string_lossy(),
+        "stepIdx": 4,
+        "toolCall": {
+            "name": "run_command",
+            "args": {"CommandLine": "cargo test --all"}
+        }
+    });
+    let stop_pass = json!({
+        "conversationId": "conv-pass",
+        "workspacePaths": [repo_pass.path().to_string_lossy()],
+        "fullyIdle": true
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &post_pass.to_string(),
+            repo_pass.path(),
+        ),
+        "{}\n",
+        "agy gate pass post",
+    );
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &stop_pass.to_string(),
+            repo_pass.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "agy gate pass stop",
+    );
+    let evs = read_events(repo_pass.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[0]["gate"], "cargo-test");
+    assert_eq!(evs[0]["state"], "running");
+    assert_eq!(evs[0]["session_id"], "conv-pass");
+    assert_eq!(evs[1]["state"], "passed");
+    assert_eq!(evs[1]["exit"], 0);
+    assert_eq!(evs[1]["detail"], "test result: ok. 12 passed; 0 failed");
+    assert_eq!(evs[1]["session_id"], "conv-pass");
+    assert_eq!(evs[1]["host"], "agy");
+}
+
+#[test]
+fn agy_run_command_gate_reads_transcript_failed_bounded_tail() {
+    // failed(101) + 超过 64KB 前缀的大 transcript 有界尾部扫描
+    let repo_fail = TempDir::new("agy-gate-fail");
+    let transcript_fail = repo_fail.path().join("transcript_big.jsonl");
+    let mut big = "x".repeat(80 * 1024);
+    big.push('\n');
+    big.push_str(
+        &json!({
+            "step_index": 9,
+            "type": "GENERIC",
+            "content": "Command exited with code 101.\n\nCommand output:\ntest agy ... FAILED\nerror: test failed, to rerun pass `--test hook`\n"
+        })
+        .to_string(),
+    );
+    big.push('\n');
+    fs::write(&transcript_fail, big).expect("write big transcript");
+
+    let post_fail = json!({
+        "conversationId": "conv-fail",
+        "workspacePaths": [repo_fail.path().to_string_lossy()],
+        "transcriptPath": transcript_fail.to_string_lossy(),
+        "stepIdx": 9,
+        "toolCall": {
+            "name": "run_command",
+            "args": {"CommandLine": "cargo test --test hook"}
+        }
+    });
+    let stop_fail = json!({
+        "conversationId": "conv-fail",
+        "workspacePaths": [repo_fail.path().to_string_lossy()],
+        "fullyIdle": true
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &post_fail.to_string(),
+            repo_fail.path(),
+        ),
+        "{}\n",
+        "agy gate fail post",
+    );
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &stop_fail.to_string(),
+            repo_fail.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "agy gate fail stop",
+    );
+    let evs_fail = read_events(repo_fail.path());
+    assert_eq!(evs_fail.len(), 2);
+    assert_eq!(evs_fail[1]["state"], "failed");
+    assert_eq!(evs_fail[1]["exit"], 101);
+    assert_eq!(
+        evs_fail[1]["detail"],
+        "error: test failed, to rerun pass `--test hook`"
+    );
+}
+
+#[test]
+fn agy_run_command_gate_deferred_transcript_rechecked_on_stop() {
+    let repo_defer = TempDir::new("agy-gate-defer");
+    let transcript_defer = repo_defer.path().join("transcript_defer.jsonl");
+    let step11 = json!({
+        "step_index": 11,
+        "type": "GENERIC",
+        "content": "Command exited with code 1.\n\nCommand output:\nold step\n"
+    });
+    fs::write(&transcript_defer, format!("{step11}\n")).expect("write step 11");
+
+    let post_defer = json!({
+        "conversationId": "conv-defer",
+        "workspacePaths": [repo_defer.path().to_string_lossy()],
+        "transcriptPath": transcript_defer.to_string_lossy(),
+        "stepIdx": 12,
+        "toolCall": {
+            "name": "run_command",
+            "args": {"CommandLine": "cargo test"}
+        }
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &post_defer.to_string(),
+            repo_defer.path(),
+        ),
+        "{}\n",
+        "agy deferred post",
+    );
+    let slots = read_pending_slots(repo_defer.path());
+    assert_eq!(slots.len(), 1);
+    assert!(
+        slots[0]["exit"].is_null(),
+        "未落盘前不得误借旧步退出码或伪造 0"
+    );
+    assert_eq!(slots[0]["step_idx"], 12);
+    assert_eq!(
+        slots[0]["transcript"],
+        transcript_defer.to_string_lossy().as_ref()
+    );
+
+    // Stop 之前 Antigravity 将 step 12 刷入 transcript.jsonl
+    let step12 = json!({
+        "step_index": 12,
+        "type": "GENERIC",
+        "content": "Command exited with code 0.\n\nCommand output:\ntest result: ok. 42 passed\n"
+    });
+    fs::write(&transcript_defer, format!("{step11}\n{step12}\n")).expect("flush step 12");
+
+    let stop_defer = json!({
+        "conversationId": "conv-defer",
+        "workspacePaths": [repo_defer.path().to_string_lossy()],
+        "fullyIdle": true
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &stop_defer.to_string(),
+            repo_defer.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "agy deferred stop",
+    );
+    let evs_defer = read_events(repo_defer.path());
+    assert_eq!(evs_defer.len(), 2);
+    assert_eq!(evs_defer[1]["state"], "passed");
+    assert_eq!(evs_defer[1]["exit"], 0);
+    assert_eq!(evs_defer[1]["detail"], "test result: ok. 42 passed");
+}
+
+#[test]
+fn agy_run_command_without_transcript_or_error_stays_unknown_never_zero() {
+    let repo_unk = TempDir::new("agy-unknown");
+    let post = json!({
+        "conversationId": "conv-unk",
+        "workspacePaths": [repo_unk.path().to_string_lossy()],
+        "transcriptPath": repo_unk.path().join("missing.jsonl").to_string_lossy(),
+        "stepIdx": 5,
+        "toolCall": {
+            "name": "run_command",
+            "args": {"CommandLine": "cargo clippy -- -D warnings"}
+        }
+    });
+    let stop = json!({
+        "conversationId": "conv-unk",
+        "workspacePaths": [repo_unk.path().to_string_lossy()],
+        "fullyIdle": true
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &post.to_string(),
+            repo_unk.path(),
+        ),
+        "{}\n",
+        "agy unknown post",
+    );
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &stop.to_string(),
+            repo_unk.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "agy unknown stop",
+    );
+    let evs = read_events(repo_unk.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[1]["gate"], "cargo-clippy");
+    assert_eq!(evs[1]["state"], "failed", "缺失证据必须记 failed(unknown)");
+    assert!(evs[1]["exit"].is_null(), "绝不伪造 exit 0: {}", evs[1]);
+    assert_eq!(evs[1]["detail"], "(exit unknown)");
+}
+
+#[test]
+fn agy_run_command_error_priority_and_non_gate_bash_tool() {
+    // 顶层 error 字符串优先级最高:直接提取退出码或回退 1
+    let repo_err = TempDir::new("agy-cmd-err");
+    let post_err = json!({
+        "conversationId": "conv-err",
+        "workspacePaths": [repo_err.path().to_string_lossy()],
+        "error": "Command exited with code 2.\ncompilation aborted",
+        "toolCall": {
+            "name": "run_command",
+            "args": {"CommandLine": "cargo fmt --check"}
+        }
+    });
+    let stop_err = json!({
+        "conversationId": "conv-err",
+        "workspacePaths": [repo_err.path().to_string_lossy()]
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &post_err.to_string(),
+            repo_err.path(),
+        ),
+        "{}\n",
+        "agy error post",
+    );
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &stop_err.to_string(),
+            repo_err.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "agy error stop",
+    );
+    let evs_err = read_events(repo_err.path());
+    assert_eq!(evs_err[1]["state"], "failed");
+    assert_eq!(evs_err[1]["exit"], 2);
+    assert_eq!(evs_err[1]["detail"], "Command exited with code 2.");
+
+    // 非 gate 的 run_command 归一为 bash tool 行且带真实退出码
+    let repo_bash = TempDir::new("agy-cmd-bash");
+    let transcript_bash = repo_bash.path().join("transcript.jsonl");
+    let step1 = json!({
+        "step_index": 1,
+        "type": "GENERIC",
+        "content": "Command exited with code 0.\n\nCommand output:\nOn branch main\n"
+    });
+    fs::write(&transcript_bash, format!("{step1}\n")).expect("write transcript");
+    let post_bash = json!({
+        "conversationId": "conv-bash",
+        "workspacePaths": [repo_bash.path().to_string_lossy()],
+        "transcriptPath": transcript_bash.to_string_lossy(),
+        "toolCall": {
+            "name": "run_command",
+            "args": {"CommandLine": "git status"}
+        }
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &post_bash.to_string(),
+            repo_bash.path(),
+        ),
+        "{}\n",
+        "agy non-gate run_command",
+    );
+    let evs_bash = read_events(repo_bash.path());
+    assert_eq!(evs_bash.len(), 1);
+    assert_eq!(evs_bash[0]["kind"], "tool");
+    assert_eq!(evs_bash[0]["tool"], "bash");
+    assert_eq!(evs_bash[0]["exit"], 0);
+    assert_eq!(evs_bash[0]["summary"], "git status");
+    assert_eq!(evs_bash[0]["session_id"], "conv-bash");
+}
+
+#[test]
+fn agy_non_command_toolcall_emits_tool_with_conversation_id() {
+    let repo = TempDir::new("agy-toolcall");
+    let read_ok = json!({
+        "conversationId": "conv-tool-42",
+        "workspacePaths": [repo.path().to_string_lossy()],
+        "toolCall": {
+            "name": "read_file",
+            "args": {"Path": "src/hook.rs", "StartLine": 1}
+        }
+    });
+    let grep_err = json!({
+        "conversationId": "conv-tool-42",
+        "workspacePaths": [repo.path().to_string_lossy()],
+        "error": "path does not exist",
+        "toolCall": {
+            "name": "grep_search",
+            "args": {"Query": "agy_transcript_outcome"}
+        }
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &read_ok.to_string(),
+            repo.path(),
+        ),
+        "{}\n",
+        "agy read_file",
+    );
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &grep_err.to_string(),
+            repo.path(),
+        ),
+        "{}\n",
+        "agy grep_search error",
+    );
+    let evs = read_events(repo.path());
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[0]["kind"], "tool");
+    assert_eq!(evs[0]["tool"], "read_file");
+    assert_eq!(evs[0]["phase"], "end");
+    assert!(evs[0]["exit"].is_null());
+    assert_eq!(evs[0]["summary"], "src/hook.rs");
+    assert_eq!(evs[0]["session_id"], "conv-tool-42");
+    assert_eq!(evs[0]["host"], "agy");
+
+    assert_eq!(evs[1]["tool"], "grep_search");
+    assert_eq!(evs[1]["exit"], 1, "顶层 error 映射 exit=1");
+    assert_eq!(evs[1]["summary"], "agy_transcript_outcome");
+    assert_eq!(evs[1]["session_id"], "conv-tool-42");
+}
+
+#[test]
+fn agy_subagent_dispatch_and_child_stop_completion_lifecycle() {
+    let repo = TempDir::new("agy-subagent");
+    let ws = [repo.path().to_string_lossy()];
+    let pre_read = json!({
+        "conversationId": "parent-1",
+        "workspacePaths": ws,
+        "toolCall": {"name": "read_file", "args": {"Path": "Cargo.toml"}}
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "pretooluse"],
+            &pre_read.to_string(),
+            repo.path(),
+        ),
+        "{\"decision\":\"allow\"}\n",
+        "agy pre read_file",
+    );
+    assert!(!events_path(repo.path()).exists());
+
+    let pre_dispatch = json!({
+        "conversationId": "parent-1",
+        "workspacePaths": ws,
+        "toolCall": {
+            "name": "invoke_subagent",
+            "args": {
+                "TypeName": "self",
+                "Role": "Hook Adapter Dev",
+                "Prompt": "Implement Antigravity hook adapter"
+            }
+        }
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "pretooluse"],
+            &pre_dispatch.to_string(),
+            repo.path(),
+        ),
+        "{\"decision\":\"allow\"}\n",
+        "agy pre invoke_subagent",
+    );
+    let evs = read_events(repo.path());
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["event"], "dispatched");
+    assert_eq!(evs[0]["who"], "Hook Adapter Dev");
+    assert_eq!(evs[0]["task"], "Implement Antigravity hook adapter");
+    assert_eq!(evs[0]["session_id"], "parent-1");
+
+    // 父会话自身 Stop(is_dispatcher=true)及子会话 fullyIdle=false 不得发 completed
+    for stop_early in [
+        json!({"conversationId": "parent-1", "workspacePaths": ws, "fullyIdle": true}),
+        json!({"conversationId": "child-1", "workspacePaths": ws, "fullyIdle": false}),
+    ] {
+        assert_agy_stdout(
+            &feed(
+                &["hook", "--host", "agy", "stop"],
+                &stop_early.to_string(),
+                repo.path(),
+            ),
+            "{\"decision\":\"stop\"}\n",
+            "early stop",
+        );
+    }
+    assert_eq!(read_events(repo.path()).len(), 1);
+
+    // 子会话 fullyIdle=true 追加匿名 completed;重复 Stop 与无在途派发会话 Stop 均幂等不增行
+    let child_stop = json!({"conversationId": "child-1", "workspacePaths": ws, "fullyIdle": true});
+    let other_stop = json!({"conversationId": "other-2", "workspacePaths": ws, "fullyIdle": true});
+    for payload in [&child_stop, &child_stop, &other_stop] {
+        assert_agy_stdout(
+            &feed(
+                &["hook", "--host", "agy", "stop"],
+                &payload.to_string(),
+                repo.path(),
+            ),
+            "{\"decision\":\"stop\"}\n",
+            "child/duplicate/unrelated stop",
+        );
+    }
+    let evs = read_events(repo.path());
+    assert_eq!(evs.len(), 2, "恰一条 dispatched + 一条幂等匿名 completed");
+    assert_eq!(evs[1]["kind"], "agent");
+    assert_eq!(evs[1]["event"], "completed");
+    assert!(evs[1].get("who").is_none());
+    assert_eq!(evs[1]["session_id"], "child-1");
+    assert_eq!(evs[1]["host"], "agy");
+}
+
+#[test]
+fn agy_step_none_session_isolation_and_subagent_who_fallbacks() {
+    let repo = TempDir::new("agy-edges");
+    let transcript = repo.path().join("transcript.jsonl");
+    let lines = [
+        json!({
+            "step_index": 2,
+            "type": "GENERIC",
+            "content": "Command exited with code 137.\n\nCommand output:\n   \n"
+        })
+        .to_string(),
+        json!({
+            "step_index": 3,
+            "type": "GENERIC",
+            "content": "Showing lines 1-10 of 10\n1: fn main() {}"
+        })
+        .to_string(),
+    ];
+    fs::write(&transcript, format!("{}\n", lines.join("\n"))).expect("write transcript");
+
+    let ws = [repo.path().to_string_lossy()];
+    let post_a = json!({
+        "conversationId": "conv-A",
+        "workspacePaths": ws,
+        "transcriptPath": transcript.to_string_lossy(),
+        "toolCall": {"name": "run_command", "args": {"command": "cargo test"}}
+    });
+    let post_b = json!({
+        "conversationId": "conv-B",
+        "workspacePaths": ws,
+        "tool_response": {"status": 0, "stdout": "all good\n"},
+        "toolCall": {"name": "run_command", "args": {"CommandLine": "go test ./..."}}
+    });
+    for post in [&post_a, &post_b] {
+        assert_agy_stdout(
+            &feed(
+                &["hook", "--host", "agy", "posttooluse"],
+                &post.to_string(),
+                repo.path(),
+            ),
+            "{}\n",
+            "concurrent post",
+        );
+    }
+
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &json!({"conversationId": "conv-A", "workspacePaths": ws}).to_string(),
+            repo.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "conv-A stop",
+    );
+    assert!(pending_path(repo.path()).exists(), "conv-B 槽仍保留");
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &json!({"conversationId": "conv-B", "workspacePaths": ws}).to_string(),
+            repo.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "conv-B stop",
+    );
+
+    let cases = [
+        (json!({"TypeName": "research"}), "research"),
+        (json!({}), "agent"),
+    ];
+    for (args, _) in &cases {
+        let pre = json!({
+            "conversationId": "conv-A",
+            "workspacePaths": ws,
+            "toolCall": {"name": "invoke_subagent", "args": args}
+        });
+        assert_agy_stdout(
+            &feed(
+                &["hook", "--host", "agy", "pretooluse"],
+                &pre.to_string(),
+                repo.path(),
+            ),
+            "{\"decision\":\"allow\"}\n",
+            "invoke_subagent fallback",
+        );
+    }
+
+    let evs = read_events(repo.path());
+    assert_eq!(evs.len(), 6);
+    assert_eq!(evs[2]["state"], "failed");
+    assert_eq!(evs[2]["exit"], 137);
+    assert_eq!(evs[2]["detail"], "exit 137");
+    assert_eq!(evs[3]["state"], "passed");
+    assert_eq!(evs[3]["exit"], 0);
+    assert_eq!(evs[4]["who"], cases[0].1);
+    assert_eq!(evs[5]["who"], cases[1].1);
+}
