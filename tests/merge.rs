@@ -987,8 +987,14 @@ fn project_follows_git_root_then_cwd_fallback() {
     let plain = next_dir("plain-proj");
     fs::create_dir_all(&plain).expect("create plain dir");
     let dash = model::merge(&plain);
+    let cwd_name = std::env::current_dir()
+        .expect("cwd")
+        .file_name()
+        .expect("cwd dir name")
+        .to_string_lossy()
+        .into_owned();
     assert_eq!(
-        dash.project, "agentdash",
+        dash.project, cwd_name,
         "非 git 仓回退 cwd 目录名(测试进程 cwd = crate 根)"
     );
     cleanup(&plain);
@@ -1116,7 +1122,15 @@ fn anonymous_completed_projects_inferred_and_no_infer_is_strict() {
         .unwrap();
     let bob = dash.agents.iter().find(|agent| agent.who == "bob").unwrap();
     assert!(alice.inferred, "最老在跑 alice 被推断配对(完成侧)");
+    assert_eq!(
+        alice.since, "2026-09-16T09:02:00Z",
+        "W12-delta A③:推断完成行的 since 展示完成时刻"
+    );
     assert!(!bob.inferred, "bob 照常在跑");
+    assert_eq!(
+        bob.since, "2026-09-16T09:01:00Z",
+        "真在跑行的 since 仍为派发时刻"
+    );
     assert_eq!(
         dash.running_agents(),
         1,
@@ -1134,5 +1148,46 @@ fn anonymous_completed_projects_inferred_and_no_infer_is_strict() {
         "严格路径无推断行"
     );
     assert_eq!(strict.running_agents(), 2);
+    cleanup(&repo);
+}
+
+/// W12-delta A③:推断配对行 `AgentView.since` 的回退与复活语义——
+/// 匿名 `completed` 缺 `ts` 时回退 `first_seen`;同 `who` 再派复活后还原为 `first_seen`。
+#[test]
+fn inferred_agent_since_falls_back_to_first_seen_and_reverts_on_redispatch() {
+    const EVENTS: &str = concat!(
+        r#"{"kind":"agent","event":"dispatched","who":"alice","ts":"2026-09-16T09:00:00Z"}"#,
+        "\n",
+        r#"{"kind":"agent","event":"dispatched","who":"bob","ts":"2026-09-16T09:01:00Z"}"#,
+        "\n",
+        // alice 被无 ts 的匿名 completed 配对 → 回退 first_seen
+        r#"{"kind":"agent","event":"completed"}"#,
+        "\n",
+        // bob 先被带 ts 的匿名 completed 配对,随后同 who 再派复活 → 还原 first_seen
+        r#"{"kind":"agent","event":"completed","ts":"2026-09-16T09:05:00Z"}"#,
+        "\n",
+        r#"{"kind":"agent","event":"dispatched","who":"bob","task":"rerun","ts":"2026-09-16T09:10:00Z"}"#,
+        "\n",
+    );
+    let repo = fixture_repo("infer-since");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER).expect("write ledger.json");
+    fs::write(dir.join("events.jsonl"), EVENTS).expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+    let alice = dash.agents.iter().find(|a| a.who == "alice").unwrap();
+    let bob = dash.agents.iter().find(|a| a.who == "bob").unwrap();
+
+    assert!(alice.inferred);
+    assert_eq!(
+        alice.since, "2026-09-16T09:00:00Z",
+        "匿名 completed 缺 ts 时回退 first_seen"
+    );
+    assert!(!bob.inferred, "同 who 再派复活后不再是 inferred");
+    assert_eq!(
+        bob.since, "2026-09-16T09:01:00Z",
+        "同 who 再派复活后还原为首次派发戳 first_seen"
+    );
     cleanup(&repo);
 }
