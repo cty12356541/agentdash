@@ -88,6 +88,10 @@
             "type": "string",
             "description": "附加说明(如 fix round 2/5)。"
           },
+          "started_at": {
+            "type": "string",
+            "description": "开始自报时刻(W14-03,可选):RFC 3339 / ISO 8601 串;与 done_at 配对供任务周转时长统计消费,内核原样穿透不作真伪判定,旧台账缺省兼容。"
+          },
           "done_at": {
             "type": "string",
             "description": "完成自报时刻(W5-001,可选):RFC 3339 串;写回 d 键自动盖章,离开 done 摘除。内核不作真伪判定,渲染层与事件窗交叉核对出物证 ? 标记(自报无物证)。"

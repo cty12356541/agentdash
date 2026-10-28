@@ -109,6 +109,10 @@ pub struct TaskSpec {
     /// 附加说明(如 `fix round 2/5`)。
     #[serde(default)]
     pub note: Option<String>,
+    /// 开始自报时刻(W14-03,可选):RFC 3339 / ISO 8601 串;与 `done_at` 同契约口径,
+    /// 内核原样穿透不作真伪判定,供任务周转时长统计等下游消费。
+    #[serde(default)]
+    pub started_at: Option<String>,
     /// 完成自报时刻(W5-001,可选):RFC 3339 串;写回 `d` 键自动盖章。
     /// 内核不作真伪判定,仅供渲染层与事件窗交叉核对(物证 `?` 标记)。
     #[serde(default)]
