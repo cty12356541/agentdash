@@ -63,6 +63,7 @@ fn w25_dash() -> Dashboard {
             title: "并行车道冲刺".into(),
             done: 4,
             total: 4,
+            tasks: Vec::new(),
         }],
         warnings: Vec::new(),
         barriers: w25_barriers(),

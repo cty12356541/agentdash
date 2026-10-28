@@ -642,18 +642,21 @@ fn declared_milestones_group_tasks_first_wins_with_ungrouped_tail() {
                 title: "契约扩展".to_owned(),
                 done: 2,
                 total: 2,
+                tasks: vec!["01".to_owned(), "02".to_owned(), "99".to_owned()],
             },
             MilestoneView {
                 wave: Some("M2".to_owned()),
                 title: "渲染接线".to_owned(),
                 done: 0,
                 total: 1,
+                tasks: vec!["02".to_owned(), "03".to_owned()],
             },
             MilestoneView {
                 wave: None,
                 title: "未分组".to_owned(),
                 done: 1,
                 total: 1,
+                tasks: Vec::new(),
             },
         ],
         "M1(01,02;未知 99 静默跳过)→ M2(02 重复以首见为准,只收 03)→ 未分组尾组(04)"
@@ -738,6 +741,7 @@ fn velocity_needs_two_milestones_and_positive_span() {
         title: String::new(),
         done,
         total,
+        tasks: Vec::new(),
     };
     // 双里程碑 + 2h 跨度 + 3 done → 1.5 tasks/h(中间戳不影响 max/min)
     let tasks = vec![
@@ -799,6 +803,7 @@ fn velocity_prefers_qualifying_event_window() {
         title: String::new(),
         done,
         total,
+        tasks: Vec::new(),
     };
     // 任务 since 跨度 10h:若误用会得 3/10 = 0.3 而非事件窗口径
     let tasks = vec![

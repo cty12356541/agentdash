@@ -75,6 +75,9 @@ pub struct MilestoneView {
     pub done: usize,
     /// 任务总数。
     pub total: usize,
+    /// 声明式里程碑的任务 `id` 列表(W14-06:来自 `ledger.milestones` 原样克隆,
+    /// 供 TUI 波次切换精确过滤异构 id;合成单里程碑与「未分组」尾组为空)。
+    pub tasks: Vec<String>,
 }
 
 impl MilestoneView {
@@ -180,6 +183,7 @@ pub struct Dashboard {
 /// `events.jsonl`,并对目录做 git 快照),按 契约 > 事件 > git 可信序折叠。
 ///
 /// 任何单源损坏都不 `panic`、不失败:降级为警告行,其余源照常。
+#[allow(dead_code)]
 #[must_use]
 pub fn merge(repo: &Path) -> Dashboard {
     merge_opts(repo, true)
@@ -205,9 +209,17 @@ impl Dashboard {
 /// [`merge`] 的分级刷新变体(watch 30s 节流档,W1-007):git 快照由调用方
 /// 注入,使最重的 git 探测能压到 30s 边界、其余源照常按 interval 档重建;
 /// 合并语义与 [`merge`] 完全一致(启发缺省开启)。
+#[allow(dead_code)]
 #[must_use]
 pub fn merge_with_git(repo: &Path, git: GitFacts) -> Dashboard {
-    build(repo, git, true)
+    merge_with_git_opts(repo, git, true)
+}
+
+/// [`merge_with_git`] 的旗标变体(W14-06 `watch --no-infer`):git 快照由
+/// 调用方注入,同时将 `infer` 透传事件重放。
+#[must_use]
+pub fn merge_with_git_opts(repo: &Path, git: GitFacts, infer: bool) -> Dashboard {
+    build(repo, git, infer)
 }
 
 /// 三入口共用折叠核(W11-003 起):`infer` 只透传事件重放(契约/git 源
@@ -555,6 +567,7 @@ fn milestone_views(ledger: &contract::Ledger) -> (Vec<MilestoneView>, Vec<String
             title: milestone.title.clone(),
             done,
             total,
+            tasks: milestone.tasks.clone(),
         });
     }
     let ungrouped: Vec<&String> = ledger
@@ -572,6 +585,7 @@ fn milestone_views(ledger: &contract::Ledger) -> (Vec<MilestoneView>, Vec<String
             title: "未分组".to_owned(),
             done,
             total: ungrouped.len(),
+            tasks: Vec::new(),
         });
     }
     (views, warnings)
@@ -589,6 +603,7 @@ fn milestone_of(ledger: &contract::Ledger) -> MilestoneView {
         title: ledger.title.clone(),
         done,
         total: ledger.tasks.len(),
+        tasks: Vec::new(),
     }
 }
 
