@@ -81,6 +81,7 @@ fn agent_dispatch_completed_pairing() {
                 first_seen: "2026-09-13T21:00:00+08:00".to_string(),
                 host: None,
                 inferred: false,
+                completed_at: None,
             },
             AgentEntry {
                 who: "reviewer-1".to_string(),
@@ -88,6 +89,7 @@ fn agent_dispatch_completed_pairing() {
                 first_seen: "2026-09-13T21:05:00+08:00".to_string(),
                 host: None,
                 inferred: false,
+                completed_at: None,
             },
         ]
     );
@@ -112,6 +114,7 @@ fn hook_agent_line_with_only_who_lands_in_active_table() {
             first_seen: "2026-09-13T21:00:00+08:00".to_string(),
             host: None,
             inferred: false,
+            completed_at: None,
         }]
     );
     assert_eq!(model.warnings, [] as [std::string::String; 0]);
@@ -380,6 +383,7 @@ fn anonymous_completed_pairs_oldest_running() {
                 first_seen: "T1".to_string(),
                 host: None,
                 inferred: true,
+                completed_at: Some("T3".to_string()),
             },
             AgentEntry {
                 who: "b".to_string(),
@@ -387,6 +391,7 @@ fn anonymous_completed_pairs_oldest_running() {
                 first_seen: "T2".to_string(),
                 host: None,
                 inferred: false,
+                completed_at: None,
             },
         ],
         "最老在跑 a 被推断配对(标 inferred),b 照常在跑"
@@ -443,6 +448,7 @@ fn anonymous_completed_without_running_row_keeps_drop_warning() {
             first_seen: "T2".to_string(),
             host: None,
             inferred: true,
+            completed_at: Some("T3".to_string()),
         }],
         "T3 配掉 a;T1/T4 无在跑可配,原样丢弃"
     );
@@ -479,6 +485,7 @@ fn no_infer_keeps_strict_drop_and_per_line_warnings() {
             first_seen: "T1".to_string(),
             host: None,
             inferred: false,
+            completed_at: None,
         }],
         "严格丢弃:a 仍真在跑"
     );
@@ -527,6 +534,7 @@ fn redispatch_after_inferred_reactivates_row() {
             first_seen: "T1".to_string(),
             host: None,
             inferred: true,
+            completed_at: Some("T4".to_string()),
         }],
         "再派复活后又被 T4 推断配对"
     );
@@ -560,5 +568,76 @@ fn inferred_pairing_lands_in_tail_attributed_to_paired_who() {
         tail,
         [("agent", "a", "dispatched"), ("agent", "a", "completed"),],
         "推断配对的 completed 以被配对 who 入尾"
+    );
+}
+
+#[test]
+fn inferred_completed_at_tracks_ts_absent_and_redispatch_clear() {
+    // W12-delta A③:completed_at 从匿名 completed 的 ts 填充;缺 ts 或空串为 None;
+    // 同 who 再派复活时清回 None,且 first_seen 保持首次派发戳
+    let model = replay_strs(&[
+        r#"{"ts":"T1","kind":"agent","event":"dispatched","who":"a"}"#,
+        r#"{"ts":"T2","kind":"agent","event":"dispatched","who":"b"}"#,
+        r#"{"ts":"T3","kind":"agent","event":"dispatched","who":"c"}"#,
+        r#"{"ts":"T4","kind":"agent","event":"completed"}"#,
+        r#"{"kind":"agent","event":"completed"}"#,
+        r#"{"ts":"","kind":"agent","event":"completed"}"#,
+    ]);
+    assert_eq!(model.agents[0].completed_at.as_deref(), Some("T4"));
+    assert_eq!(
+        model.agents[1].completed_at, None,
+        "匿名 completed 缺 ts 时 completed_at 记 None"
+    );
+    assert_eq!(
+        model.agents[2].completed_at, None,
+        "匿名 completed 空串 ts 同样记 None"
+    );
+
+    // 再派复活:inferred 置 false,completed_at 清回 None,first_seen 保留 T1
+    let reactivated = replay_strs(&[
+        r#"{"ts":"T1","kind":"agent","event":"dispatched","who":"a"}"#,
+        r#"{"ts":"T2","kind":"agent","event":"completed"}"#,
+        r#"{"ts":"T3","kind":"agent","event":"dispatched","who":"a","task":"retry"}"#,
+    ]);
+    assert_eq!(
+        reactivated.agents,
+        vec![AgentEntry {
+            who: "a".to_string(),
+            task: Some("retry".to_string()),
+            first_seen: "T1".to_string(),
+            host: None,
+            inferred: false,
+            completed_at: None,
+        }],
+        "同 who 再派复活清回 completed_at,first_seen 保留首见"
+    );
+}
+
+#[test]
+fn inferred_summary_warning_switches_zh_and_en() {
+    // W12-delta A④:纯函数直测双语汇总文案,避免单测并发 set_var 竞态
+    assert_eq!(
+        events::inferred_summary_warning(1, None),
+        "1 个无 who completed 已推断配对"
+    );
+    assert_eq!(
+        events::inferred_summary_warning(2, Some("zh-CN")),
+        "2 个无 who completed 已推断配对"
+    );
+    assert_eq!(
+        events::inferred_summary_warning(3, Some("")),
+        "3 个无 who completed 已推断配对"
+    );
+    assert_eq!(
+        events::inferred_summary_warning(1, Some("en")),
+        "1 anonymous completed events paired by inference"
+    );
+    assert_eq!(
+        events::inferred_summary_warning(2, Some("en_US")),
+        "2 anonymous completed events paired by inference"
+    );
+    assert_eq!(
+        events::inferred_summary_warning(4, Some(" EN-gb ")),
+        "4 anonymous completed events paired by inference"
     );
 }

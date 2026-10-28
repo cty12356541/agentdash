@@ -71,9 +71,10 @@ pub fn render_digest(dash: &Dashboard) -> String {
     lines.join("\n")
 }
 
-/// `--strict` 判据(本仓首个内容性退出码的数据面):存在 failed gate
-/// **或** blocked 任务 → `true`(调用方退 1,否则 0)。谓词与
-/// [`render_digest`] 的节过滤同源;渲染归渲染,退出码在 cmd 层收口。
+/// `--strict` 判据(本仓首个内容性退出码的数据面):存在 failed gate、
+/// blocked 任务**或**降级警告(`!dash.warnings.is_empty()`)→ `true`
+/// (调用方退 1,否则 0)。谓词与 [`render_digest`] 的告警节同源;渲染归
+/// 渲染,退出码在 cmd 层收口。
 #[must_use]
 pub fn digest_needs_attention(dash: &Dashboard) -> bool {
     dash.gates.iter().any(|gate| gate.state == "failed")
@@ -81,4 +82,5 @@ pub fn digest_needs_attention(dash: &Dashboard) -> bool {
             .tasks
             .iter()
             .any(|task| visual(task.state) == Visual::Blocked)
+        || !dash.warnings.is_empty()
 }

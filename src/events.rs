@@ -59,6 +59,10 @@ pub struct AgentEntry {
     /// 计数走完成侧不占在跑(显示真相,不是新状态);同 who 再派即复活
     /// 置回 `false`。严格路径(`--no-infer`)恒 `false`。
     pub inferred: bool,
+    /// W12-delta A③:被匿名 `completed` 推断配对时的完成 `ts` 原串(缺省/空串为
+    /// [`None`]);显示层在 `inferred` 为真时优先取本时刻(缺失回退
+    /// [`Self::first_seen`]),同 `who` 再派复活时清回 [`None`]。
+    pub completed_at: Option<String>,
 }
 
 /// 事件尾容量(W4-002):详情面板只看最近 10 条,超限截旧。
@@ -181,14 +185,28 @@ pub fn replay_infer(lines: impl Iterator<Item = String>, infer: bool) -> EventMo
             )),
         }
     }
-    // 警告降频(W11-003):凡发生推断配对,配对成功的逐行警告一律不发,
-    // 回放收尾一条汇总(未配对的逐行警告照常在各自到达位)
+    // 警告降频(W11-003;W12-delta A④ 双语化):凡发生推断配对,配对成功的逐行
+    // 警告一律不发,回放收尾一条汇总(未配对的逐行警告照常在各自到达位)
     if inferred_pairs > 0 {
-        model
-            .warnings
-            .push(format!("{inferred_pairs} 个无 who completed 已推断配对"));
+        model.warnings.push(inferred_summary_warning(
+            inferred_pairs,
+            std::env::var("AGENTDASH_LANG").ok().as_deref(),
+        ));
     }
     model
+}
+
+/// 推断配对汇总警告文案(W12-delta A④):随 `AGENTDASH_LANG` 切换中英双语;
+/// 入口收口为 `Option<&str>` 供单测直调(避开并发 `set_var` 竞态,且不引入
+/// `crate::lang` 保持集成测试零额外挂载依赖)。
+#[must_use]
+pub fn inferred_summary_warning(count: usize, lang_code: Option<&str>) -> String {
+    match lang_code {
+        Some(c) if c.trim().to_ascii_lowercase().starts_with("en") => {
+            format!("{count} anonymous completed events paired by inference")
+        }
+        _ => format!("{count} 个无 who completed 已推断配对"),
+    }
 }
 
 fn apply_gate(model: &mut EventModel, raw: RawEvent, line_no: usize) {
@@ -303,10 +321,11 @@ fn apply_agent(
             );
             match model.agents.iter_mut().find(|a| a.who == who) {
                 // host 保留首见(D2:再派刷新 task 注记不改归属);
-                // 再派复活(W11-003):推断完成行回到真在跑
+                // 再派复活(W11-003 / W12-delta A③):推断完成行回到真在跑,清回完成时刻
                 Some(entry) => {
                     entry.task = raw.task;
                     entry.inferred = false;
+                    entry.completed_at = None;
                 }
                 None => model.agents.push(AgentEntry {
                     who,
@@ -314,6 +333,7 @@ fn apply_agent(
                     first_seen: raw.ts.unwrap_or_default(),
                     host: raw.host,
                     inferred: false,
+                    completed_at: None,
                 }),
             }
             *model.host_events.entry(host).or_default() += 1;
@@ -357,6 +377,7 @@ fn infer_pair(
         return;
     };
     entry.inferred = true;
+    entry.completed_at = raw.ts.clone().filter(|s| !s.is_empty());
     *inferred_pairs += 1;
     *model.host_events.entry(host.to_owned()).or_default() += 1;
     push_tail(

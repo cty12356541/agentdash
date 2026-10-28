@@ -231,12 +231,16 @@ fn digest_done_section_carries_done_at_and_question_marker() {
     assert!(!out.contains(" ?"), "无事件窗不作怀疑: {out}");
 }
 
-/// --strict 判据(本仓首个内容性退出码的数据面):failed gate **或**
-/// blocked 任务在场 → `true`;两者皆无 → `false`(passed 门/done 任务不算)。
+/// `--strict` 判据(本仓首个内容性退出码的数据面):failed gate、blocked 任务
+/// **或** `warnings` 非空(契约缺失/损坏、事件坏行等降级告警)在场 → `true`;
+/// 全无 → `false`(passed 门/done 任务不算)。
 #[test]
 fn needs_attention_matches_failed_gate_or_blocked_only() {
     let mut dash = quiet_dash();
-    assert!(!digest_needs_attention(&dash), "无失败门无 blocked → false");
+    assert!(
+        !digest_needs_attention(&dash),
+        "无失败门无 blocked 无警告 → false"
+    );
     dash.gates = vec![gate("build", "passed", "")];
     assert!(!digest_needs_attention(&dash), "passed 门不触发 --strict");
     dash.gates = vec![gate("lint", "failed", "boom")];
@@ -244,6 +248,9 @@ fn needs_attention_matches_failed_gate_or_blocked_only() {
     dash.gates = Vec::new();
     dash.tasks = vec![task("T1", "阻塞任务", TaskState::Blocked, None)];
     assert!(digest_needs_attention(&dash), "blocked 任务 → true");
+    dash.tasks = vec![task("T1", "唯一任务", TaskState::Pending, None)];
+    dash.warnings = vec!["line 1: invalid JSON, line dropped".to_owned()];
+    assert!(digest_needs_attention(&dash), "warnings 非空 → true");
 }
 
 // ---------------------------------------------------------------- 退出码面
@@ -398,4 +405,99 @@ fn digest_unknown_failed_gate_carries_third_state() {
         "digest 同源第三态:\n{text}"
     );
     assert!(!text.contains("✗ cargo-fmt"), "无证据不得渲染真失败 ✗");
+}
+
+/// W12-delta B①:`render digest --strict` 在存在降级警告(`⚠`)时同样退 1
+/// (如 `events.jsonl` 含坏行、`ledger.json` 缺失或损坏);不带 `--strict`
+/// 恒退 0(摘要照常带 `⚠` 行输出)。
+#[test]
+fn cli_strict_exits_one_on_warnings_while_non_strict_exits_zero() {
+    // 1. events.jsonl 含坏行 → 产生 line N 警告
+    let bad_events = TempDir::new("bad-events");
+    fs::write(
+        bad_events.path().join(".agentdash/ledger.json"),
+        CLEAN_LEDGER,
+    )
+    .expect("write ledger");
+    fs::write(
+        bad_events.path().join(".agentdash/events.jsonl"),
+        "not-json-at-all\n",
+    )
+    .expect("write malformed events");
+    let bad_events_path = bad_events.path().to_str().expect("utf8 path");
+
+    let strict_out = run(&["render", "digest", "--strict", bad_events_path]);
+    assert_eq!(
+        strict_out.status.code(),
+        Some(1),
+        "坏事件行产生 ⚠ 时 --strict 应退 1: {}",
+        String::from_utf8_lossy(&strict_out.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&strict_out.stdout).contains("⚠ line 1: invalid JSON"),
+        "摘要应携带 ⚠ 警告行"
+    );
+
+    let plain_out = run(&["render", "digest", bad_events_path]);
+    assert_eq!(plain_out.status.code(), Some(0), "不带 --strict 恒退 0");
+    assert!(
+        String::from_utf8_lossy(&plain_out.stdout).contains("⚠ line 1: invalid JSON"),
+        "不带 --strict 同样输出 ⚠ 警告行"
+    );
+
+    // 2. ledger.json 缺失(events 在场)→ 产生 missing ledger.json 警告
+    let missing_ledger = TempDir::new("missing-ledger");
+    fs::write(
+        missing_ledger.path().join(".agentdash/events.jsonl"),
+        r#"{"kind":"gate","gate":"build","state":"passed"}"#,
+    )
+    .expect("write passed gate events");
+    let missing_path = missing_ledger.path().to_str().expect("utf8 path");
+
+    let strict_out = run(&["render", "digest", "--strict", missing_path]);
+    assert_eq!(
+        strict_out.status.code(),
+        Some(1),
+        "缺失台账产生 ⚠ 时 --strict 应退 1: {}",
+        String::from_utf8_lossy(&strict_out.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&strict_out.stdout).contains("⚠ missing ledger.json"),
+        "摘要应携带缺失台账 ⚠ 警告"
+    );
+
+    let plain_out = run(&["render", "digest", missing_path]);
+    assert_eq!(
+        plain_out.status.code(),
+        Some(0),
+        "缺失台账不带 --strict 恒退 0"
+    );
+
+    // 3. ledger.json 损坏 → 产生 corrupt ledger.json 警告
+    let corrupt_ledger = TempDir::new("corrupt-ledger");
+    fs::write(
+        corrupt_ledger.path().join(".agentdash/ledger.json"),
+        "{ not valid json",
+    )
+    .expect("write corrupt ledger");
+    let corrupt_path = corrupt_ledger.path().to_str().expect("utf8 path");
+
+    let strict_out = run(&["render", "digest", "--strict", corrupt_path]);
+    assert_eq!(
+        strict_out.status.code(),
+        Some(1),
+        "损坏台账产生 ⚠ 时 --strict 应退 1: {}",
+        String::from_utf8_lossy(&strict_out.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&strict_out.stdout).contains("⚠ corrupt ledger.json"),
+        "摘要应携带损坏台账 ⚠ 警告"
+    );
+
+    let plain_out = run(&["render", "digest", corrupt_path]);
+    assert_eq!(
+        plain_out.status.code(),
+        Some(0),
+        "损坏台账不带 --strict 恒退 0"
+    );
 }

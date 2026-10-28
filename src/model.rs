@@ -350,7 +350,11 @@ fn event_views(model: events::EventModel) -> EventViews {
         .map(|agent| AgentView {
             who: agent.who,
             task: agent.task,
-            since: agent.first_seen,
+            since: if agent.inferred {
+                agent.completed_at.unwrap_or(agent.first_seen)
+            } else {
+                agent.first_seen
+            },
             host: agent.host,
             inferred: agent.inferred,
         })
