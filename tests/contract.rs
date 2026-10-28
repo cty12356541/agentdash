@@ -380,3 +380,186 @@ fn done_at_passthrough_and_absent() {
     );
     assert_eq!(ledger.tasks["2"].done_at, None, "缺省为 None(加法兼容)");
 }
+
+// --------------------------------------------------------- started_at(W14-03)
+
+#[test]
+fn started_at_passthrough_across_iso_formats() {
+    let ledger = parse_ledger(
+        r#"{"title":"w14","tasks":{
+            "1":{"label":"offset","state":"active","started_at":"2026-10-28T09:00:00+08:00"},
+            "2":{"label":"utc-z","state":"done","started_at":"2026-10-28T01:00:00Z","done_at":"2026-10-28T02:30:00Z"},
+            "3":{"label":"space-offset","state":"active","started_at":"2026-10-28 09:00:00+08:00"},
+            "4":{"label":"space-local","state":"active","started_at":"2026-10-28 09:00:00"},
+            "5":{"label":"basic-offset","state":"done","started_at":"2026-10-28T09:00:00+0800"}
+        }}"#,
+    )
+    .expect("合法 started_at 多形态时间串必须解析");
+
+    assert!(
+        ledger.warnings.is_empty(),
+        "合法 started_at 不得产生警告: {:?}",
+        ledger.warnings
+    );
+    assert_eq!(
+        ledger.tasks["1"].started_at.as_deref(),
+        Some("2026-10-28T09:00:00+08:00")
+    );
+    assert_eq!(ledger.tasks["1"].done_at, None);
+
+    assert_eq!(
+        ledger.tasks["2"].started_at.as_deref(),
+        Some("2026-10-28T01:00:00Z")
+    );
+    assert_eq!(
+        ledger.tasks["2"].done_at.as_deref(),
+        Some("2026-10-28T02:30:00Z")
+    );
+
+    assert_eq!(
+        ledger.tasks["3"].started_at.as_deref(),
+        Some("2026-10-28 09:00:00+08:00")
+    );
+    assert_eq!(
+        ledger.tasks["4"].started_at.as_deref(),
+        Some("2026-10-28 09:00:00")
+    );
+    assert_eq!(
+        ledger.tasks["5"].started_at.as_deref(),
+        Some("2026-10-28T09:00:00+0800")
+    );
+}
+
+#[test]
+fn legacy_v1_ledger_without_started_at_parses_identically() {
+    let ledger = parse_ledger(FULL).expect("v1.0 黄金台账向后兼容");
+    assert!(
+        ledger.warnings.is_empty(),
+        "v1.0 台账缺省 started_at 不得告警: {:?}",
+        ledger.warnings
+    );
+    assert_eq!(ledger.tasks.len(), 6);
+    for id in ["1", "2", "3", "4", "5", "6"] {
+        assert_eq!(
+            ledger.tasks[id].started_at, None,
+            "v1.0 任务 {id} 未声明 started_at 必须为 None"
+        );
+        assert_eq!(ledger.tasks[id].done_at, None);
+    }
+
+    let done_only = parse_ledger(
+        r#"{"$schema":"agentdash.tasklog.v1","title":"legacy","tasks":{
+            "09":{"label":"旧完成任务","state":"done","done_at":"2026-09-17T10:28:03+0800"}
+        }}"#,
+    )
+    .expect("仅含 done_at 的 v1.0 台账必须原样解析");
+    assert!(done_only.warnings.is_empty());
+    assert_eq!(done_only.tasks["09"].started_at, None);
+    assert_eq!(
+        done_only.tasks["09"].done_at.as_deref(),
+        Some("2026-09-17T10:28:03+0800")
+    );
+}
+
+#[test]
+fn invalid_or_edge_started_at_matches_done_at_discipline() {
+    // 1. 非字符串类型(整数/布尔/数组/对象):与 done_at 完全同律 → ContractError::Corrupt
+    for bad_json in ["123", "true", "[]", "{}"] {
+        let with_started = format!(
+            r#"{{"title":"t","tasks":{{"1":{{"label":"a","state":"active","started_at":{bad_json}}}}}}}"#
+        );
+        let with_done = format!(
+            r#"{{"title":"t","tasks":{{"1":{{"label":"a","state":"done","done_at":{bad_json}}}}}}}"#
+        );
+        assert_corrupt(&with_started);
+        assert_corrupt(&with_done);
+    }
+
+    // 2. null:与 done_at 完全同律 → 视同缺省 None,零警告
+    let null_started = parse_ledger(
+        r#"{"title":"t","tasks":{"1":{"label":"a","state":"active","started_at":null}}}"#,
+    )
+    .expect("started_at: null 视同缺省");
+    let null_done =
+        parse_ledger(r#"{"title":"t","tasks":{"1":{"label":"a","state":"done","done_at":null}}}"#)
+            .expect("done_at: null 视同缺省");
+    assert_eq!(null_started.tasks["1"].started_at, None);
+    assert_eq!(
+        null_started.tasks["1"].started_at,
+        null_done.tasks["1"].done_at
+    );
+    assert_eq!(null_started.warnings, null_done.warnings);
+    assert!(null_started.warnings.is_empty());
+
+    // 3. 空串与空白串:契约层与 done_at 完全同律 → 原样穿透且零警告(裁剪判空归下游消费端)
+    for raw in ["", "   "] {
+        let s_doc = format!(
+            r#"{{"title":"t","tasks":{{"1":{{"label":"a","state":"active","started_at":"{raw}"}}}}}}"#
+        );
+        let d_doc = format!(
+            r#"{{"title":"t","tasks":{{"1":{{"label":"a","state":"done","done_at":"{raw}"}}}}}}"#
+        );
+        let s_ledger = parse_ledger(&s_doc).expect("空/空白 started_at 不判 corrupt");
+        let d_ledger = parse_ledger(&d_doc).expect("空/空白 done_at 不判 corrupt");
+        assert_eq!(
+            s_ledger.tasks["1"].started_at, d_ledger.tasks["1"].done_at,
+            "started_at 与 done_at 对 `{raw}` 穿透结果必须一致"
+        );
+        assert_eq!(
+            s_ledger.tasks["1"].started_at.as_deref(),
+            Some(raw),
+            "契约层原样保留字符串"
+        );
+        assert_eq!(s_ledger.warnings, d_ledger.warnings);
+        assert!(s_ledger.warnings.is_empty());
+    }
+
+    // 4. 富态无 profile 降级时:started_at 与 done_at 一样保持原值不折损
+    let rich_started = parse_ledger(
+        r#"{"title":"t","tasks":{"1":{"label":"r","state":"review","started_at":"2026-10-28T09:00:00+08:00"}}}"#,
+    )
+    .expect("富态降级不报错");
+    let rich_done = parse_ledger(
+        r#"{"title":"t","tasks":{"1":{"label":"r","state":"review","done_at":"2026-10-28T09:00:00+08:00"}}}"#,
+    )
+    .expect("富态降级不报错");
+    assert_eq!(rich_started.tasks["1"].state, TaskState::Active);
+    assert_eq!(
+        rich_started.tasks["1"].started_at,
+        rich_done.tasks["1"].done_at
+    );
+    assert_eq!(rich_started.warnings, rich_done.warnings);
+}
+
+#[test]
+fn schema_declares_optional_started_at_alongside_done_at() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&schema_text()).expect("schema is valid JSON");
+    let tasks_def = resolve(&schema, &schema["properties"]["tasks"]);
+    let task_props = &tasks_def["additionalProperties"]["properties"];
+
+    assert_eq!(
+        task_props["started_at"]["type"], "string",
+        "schema 须声明 tasks.<id>.started_at 为 string"
+    );
+    let desc = task_props["started_at"]["description"]
+        .as_str()
+        .expect("started_at 须带中文说明");
+    assert!(!desc.trim().is_empty(), "started_at description 不可为空");
+    assert_eq!(
+        task_props["done_at"]["type"], "string",
+        "done_at 仍在侧对照"
+    );
+
+    let required: Vec<&str> = tasks_def["additionalProperties"]["required"]
+        .as_array()
+        .expect("task required list")
+        .iter()
+        .map(|v| v.as_str().expect("string key"))
+        .collect();
+    assert_eq!(required, vec!["label", "state"]);
+    assert!(
+        !required.contains(&"started_at"),
+        "started_at 是可选加法字段,绝不可入 required"
+    );
+}
