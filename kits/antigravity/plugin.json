@@ -1,7 +1,7 @@
 {
   "name": "agentdash",
   "displayName": "AgentDash Orchestrator",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Contract-driven multi-lane DAG task ledger, verification gate tracker, and terminal dashboard for Antigravity workspaces and subagents.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
