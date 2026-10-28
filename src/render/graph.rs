@@ -31,8 +31,6 @@ const HEAD_LINES: usize = 2;
 const BOX_ROW: usize = 3;
 const ZONE_ROW: usize = 2;
 const LAYER_PITCH: usize = BOX_ROW + ZONE_ROW;
-/// 画布宽(字符列表行缓冲)。
-const CANVAS_W: usize = 240;
 /// graph 视图默认宽(分隔线宽度)。
 pub const DEFAULT_GRAPH_WIDTH: usize = 72;
 
@@ -282,8 +280,15 @@ pub fn render_graph(dash: &Dashboard, width: usize) -> String {
         .map(String::as_str)
         .collect();
 
-    let mut canvas =
-        vec![vec![' '; CANVAS_W]; HEAD_LINES + 1 + LAYER_PITCH * layers.len().max(1) + 2];
+    let max_col = rows
+        .iter()
+        .flatten()
+        .map(|cell| cell.x + cell.width)
+        .max()
+        .unwrap_or(0);
+    let canvas_w = (max_col + 2).max(width).max(4);
+    let total_h = HEAD_LINES + 1 + LAYER_PITCH * layers.len().max(1) + 2;
+    let mut canvas = vec![vec![' '; canvas_w]; total_h];
     let (overlays, box_rows) = draw_node_boxes(&mut canvas, &rows, &by_id, &out_edge_parents);
     let in_box = |row: usize, col: usize| -> bool {
         box_rows
@@ -393,7 +398,8 @@ fn route_child_edges(
                 put(canvas, z, x, '┘', false);
             }
         }
-        if cell.center() < CANVAS_W && canvas[z][cell.center()] == '─' {
+        if z < canvas.len() && cell.center() < canvas[z].len() && canvas[z][cell.center()] == '─'
+        {
             canvas[z][cell.center()] = '│'; // 子中心是段端且无父列:接下笔
         }
         put(canvas, cell.line - 1, cell.center(), '▼', false); // 箭头嵌子框顶
@@ -461,7 +467,7 @@ pub fn hit_test(layers: &[Vec<Cell>], col: usize, row_1based: usize) -> Option<S
 
 /// 写一个画布格;`only_space` 时仅写入空白格(连线遇节点框/已有连线让路)。
 fn put(canvas: &mut [Vec<char>], row: usize, col: usize, ch: char, only_space: bool) -> bool {
-    if row < canvas.len() && col < CANVAS_W && (!only_space || canvas[row][col] == ' ') {
+    if row < canvas.len() && col < canvas[row].len() && (!only_space || canvas[row][col] == ' ') {
         canvas[row][col] = ch;
         true
     } else {

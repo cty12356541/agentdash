@@ -429,6 +429,161 @@ fn done_tasks_render_green_with_ansi() {
     assert!(out.contains('▼') && out.contains('│'), "连接符在位");
 }
 
+#[test]
+fn wide_layer_past_240_cols_renders_all_boxes_and_fan_in_connectors() {
+    let parallel_ids: Vec<String> = (1..=12).map(|i| format!("W14-{i:02}")).collect();
+    let mut tasks: Vec<TaskView> = (1..=12)
+        .map(|i| {
+            task(
+                &format!("W14-{i:02}"),
+                "并行宽层节点验收",
+                &format!("L{i:02}"),
+            )
+        })
+        .collect();
+    tasks.push(task("W14-99", "宽层汇流收口节点", "L99"));
+
+    let dash = Dashboard {
+        tasks,
+        milestones: Vec::new(),
+        warnings: Vec::new(),
+        barriers: vec![ModelBarrierEdges {
+            after: parallel_ids.clone(),
+            unlocks: vec!["W14-99".into()],
+        }],
+        git: GitFacts::absent(),
+        agents: Vec::new(),
+        remote: None,
+        gates: Vec::new(),
+        event_span_secs: None,
+        project: "agentdash".into(),
+        event_tail: Vec::new(),
+        events_present: false,
+        last_gate_passed: None,
+        generated_at: "2026-09-13T08:30:00Z".into(),
+    };
+
+    let barriers = barriers_of(&dash);
+    let layers = layout_layers(&dash, &barriers);
+    assert_eq!(layers.len(), 2, "12 并行节点同处层 0,汇流节点处层 1");
+    assert_eq!(layers[0].len(), 12, "首层含全部 12 个并行节点");
+
+    let plain = strip_ansi(&render_graph(&dash, 80));
+    let rows: Vec<&str> = plain.lines().collect();
+
+    for id in parallel_ids.iter().map(String::as_str).chain(["W14-99"]) {
+        assert!(plain.contains(id), "宽图不得截断任务 {id}");
+    }
+
+    let first_top = rows[layers[0][0].line - 1];
+    let first_txt = rows[layers[0][0].line];
+    let first_bot = rows[layers[0][0].line + 1];
+    assert!(
+        display_width(first_top) > 320,
+        "12 并行框总宽应超 320 列,实得 {}",
+        display_width(first_top)
+    );
+    assert_eq!(first_top.matches('┌').count(), 12, "首层顶框左角 12 个");
+    assert_eq!(first_top.matches('┐').count(), 12, "首层顶框右角 12 个");
+    assert_eq!(first_bot.matches('└').count(), 12, "首层底框左角 12 个");
+    assert_eq!(first_bot.matches('┘').count(), 12, "首层底框右角 12 个");
+
+    for id in &parallel_ids {
+        let cell = cell_of(&layers, id);
+        assert_eq!(at(first_txt, cell.x), '│', "{id} 左框缘完好");
+        assert_eq!(
+            at(first_txt, cell.x + cell.width - 1),
+            '│',
+            "{id} 右框缘完好"
+        );
+        assert_eq!(at(first_bot, cell.center()), '┬', "{id} 底框出线桩");
+    }
+
+    let c01 = cell_of(&layers, "W14-01");
+    let c12 = cell_of(&layers, "W14-12");
+    let c99 = cell_of(&layers, "W14-99");
+    assert!(c12.center() > 240, "末节点中心列须越过旧 240 列上限");
+    assert_eq!(
+        at(rows[c12.line + 2], c12.center()),
+        '│',
+        "240 列之外父竖线未截断"
+    );
+
+    let merge_row = rows[c99.line - 2];
+    let lo = c01.center().min(c99.center());
+    let hi = c12.center().max(c99.center());
+    for col in lo..=hi {
+        let ch = at(merge_row, col);
+        assert!("─└┘┴│".contains(ch), "汇流行 col {col} 不断线,实得 {ch:?}");
+    }
+    assert_eq!(
+        at(merge_row, c12.center()),
+        '┘',
+        "最右父节点(>240 列)汇流右端角折完好"
+    );
+    assert_eq!(
+        at(rows[c99.line - 1], c99.center()),
+        '▼',
+        "汇流子框顶入线箭头在位"
+    );
+}
+
+#[test]
+fn wide_fan_out_reaches_children_past_240_cols() {
+    let child_ids: Vec<String> = (1..=12).map(|i| format!("W14-{i:02}")).collect();
+    let mut tasks = vec![task("W14-00", "宽层扇出根节点", "L00")];
+    tasks.extend((1..=12).map(|i| {
+        task(
+            &format!("W14-{i:02}"),
+            "并行宽层节点验收",
+            &format!("L{i:02}"),
+        )
+    }));
+
+    let dash = Dashboard {
+        tasks,
+        milestones: Vec::new(),
+        warnings: Vec::new(),
+        barriers: vec![ModelBarrierEdges {
+            after: vec!["W14-00".into()],
+            unlocks: child_ids.clone(),
+        }],
+        git: GitFacts::absent(),
+        agents: Vec::new(),
+        remote: None,
+        gates: Vec::new(),
+        event_span_secs: None,
+        project: "agentdash".into(),
+        event_tail: Vec::new(),
+        events_present: false,
+        last_gate_passed: None,
+        generated_at: "2026-09-13T08:30:00Z".into(),
+    };
+
+    let barriers = barriers_of(&dash);
+    let layers = layout_layers(&dash, &barriers);
+    let plain = strip_ansi(&render_graph(&dash, 80));
+    let rows: Vec<&str> = plain.lines().collect();
+
+    let c12 = cell_of(&layers, "W14-12");
+    assert!(c12.center() > 240, "最右子节点中心列越过 240 列");
+    assert_eq!(
+        at(rows[c12.line - 2], c12.center()),
+        '│',
+        "240 列之外子中心接下笔完好"
+    );
+    assert_eq!(
+        at(rows[c12.line - 1], c12.center()),
+        '▼',
+        "240 列之外子框顶箭头完好"
+    );
+    assert_eq!(
+        rows[c12.line - 1].matches('▼').count(),
+        12,
+        "全部 12 个扇出子框顶均有入线箭头"
+    );
+}
+
 // ---------- 屏障分流:W3-002 起 panel 承载屏障行,oneline 仍不进 ----------
 
 #[test]
