@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # agentdash · kits 宿主安装体验证一键巡检
-# 对 claude-code / codex / opencode / zcode / cursor / deepseek 六个 kit,在
+# 对 claude-code / codex / opencode / zcode / cursor / deepseek / antigravity 七个 kit,在
 # 全新临时目标目录各跑一轮安装体验证:全新安装产物 → 已装钩子命令端到端
 # 事件落盘 → 二次安装幂等 → 既有内容保留(用户键/他人钩子/损坏 JSON 备份
 # 重建/粘行防护)。
@@ -340,10 +340,67 @@ if run_installer deepseek "$t"; then ok "corrupt 场景安装器退出 0"; else 
 assert "损坏文件原样未动(保守策略)" \
   "$(cmp -s "$t/.deepseek/agentdash-hooks.json" "$t/.deepseek/agentdash-hooks.json.bak-agentdash" && echo same || echo diff)" "same"
 
+# ---------- antigravity:三钩子 .agents/hooks.json(agentdash 命名空间)+ 三 skill + AGENTS.md ----------
+section "antigravity kit"
+check_exec_bit antigravity
+t="$tmp/ag-main"
+if run_installer antigravity "$t"; then ok "全新目录安装器退出 0"; else bad "全新目录安装器退出非 0"; fi
+assert_f "AGENTS.md 生成" "$t/AGENTS.md"
+check_instructions "AGENTS.md" "$t/AGENTS.md"
+check_gitignore "$t"
+h="$t/.agents/hooks.json"
+assert_f ".agents/hooks.json 生成" "$h"
+assert_f "skill agentdash 就位" "$t/.agents/skills/agentdash/SKILL.md"
+assert_f "skill agentdash-setup 就位" "$t/.agents/skills/agentdash-setup/SKILL.md"
+assert_f "skill agentdash-orchestrate 就位" "$t/.agents/skills/agentdash-orchestrate/SKILL.md"
+assert_jq "PreToolUse matcher=invoke_subagent(--host agy)" "$h" \
+  '.agentdash.PreToolUse[0].matcher == "invoke_subagent" and (.agentdash.PreToolUse[0].hooks[0].command | test("agentdash hook --host agy pretooluse"))'
+assert_jq "PostToolUse matcher=*(--host agy)" "$h" \
+  '.agentdash.PostToolUse[0].matcher == "*" and (.agentdash.PostToolUse[0].hooks[0].command | test("agentdash hook --host agy posttooluse"))'
+assert_jq "Stop 扁平注册(--host agy)" "$h" \
+  '.agentdash.Stop | length == 1 and .[0].command == "agentdash hook --host agy stop"'
+if [ "$HAVE_JQ" = yes ]; then
+  assert "[agy] pretooluse stdout 回执" \
+    "$(printf '{}' | agentdash hook --host agy pretooluse | tr -d '\r')" '{"decision":"allow"}'
+  assert "[agy] posttooluse stdout 回执" \
+    "$(printf '{}' | agentdash hook --host agy posttooluse | tr -d '\r')" '{}'
+  assert "[agy] stop stdout 回执" \
+    "$(printf '{}' | agentdash hook --host agy stop | tr -d '\r')" '{"decision":"stop"}'
+  ag_cmd="$(jq -r '.agentdash.PostToolUse[0].hooks[0].command // empty' "$h" 2>/dev/null || true)"
+  if [ -n "$ag_cmd" ]; then
+    printf '{"conversationId":"conv-ag-1","workspacePaths":["%s"],"toolCall":{"name":"run_command","args":{"CommandLine":"echo verify-kits-probe"}}}' "$t" \
+      | sh -c "$ag_cmd" >/dev/null
+  fi
+  assert_jq "[agy] PostToolUse 事件落盘且归属 host=agy & session_id=conv-ag-1" \
+    "$t/.agentdash/events.jsonl" \
+    '.kind == "tool" and .host == "agy" and .session_id == "conv-ag-1"'
+else
+  na "[agy] 已装命令端到端事件落盘与 stdout 回执(无 jq)"
+fi
+if run_installer antigravity "$t"; then ok "二次安装退出 0"; else bad "二次安装退出非 0"; fi
+check_instructions "AGENTS.md(二次)" "$t/AGENTS.md"
+assert "hooks.json 自家注册不翻倍(3 处)" \
+  "$( { grep -o 'agentdash hook --host agy' "$h" 2>/dev/null || true; } | wc -l | tr -d ' ' )" "3"
+# 既有内容保留:他方顶层命名空间(other-plugin)不吞 + 自家命名空间并入
+t="$tmp/ag-preserve"; mkdir -p "$t/.agents"
+printf '%s\n' '{"other-plugin":{"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"echo user-keep"}]}]}}' \
+  > "$t/.agents/hooks.json"
+if run_installer antigravity "$t"; then ok "preserve 场景安装器退出 0"; else bad "preserve 场景安装器退出非 0"; fi
+h="$t/.agents/hooks.json"
+assert_jq "他方顶层命名空间保留(other-plugin)" "$h" \
+  '.["other-plugin"].PostToolUse[0].hooks[0].command == "echo user-keep"'
+assert_jq "自家命名空间并入(agentdash.Stop 恰 1)" "$h" \
+  '.agentdash.Stop | length == 1'
+# 损坏 JSON:备份后重建
+t="$tmp/ag-corrupt"; mkdir -p "$t/.agents"; printf '{broken' > "$t/.agents/hooks.json"
+if run_installer antigravity "$t"; then ok "corrupt 场景安装器退出 0"; else bad "corrupt 场景安装器退出非 0"; fi
+assert_f "损坏 JSON 备份 .bak-agentdash" "$t/.agents/hooks.json.bak-agentdash"
+assert_jq "损坏 JSON 重建为合法注册" "$t/.agents/hooks.json" '.agentdash.Stop | length == 1'
+
 section "汇总"
 echo "PASS $pass / FAIL $fail / SKIP $skip(临时目录: $tmp)"
 if [ "$fail" -gt 0 ]; then
-  echo "[verify-kits] 存在 FAIL,六宿主安装体验证未过"
+  echo "[verify-kits] 存在 FAIL,七宿主安装体验证未过"
   exit 1
 fi
-echo "[verify-kits] 六宿主 kit 安装体验证全部通过"
+echo "[verify-kits] 七宿主 kit 安装体验证全部通过"

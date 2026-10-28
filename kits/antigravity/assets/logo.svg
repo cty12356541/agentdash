@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none" role="img" aria-label="AgentDash Orchestrator">
+  <!-- >= 12.5% transparent safe margin on all sides (16..112) -->
+  <rect x="16" y="16" width="96" height="96" rx="20" fill="#0B1220" stroke="#38BDF8" stroke-width="4"/>
+  <!-- Top lane & bottom lane DAG edges converging into barrier + gate -->
+  <path d="M40 46H64L78 64M40 82H64L78 64" stroke="#7DD3FC" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Barrier bar -->
+  <line x1="64" y1="36" x2="64" y2="92" stroke="#F8FAFC" stroke-width="3" stroke-dasharray="5 5" stroke-linecap="round" opacity="0.75"/>
+  <!-- Lane start nodes -->
+  <circle cx="40" cy="46" r="7" fill="#38BDF8" stroke="#F8FAFC" stroke-width="2.5"/>
+  <circle cx="40" cy="82" r="7" fill="#38BDF8" stroke="#F8FAFC" stroke-width="2.5"/>
+  <!-- Verified gate node & checkmark -->
+  <circle cx="84" cy="64" r="14" fill="#10B981" stroke="#ECFDF5" stroke-width="2.5"/>
+  <path d="M78 64.5L82.2 68.7L90.5 59.8" stroke="#06281E" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
