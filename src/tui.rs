@@ -48,7 +48,7 @@ use ratatui::{Frame, Terminal};
 
 use crate::contract::TaskState;
 use crate::model::{self, Dashboard, EventTailView, GateView, TaskView};
-use crate::render::{self, C_ACTIVE, C_DONE, C_END, C_STALLED, elide, graph::Cell};
+use crate::render::{self, C_ACTIVE, C_DONE, C_END, C_PENDING, C_STALLED, elide, graph::Cell};
 use crate::sources::git::{self, GitFacts};
 
 // W2-006 写回核心以相对 `#[path]` 挂为本模块子模块,而非 main.rs 顶层
@@ -71,13 +71,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 ///
 /// # Errors
 /// 终端初始化/还原、事件轮询与帧绘制的 IO 错误原样透传。
-pub fn watch(repo: &Path, interval_secs: u64) -> io::Result<()> {
+pub fn watch(repo: &Path, interval_secs: u64, infer: bool) -> io::Result<()> {
     if !io::stdin().is_terminal() {
         // 管道/重定向 stdin:无法交互,等同 --once
-        return watch_once(repo);
+        return watch_once(repo, infer);
     }
     let mut terminal = setup_terminal()?;
-    let outcome = run_loop(&mut terminal, repo, interval_secs);
+    let outcome = run_loop(&mut terminal, repo, interval_secs, infer);
     let restored = restore_terminal(&mut terminal);
     outcome.and(restored)
 }
@@ -86,8 +86,8 @@ pub fn watch(repo: &Path, interval_secs: u64) -> io::Result<()> {
 ///
 /// # Errors
 /// 打印失败(如管道关闭)时透传 `io::Error`。
-pub fn watch_once(repo: &Path) -> io::Result<()> {
-    let dash = model::merge(repo);
+pub fn watch_once(repo: &Path, infer: bool) -> io::Result<()> {
+    let dash = model::merge_opts(repo, infer);
     let frame = once_output(&dash, stdout_cols(), render::DEFAULT_PANEL_WIDTH);
     writeln!(io::stdout(), "{frame}")
 }
@@ -454,13 +454,27 @@ fn attestation_line(task: &TaskView, dash: &Dashboard) -> String {
     }
 }
 
-/// 详情栏 gate 行(三态映射承 panel):`  <mark> <name> <state>[ · <detail>]`。
+/// 详情栏 gate 行(三态映射承 panel;W14-06 补齐 `unknown` 第三态):
+/// `  <mark> <name> <state>[ · <detail>]`,unknown 时走 `? <name> unknown`
+/// (暗灰)并剥除历史 `(exit unknown)` 尾注避免双注。
 fn gate_line(gate: &GateView, width: usize) -> String {
-    let (mark, color) = gate_visual(&gate.state);
-    let body = if gate.detail.is_empty() {
-        format!("  {mark} {} {}", gate.name, gate.state)
+    let (mark, color, state) = if gate.unknown {
+        ("?", C_PENDING, "unknown")
     } else {
-        format!("  {mark} {} {} · {}", gate.name, gate.state, gate.detail)
+        let (mark, color) = gate_visual(&gate.state);
+        (mark, color, gate.state.as_str())
+    };
+    let detail = if gate.unknown {
+        gate.detail
+            .strip_suffix("(exit unknown)")
+            .map_or(gate.detail.as_str(), str::trim_end)
+    } else {
+        gate.detail.as_str()
+    };
+    let body = if detail.is_empty() {
+        format!("  {mark} {} {state}", gate.name)
+    } else {
+        format!("  {mark} {} {state} · {detail}", gate.name)
     };
     format!("{color}{}{C_END}", elide(&body, width))
 }
@@ -474,25 +488,31 @@ fn gate_visual(state: &str) -> (&'static str, &'static str) {
     }
 }
 
-/// 波次选中折算(纯函数,W2-004):选中索引钳位进里程碑界内,返回
-/// `(折算索引, 可见任务集)`。任务↔波次关联模型未携带(单账本即单波),
-/// 过滤规则:任务 `id` 以波次串为前缀段(`W2` 匹配 `W2-003`,不匹配
-/// `W25-T1`)。无里程碑、选中波次未声明编号或全不匹配 → 回退全量——宁可
-/// 多显示不少显示;关联字段入模后(W3 多账本)应收严此回退。
+/// 波次选中折算(纯函数,W2-004;W14-06 声明式任务优先):选中索引钳位进
+/// 里程碑界内,返回 `(折算索引, 可见任务集)`。若里程碑携带声明式任务表
+/// (`!milestone.tasks.is_empty()`),按任务 `id` 精确匹配(兼容异构编号);
+/// 仅当声明式任务表为空时回退前缀段 [`wave_matches`]——`W2` 匹配 `W2-003`,
+/// 不匹配 `W25-T1`。无里程碑、未声明编号且无任务表、或全不匹配 → 回退全量
+/// ——宁可多显示不少显示。
 #[must_use]
 pub fn select_wave(dash: &Dashboard, selected: usize) -> (usize, Vec<&TaskView>) {
     let idx = selected.min(dash.milestones.len().saturating_sub(1));
     let Some(milestone) = dash.milestones.get(idx) else {
         return (0, dash.tasks.iter().collect());
     };
-    let Some(wave) = milestone.wave.as_deref() else {
+    let matched: Vec<&TaskView> = if !milestone.tasks.is_empty() {
+        dash.tasks
+            .iter()
+            .filter(|task| milestone.tasks.iter().any(|id| id == &task.id))
+            .collect()
+    } else if let Some(wave) = milestone.wave.as_deref() {
+        dash.tasks
+            .iter()
+            .filter(|task| wave_matches(&task.id, wave))
+            .collect()
+    } else {
         return (idx, dash.tasks.iter().collect());
     };
-    let matched: Vec<&TaskView> = dash
-        .tasks
-        .iter()
-        .filter(|task| wave_matches(&task.id, wave))
-        .collect();
     if matched.is_empty() {
         (idx, dash.tasks.iter().collect())
     } else {
@@ -696,17 +716,24 @@ pub enum WatchArgError {
     ExtraArgs,
 }
 
-/// watch 位置参数解析(纯函数,W2-008):`[--once] ([SECONDS] [PATH] | [PATH])`
-/// ——数字首参 = 刷新间隔秒(钳 1..3600,全数字溢出串仍按间隔钳到上限),
-/// 其后至多一个 PATH;`--once` 任意位置。`Err` 为结构化参数错误(W9-005,
-/// 文案归 main 层),调用方打印后以退出码 2 终止。
-pub fn parse_watch_args(rest: &[String]) -> Result<(bool, u64, PathBuf), WatchArgError> {
+/// watch 位置参数解析(纯函数,W2-008;W14-06 起识别 `--no-infer`):
+/// `[--once] [--no-infer] ([SECONDS] [PATH] | [PATH])`——数字首参 = 刷新间隔秒
+/// (钳 1..3600,全数字溢出串仍按间隔钳到上限),其后至多一个 PATH;`--once` 与
+/// `--no-infer` 任意位置。`Err` 为结构化参数错误(W9-005,文案归 main 层),
+/// 调用方打印后以退出码 2 终止。
+///
+/// # Errors
+/// 未知 `-` 开头旗标返回 [`WatchArgError::UnknownFlag`];位置参数超界返回
+/// [`WatchArgError::ExtraArgs`]。
+pub fn parse_watch_args(rest: &[String]) -> Result<(bool, u64, PathBuf, bool), WatchArgError> {
     let mut once = false;
+    let mut infer = true;
     let mut interval: Option<u64> = None;
     let mut path: Option<PathBuf> = None;
     for arg in rest {
         match arg.as_str() {
             "--once" => once = true,
+            "--no-infer" => infer = false,
             other if other.starts_with('-') => {
                 return Err(WatchArgError::UnknownFlag((*other).to_owned()));
             }
@@ -722,6 +749,7 @@ pub fn parse_watch_args(rest: &[String]) -> Result<(bool, u64, PathBuf), WatchAr
         once,
         interval.unwrap_or(MODEL_INTERVAL),
         path.unwrap_or_else(|| PathBuf::from(".")),
+        infer,
     ))
 }
 
@@ -854,8 +882,8 @@ fn install_panic_restore_hook() {
 // ---------- 主循环与状态 ----------
 
 /// 主循环:分级刷新 → 差分重绘 → 事件分派 → 退出判定。
-fn run_loop(terminal: &mut Tui, repo: &Path, interval_secs: u64) -> io::Result<()> {
-    let mut app = Watch::new(repo, interval_secs);
+fn run_loop(terminal: &mut Tui, repo: &Path, interval_secs: u64, infer: bool) -> io::Result<()> {
+    let mut app = Watch::new(repo, interval_secs, infer);
     loop {
         app.refresh();
         // ratatui 差分重绘:draw 每帧提交与上一帧缓冲的单元格差
@@ -904,6 +932,8 @@ struct Watch {
     repo: PathBuf,
     /// 模型重建档(interval 秒)。
     interval: u64,
+    /// 无 who completed 配对启发开关(W14-06:`--no-infer` 时为 `false`)。
+    infer: bool,
     /// 当前视图。
     view: View,
     /// 详情态(右栏 40% 详情卡片)。
@@ -957,13 +987,14 @@ struct Watch {
 }
 
 impl Watch {
-    fn new(repo: &Path, interval_secs: u64) -> Self {
+    fn new(repo: &Path, interval_secs: u64, infer: bool) -> Self {
         // 首帧全量:git 快照与模型同步取,此后进入分级节拍
         let git_facts = git::snapshot(repo);
-        let dash = model::merge_with_git(repo, git_facts.clone());
+        let dash = model::merge_with_git_opts(repo, git_facts.clone(), infer);
         Self {
             repo: repo.to_owned(),
             interval: interval_secs.max(1),
+            infer,
             view: View::Panel,
             detail: false,
             wave: 0,
@@ -1009,7 +1040,7 @@ impl Watch {
             self.git_facts = git::snapshot(&self.repo);
             self.last_git = now;
         }
-        self.dash = model::merge_with_git(&self.repo, self.git_facts.clone());
+        self.dash = model::merge_with_git_opts(&self.repo, self.git_facts.clone(), self.infer);
         self.last_model = now;
     }
 

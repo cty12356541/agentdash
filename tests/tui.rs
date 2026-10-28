@@ -23,6 +23,8 @@
 mod contract;
 #[path = "../src/events.rs"]
 mod events;
+#[path = "../src/lang.rs"]
+mod lang;
 #[path = "../src/model.rs"]
 mod model;
 #[path = "../src/render/mod.rs"]
@@ -80,6 +82,7 @@ fn w25_dash() -> Dashboard {
             title: "并行车道冲刺".into(),
             done: 4,
             total: 4,
+            tasks: Vec::new(),
         }],
         warnings: Vec::new(),
         barriers: vec![
@@ -711,12 +714,14 @@ fn wave_dash() -> Dashboard {
                 title: "一期".into(),
                 done: 3,
                 total: 3,
+                tasks: Vec::new(),
             },
             MilestoneView {
                 wave: Some("W2".into()),
                 title: "二期".into(),
                 done: 0,
                 total: 2,
+                tasks: Vec::new(),
             },
         ],
         warnings: Vec::new(),
@@ -1027,27 +1032,27 @@ fn parse_watch_args_accepts_both_forms() {
     let default_interval = tui::MODEL_INTERVAL;
     assert_eq!(
         tui::parse_watch_args(&args(&[])),
-        Ok((false, default_interval, PathBuf::from("."))),
+        Ok((false, default_interval, PathBuf::from("."), true)),
         "`watch`:默认档 + 当前目录"
     );
     assert_eq!(
         tui::parse_watch_args(&args(&["plan"])),
-        Ok((false, default_interval, PathBuf::from("plan"))),
+        Ok((false, default_interval, PathBuf::from("plan"), true)),
         "`watch [PATH]`:非数字首参是路径"
     );
     assert_eq!(
         tui::parse_watch_args(&args(&["30"])),
-        Ok((false, 30, PathBuf::from("."))),
+        Ok((false, 30, PathBuf::from("."), true)),
         "`watch [SECONDS]`:数字首参是间隔"
     );
     assert_eq!(
         tui::parse_watch_args(&args(&["30", "plan"])),
-        Ok((false, 30, PathBuf::from("plan"))),
+        Ok((false, 30, PathBuf::from("plan"), true)),
         "`watch [SECONDS] [PATH]` 两形态"
     );
     assert_eq!(
         tui::parse_watch_args(&args(&["--once", "2", "p"])),
-        Ok((true, 2, PathBuf::from("p"))),
+        Ok((true, 2, PathBuf::from("p"), true)),
         "--once 与位置参数可混用"
     );
 }
@@ -1056,17 +1061,17 @@ fn parse_watch_args_accepts_both_forms() {
 fn parse_watch_args_clamps_interval() {
     assert_eq!(
         tui::parse_watch_args(&args(&["0"])),
-        Ok((false, 1, PathBuf::from("."))),
+        Ok((false, 1, PathBuf::from("."), true)),
         "下钳 1 秒"
     );
     assert_eq!(
         tui::parse_watch_args(&args(&["99999"])),
-        Ok((false, 3600, PathBuf::from("."))),
+        Ok((false, 3600, PathBuf::from("."), true)),
         "上钳 3600 秒"
     );
     assert_eq!(
         tui::parse_watch_args(&args(&["99999999999999999999999"])),
-        Ok((false, 3600, PathBuf::from("."))),
+        Ok((false, 3600, PathBuf::from("."), true)),
         "溢出数字仍按间隔钳到上限,不落成路径"
     );
 }
@@ -1156,4 +1161,311 @@ fn scroll_step_clamps_to_content_and_zero() {
     assert_eq!(tui::scroll_step(90, false, 5, 10), 0, "内容不足一屏滚不动");
     assert_eq!(tui::scroll_max(100, 10), 90, "上限 = 内容 - 视口");
     assert_eq!(tui::scroll_max(5, 10), 0, "内容短于视口上限 0");
+}
+
+// ------------------------------------------------------------ W14-06 收口测试
+
+#[test]
+fn detail_gate_unknown_renders_third_state_and_strips_legacy_suffix() {
+    let mut dash = detail_dash();
+    dash.gates = vec![
+        GateView {
+            name: "cargo-fmt".into(),
+            state: "failed".into(),
+            detail: "fmt clean (exit unknown)".into(),
+            unknown: true,
+        },
+        GateView {
+            name: "lint".into(),
+            state: "failed".into(),
+            detail: "(exit unknown)".into(),
+            unknown: true,
+        },
+        GateView {
+            name: "cargo-test".into(),
+            state: "failed".into(),
+            detail: "2 red".into(),
+            unknown: false,
+        },
+    ];
+    let raw_lines = tui::detail_lines(&dash.tasks[0], &dash, 80);
+    let plain_lines: Vec<String> = raw_lines.iter().map(|line| strip_ansi(line)).collect();
+
+    assert_eq!(
+        plain_lines[8], "  ? cargo-fmt unknown · fmt clean",
+        "unknown 门渲染第三态 `? <gate> unknown` 并剥除 `(exit unknown)` 重复尾注"
+    );
+    assert_eq!(
+        plain_lines[9], "  ? lint unknown",
+        "仅含 `(exit unknown)` 的 detail 剥除后为空,不留悬空分隔符"
+    );
+    assert_eq!(
+        plain_lines[10], "  ✗ cargo-test failed · 2 red",
+        "有退出码证据的真失败保持 `✗ <gate> failed`"
+    );
+    assert!(
+        !plain_lines.iter().any(|l| l.contains("(exit unknown)")),
+        "不得残留 `(exit unknown)` 双注: {plain_lines:?}"
+    );
+    assert!(
+        !plain_lines.iter().any(|l| l.contains("cargo-fmt failed")),
+        "unknown 门不得渲染为 failed"
+    );
+
+    let fmt_spans = tui::spans_from_ansi(&raw_lines[8]);
+    assert_eq!(
+        fmt_spans[0].style.fg,
+        Some(Color::DarkGray),
+        "unknown 第三态走 C_PENDING(暗灰)"
+    );
+    let fail_spans = tui::spans_from_ansi(&raw_lines[10]);
+    assert_eq!(
+        fail_spans[0].style.fg,
+        Some(Color::Yellow),
+        "真失败门保持 C_STALLED 着色"
+    );
+}
+
+#[test]
+fn select_wave_prefers_declarative_milestone_tasks_and_falls_back_to_prefix() {
+    static SERIAL: AtomicU32 = AtomicU32::new(0);
+
+    // 1. 纯函数:声明式 tasks 含异构 id("AUTH-1"/"DB-2",不以 "M1" 开头)优先精确匹配;
+    //    tasks 为空时回退前缀段 wave_matches("W2-001")
+    let mut dash = empty_dash();
+    dash.tasks = vec![
+        task("AUTH-1", "登录鉴权", "A"),
+        task("DB-2", "连接池", "B"),
+        task("W2-001", "前缀波次任务", "C"),
+        task("MISC-9", "未归组任务", "D"),
+    ];
+    dash.milestones = vec![
+        MilestoneView {
+            wave: Some("M1".into()),
+            title: "核心底座".into(),
+            done: 2,
+            total: 2,
+            tasks: vec!["AUTH-1".into(), "DB-2".into()],
+        },
+        MilestoneView {
+            wave: Some("W2".into()),
+            title: "二期前缀波".into(),
+            done: 1,
+            total: 1,
+            tasks: Vec::new(),
+        },
+    ];
+
+    let (idx, m1_visible) = tui::select_wave(&dash, 0);
+    let m1_ids: Vec<&str> = m1_visible.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(idx, 0);
+    assert_eq!(
+        m1_ids,
+        vec!["AUTH-1", "DB-2"],
+        "声明式 MilestoneView.tasks 非空时按任务列表精确过滤异构 id"
+    );
+
+    let (idx, w2_visible) = tui::select_wave(&dash, 1);
+    let w2_ids: Vec<&str> = w2_visible.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(idx, 1);
+    assert_eq!(
+        w2_ids,
+        vec!["W2-001"],
+        "MilestoneView.tasks 为空时仍回退前缀段 wave_matches"
+    );
+
+    // 2. 端到端(ledger.json → model::merge → tui::wave_view):声明式 milestones 入模穿透
+    let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "agentdash-w14-06-decl-wave-{}-{serial}",
+        std::process::id()
+    ));
+    let dot = dir.join(".agentdash");
+    fs::create_dir_all(&dot).expect("create fixture dir");
+    fs::write(
+        dot.join("ledger.json"),
+        r#"{
+  "$schema": "agentdash.tasklog.v1",
+  "wave": "W14",
+  "title": "异构里程碑",
+  "milestones": [
+    {"id": "M1", "title": "鉴权与存储", "tasks": ["AUTH-1", "DB-2"]},
+    {"id": "M2", "title": "前端接入", "tasks": ["UI-3"]}
+  ],
+  "tasks": {
+    "AUTH-1": {"label": "鉴权", "state": "done"},
+    "DB-2": {"label": "存储", "state": "active"},
+    "UI-3": {"label": "界面", "state": "pending"}
+  }
+}"#,
+    )
+    .expect("write ledger.json");
+
+    let merged = model::merge(&dir);
+    assert_eq!(
+        merged.milestones[0].tasks,
+        vec!["AUTH-1".to_owned(), "DB-2".to_owned()]
+    );
+    assert_eq!(merged.milestones[1].tasks, vec!["UI-3".to_owned()]);
+    let view_m1 = tui::wave_view(&merged, 0);
+    let view_m1_ids: Vec<&str> = view_m1.tasks.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(view_m1_ids, vec!["AUTH-1", "DB-2"]);
+    let view_m2 = tui::wave_view(&merged, 1);
+    let view_m2_ids: Vec<&str> = view_m2.tasks.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(view_m2_ids, vec!["UI-3"]);
+    assert!(fs::remove_dir_all(&dir).is_ok());
+}
+
+#[test]
+fn parse_watch_args_recognizes_no_infer_combinations() {
+    let default_interval = tui::MODEL_INTERVAL;
+    assert_eq!(
+        tui::parse_watch_args(&args(&["--no-infer"])),
+        Ok((false, default_interval, PathBuf::from("."), false)),
+        "单用 `--no-infer`"
+    );
+    assert_eq!(
+        tui::parse_watch_args(&args(&["--once", "--no-infer", "plan"])),
+        Ok((true, default_interval, PathBuf::from("plan"), false)),
+        "`--once --no-infer [PATH]`"
+    );
+    assert_eq!(
+        tui::parse_watch_args(&args(&["10", "plan", "--no-infer"])),
+        Ok((false, 10, PathBuf::from("plan"), false)),
+        "`[SECONDS] [PATH] --no-infer`"
+    );
+    assert_eq!(
+        tui::parse_watch_args(&args(&["--no-infer", "10", "--once", "plan"])),
+        Ok((true, 10, PathBuf::from("plan"), false)),
+        "`--no-infer` 与 `--once`/`[SECONDS]`/`[PATH]` 任意混排"
+    );
+}
+
+#[test]
+fn cli_watch_no_infer_suppresses_inferred_pairing_and_syncs_help() {
+    static SERIAL: AtomicU32 = AtomicU32::new(0);
+
+    let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "agentdash-w14-06-watch-no-infer-{}-{serial}",
+        std::process::id()
+    ));
+    let dot = dir.join(".agentdash");
+    fs::create_dir_all(&dot).expect("create fixture dir");
+    fs::write(
+        dot.join("ledger.json"),
+        r#"{"$schema":"agentdash.tasklog.v1","title":"watch-no-infer","tasks":{"T1":{"label":"x","state":"active"}}}"#,
+    )
+    .expect("write ledger.json");
+    fs::write(
+        dot.join("events.jsonl"),
+        concat!(
+            r#"{"kind":"agent","event":"dispatched","who":"alice","ts":"2026-09-16T09:00:00Z"}"#,
+            "\n",
+            r#"{"kind":"agent","event":"completed","ts":"2026-09-16T09:02:00Z"}"#,
+            "\n",
+        ),
+    )
+    .expect("write events.jsonl");
+    let exe = env!("CARGO_BIN_EXE_agentdash");
+    let dir_str = dir.to_str().expect("utf8 path");
+
+    let inferred_out = std::process::Command::new(exe)
+        .args(["watch", "--once", dir_str])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn watch --once");
+    assert!(inferred_out.status.success());
+    let inferred_stdout = strip_ansi(&String::from_utf8_lossy(&inferred_out.stdout));
+    assert!(
+        inferred_stdout.contains("(inferred)"),
+        "缺省开启推断应带 `(inferred)`:\n{inferred_stdout}"
+    );
+
+    let strict_out = std::process::Command::new(exe)
+        .args(["watch", "--once", "--no-infer", dir_str])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn watch --once --no-infer");
+    assert!(
+        strict_out.status.success(),
+        "`watch --once --no-infer` 应退 0,stderr={}",
+        String::from_utf8_lossy(&strict_out.stderr)
+    );
+    let strict_stdout = strip_ansi(&String::from_utf8_lossy(&strict_out.stdout));
+    assert!(
+        !strict_stdout.contains("(inferred)") && !strict_stdout.contains("▶⇢✓"),
+        "`--no-infer` 必须抑制推断配对标注:\n{strict_stdout}"
+    );
+    assert!(
+        strict_stdout.contains("▶ alice"),
+        "`--no-infer` 下匿名 completed 被丢弃,alice 保持真在跑:\n{strict_stdout}"
+    );
+    assert!(
+        strict_stdout.contains("missing `who`"),
+        "`--no-infer` 下回退逐行缺 who 告警:\n{strict_stdout}"
+    );
+
+    // `--help` 双语文案同步核验(保留 `watch [--once] [SECONDS] [PATH]` 契约令牌)
+    let help_zh = std::process::Command::new(exe)
+        .arg("--help")
+        .env("AGENTDASH_LANG", "zh")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn --help zh");
+    let zh_text = String::from_utf8_lossy(&help_zh.stdout);
+    assert!(zh_text.contains("watch [--once] [SECONDS] [PATH]"));
+    assert!(zh_text.contains("render/oneline/watch 系;缺省开启推断"));
+    assert!(zh_text.contains("遇失败门、阻塞或告警退 1"));
+
+    let help_en = std::process::Command::new(exe)
+        .arg("--help")
+        .env("AGENTDASH_LANG", "en")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn --help en");
+    let en_text = String::from_utf8_lossy(&help_en.stdout);
+    assert!(en_text.contains("watch [--once] [SECONDS] [PATH]"));
+    assert!(
+        en_text
+            .contains("render/oneline/watch\n                 family; inference is on by default")
+    );
+    assert!(en_text.contains("exits 1 on failed gate, blocked task, or warning"));
+
+    assert!(fs::remove_dir_all(&dir).is_ok());
+}
+
+#[test]
+fn oneline_cli_flag_and_extra_arg_errors_match_lang_in_zh_and_en() {
+    let exe = env!("CARGO_BIN_EXE_agentdash");
+
+    for (code, l) in [("zh", lang::Lang::Zh), ("en", lang::Lang::En)] {
+        let bogus = std::process::Command::new(exe)
+            .args(["oneline", "--bogus"])
+            .env("AGENTDASH_LANG", code)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("spawn oneline --bogus");
+        assert_eq!(bogus.status.code(), Some(2), "{code}:未知旗标应退 2");
+        let bogus_stderr = String::from_utf8_lossy(&bogus.stderr).replace("\r\n", "\n");
+        let expected_bogus = format!("error: {}\n\n{}\n", l.unexpected_flag("--bogus"), l.usage());
+        assert_eq!(
+            bogus_stderr, expected_bogus,
+            "{code}:`oneline --bogus` 错误文案必须对齐 lang.unexpected_flag"
+        );
+
+        let extra = std::process::Command::new(exe)
+            .args(["oneline", "a", "b"])
+            .env("AGENTDASH_LANG", code)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("spawn oneline a b");
+        assert_eq!(extra.status.code(), Some(2), "{code}:多余位置参数应退 2");
+        let extra_stderr = String::from_utf8_lossy(&extra.stderr).replace("\r\n", "\n");
+        let expected_extra = format!("error: {}\n\n{}\n", l.unexpected_extra("[PATH]"), l.usage());
+        assert_eq!(
+            extra_stderr, expected_extra,
+            "{code}:`oneline a b` 错误文案必须对齐 lang.unexpected_extra"
+        );
+    }
 }

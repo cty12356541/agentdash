@@ -350,16 +350,16 @@ fn cmd_oneline(rest: &[String], lang: lang::Lang) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `watch [--once] [SECONDS] [PATH]`:ratatui watch;位置参数解析收口在
-/// [`tui::parse_watch_args`](W2-008 恢复 interval 位置档);`--once` 渲染
-/// 一帧即退,非 tty stdin 同样自动退化为单帧。
+/// `watch [--once] [--no-infer] [SECONDS] [PATH]`:ratatui watch;位置参数解析收口在
+/// [`tui::parse_watch_args`](W2-008 恢复 interval 位置档;W14-06 起透传 `--no-infer`);
+/// `--once` 渲染一帧即退,非 tty stdin 同样自动退化为单帧。
 fn cmd_watch(rest: &[String], lang: lang::Lang) -> ExitCode {
     match tui::parse_watch_args(rest) {
-        Ok((once, interval, repo)) => {
+        Ok((once, interval, repo, infer)) => {
             let outcome = if once {
-                tui::watch_once(&repo)
+                tui::watch_once(&repo, infer)
             } else {
-                tui::watch(&repo, interval)
+                tui::watch(&repo, interval, infer)
             };
             match outcome {
                 Ok(()) => ExitCode::SUCCESS,

@@ -69,6 +69,7 @@ fn w25_dash() -> Dashboard {
             title: "并行车道冲刺".into(),
             done: 4,
             total: 4,
+            tasks: Vec::new(),
         }],
         warnings: Vec::new(),
         agents: Vec::new(), // W2-001:模型新增 agents 字段;面板样例默认无在跑 agent
@@ -485,6 +486,7 @@ fn speed_line_is_tasks_per_hour_over_since_span() {
         title: title.into(),
         done,
         total,
+        tasks: Vec::new(),
     };
     let mut dash = dash_with(tasks);
     dash.milestones = vec![ms("W1", "里程碑甲", 10, 10), ms("W2", "里程碑乙", 11, 11)];
@@ -521,6 +523,7 @@ fn speed_line_hidden_unless_two_milestones_and_positive_span() {
         title: "波".into(),
         done: 1,
         total: 2,
+        tasks: Vec::new(),
     };
     let stamped = |since: Option<&str>| {
         let mut item = task("T1", "任务", "A");
@@ -563,6 +566,7 @@ fn speed_line_renders_from_event_activity_window() {
         title: "波".into(),
         done,
         total,
+        tasks: Vec::new(),
     };
     let mut dash = dash_with(vec![task("T1", "任务甲", "A"), task("T2", "任务乙", "A")]);
     dash.milestones = vec![ms("W1", 10, 10), ms("W2", 11, 11)];
@@ -590,6 +594,7 @@ fn speed_line_hidden_without_event_window_or_gate() {
         title: "波".into(),
         done: 1,
         total: 2,
+        tasks: Vec::new(),
     };
     let unstamped = || task("T1", "任务", "A"); // since 恒 None
 
@@ -650,6 +655,7 @@ fn oneline_carries_active_milestone_and_counts() {
         title: "并行".into(),
         done: 2,
         total: 4,
+        tasks: Vec::new(),
     };
     for t in &mut dash.tasks {
         if t.id != "T1" && t.id != "T2" {

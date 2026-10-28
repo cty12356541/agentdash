@@ -40,7 +40,7 @@ agentdash - agent 进度仪表盘(agent progress dashboard)
 命令:
   render panel|graph [--format ansi|svg] [PATH]
                                   渲染面板或任务 DAG(--format svg:矢量 DAG,仅 graph)
-  render digest [--strict] [PATH] 离场摘要(纯文本;--strict 遇失败门或阻塞退 1)
+  render digest [--strict] [PATH] 离场摘要(纯文本;--strict 遇失败门、阻塞或告警退 1)
   oneline [PATH]                  打印单行状态摘要
   stats [PATH] [--host <name>]    观测统计:宿主/gate/周转三表(纯文本,恒退 0)
   watch [--once] [SECONDS] [PATH] 常驻实时刷新(q/Ctrl-C 退出)
@@ -52,7 +52,7 @@ agentdash - agent 进度仪表盘(agent progress dashboard)
   watch --once  只渲染一帧即退(stdin 非 TTY 时自动生效)
 
 选项:
-  --no-infer     关闭无 who completed 配对启发(render/oneline 系;缺省开启推断)
+  --no-infer     关闭无 who completed 配对启发(render/oneline/watch 系;缺省开启推断)
   -V, --version  打印版本号
   -h, --help     打印本帮助
 
@@ -69,7 +69,7 @@ Commands:
                                   Render the dashboard panel or the task DAG
                                   (--format svg: vector DAG, graph only)
   render digest [--strict] [PATH] Print a plain-text leave digest (--strict
-                                  exits 1 on failed gate or blocked task)
+                                  exits 1 on failed gate, blocked task, or warning)
   oneline [PATH]                  Print a one-line status summary
   stats [PATH] [--host <name>]    Observation tables: hosts / gates / turnover
                                   (plain text, always exits 0)
@@ -82,7 +82,7 @@ Arguments:
   watch --once  Render a single frame and exit (implied when stdin is not a TTY)
 
 Options:
-  --no-infer     Disable no-who completed pairing inference (render/oneline
+  --no-infer     Disable no-who completed pairing inference (render/oneline/watch
                  family; inference is on by default)
   -V, --version  Print version
   -h, --help     Print help

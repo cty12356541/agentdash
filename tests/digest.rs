@@ -94,6 +94,7 @@ fn busy_dash() -> Dashboard {
             title: "并行车道冲刺".into(),
             done: 2,
             total: 5,
+            tasks: Vec::new(),
         }],
         warnings: vec!["ledger: 未知字段".to_owned()],
         agents: vec![
