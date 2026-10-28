@@ -138,36 +138,32 @@ dsh --profile <profile> --patch ./hooks.patch.yml "任务..."
 Antigravity 集成包通过 `--host agy` 注册三类钩子(`PreToolUse[invoke_subagent]`、
 `PostToolUse[*]`、扁平 `Stop`)并在 `stdout` 返回单行协议 JSON,支持以下两种形态(任选其一):
 
-#### 方式 A(推荐):全局插件 `~/.gemini/config/plugins/agentdash/`
+#### 方式 A(缺省推荐):本机级全局注册(`~/.gemini/AGENTS.md` + `~/.gemini/config/plugins/agentdash/`)
 
-在本机所有工作区自动生效,内置 `agentdash`、`agentdash-setup`、`agentdash-orchestrate`
-三套技能 + 全局规则 `rules/AGENTS.md` + 根级 `hooks.json`(`plugin.json` 原生清单):
-
-```bash
-# macOS / Linux / Git Bash(在 agentdash 仓库根执行)
-mkdir -p ~/.gemini/config/plugins/agentdash/rules
-cp -R kits/antigravity/. ~/.gemini/config/plugins/agentdash/
-cp kits/shared/AGENTDASH.md ~/.gemini/config/plugins/agentdash/rules/AGENTS.md
-```
+不传项目参数直接运行安装器即执行**本机级注册**,将 `agentdash` 约定并入本机全局 `~/.gemini/AGENTS.md`
+(`user_global` `globalScope`,保留原有本机规则)并同步全局插件包 `~/.gemini/config/plugins/agentdash/`
+(根级 `hooks.json` + `agentdash`、`agentdash-setup`、`agentdash-orchestrate` 三套技能),对本机所有工作区自动生效:
 
 ```powershell
-# Windows PowerShell(在 agentdash 仓库根执行)
-$dst = "$HOME\.gemini\config\plugins\agentdash"
-New-Item -ItemType Directory -Force "$dst\rules" | Out-Null
-Copy-Item -Recurse -Force .\kits\antigravity\* $dst
-Copy-Item -Force .\kits\shared\AGENTDASH.md "$dst\rules\AGENTS.md"
+# Windows PowerShell(缺省即 -Global)
+powershell -ExecutionPolicy Bypass -File kits/antigravity/install.ps1
 ```
 
-- **生效时机**:新创建的 `~/.gemini/config/plugins/agentdash/` 全局插件目录仅在宿主启动时扫描发现,
-  首次安装后需**重启 Antigravity** 生效(后续在插件面板开关启用/禁用即时生效)。
+```bash
+# macOS / Linux / Git Bash(缺省即 --global)
+bash kits/antigravity/install.sh
+```
 
-#### 方式 B:按工作区安装(`install.ps1` / `install.sh`)
+- **生效时机**:`~/.gemini/AGENTS.md` 实时作为本机 `user_global` 规则生效;新创建的 `~/.gemini/config/plugins/agentdash/`
+  全局插件目录仅在宿主启动时扫描发现,首次安装后需**重启一次 Antigravity** 使全局钩子生效。
 
-仅对单个仓库启用、或希望配置随项目共享时使用:
+#### 方式 B(可选):按单个工作区安装(`-Target <project>` / `<project>`)
+
+仅对单个仓库启用、或希望配置随项目共享时显式传入项目目录:
 
 ```powershell
 # Windows PowerShell
-powershell -ExecutionPolicy Bypass -File kits/antigravity/install.ps1 <project>
+powershell -ExecutionPolicy Bypass -File kits/antigravity/install.ps1 -Target <project>
 ```
 
 ```bash
@@ -215,7 +211,7 @@ agentdash render panel     # 或 watch / stats / render digest
 | zcode | 删 `.zcode/config.json`(或仅删 hooks 键;删除后 `enabled` 一并消失) |
 | cursor | 删 `.cursor/hooks.json` |
 | deepseek | 删 `.deepseek/` + profile 内 `dsh plugin remove` 两包 + 删组合里的 insert 条目 |
-| antigravity | **全局插件(方式 A)**:删 `~/.gemini/config/plugins/agentdash/` 并重启 Antigravity;**工作区(方式 B)**:删 `.agents/hooks.json` 顶层 `"agentdash"` 键(若无其他命名空间可直接删该文件)、删 `.agents/skills/{agentdash,agentdash-setup,agentdash-orchestrate}/`、删 `AGENTS.md` 标记段,新建会话生效 |
+| antigravity | **本机全局(方式 A)**:删 `~/.gemini/AGENTS.md` 中 `agentdash:begin..end` 标记段 + 删 `~/.gemini/config/plugins/agentdash/` 并重启 Antigravity;**工作区(方式 B)**:删 `.agents/hooks.json` 顶层 `"agentdash"` 键(若无其他命名空间可直接删该文件)、删 `.agents/skills/{agentdash,agentdash-setup,agentdash-orchestrate}/`、删 `AGENTS.md` 标记段,新建会话生效 |
 
 通删:各宿主指令文件(`CLAUDE.md`/`AGENTS.md`)中的
 `<!-- agentdash:begin … agentdash:end -->` 标记段。历史数据

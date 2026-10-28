@@ -2,7 +2,7 @@
 
 把 Google Antigravity(`agy` CLI / Antigravity 2.0 / IDE)会话与并行子智能体事件接进
 agentdash 通用任务契约,与其他六宿主写**同一份** `<repo>/.agentdash/`(多宿主同面板
-归因),指令约定同源 `kits/shared/AGENTDASH.md`。
+归因)。
 
 ## 钩子与协议映射
 
@@ -23,7 +23,7 @@ camelCase JSON(`conversationId` / `workspacePaths` / `transcriptPath` / `stepIdx
 ## 退出码提取与子智能体配对
 
 - **`transcript.jsonl` 有界退出码提取**:Antigravity 的 `PostToolUse` 载荷在失败时携带顶层
-  `error`,成功路径则需按 `transcriptPath` + `stepIdx` 从会话 `transcript.jsonl` 尾部(单次上限
+  `error`,成功路径则按 `transcriptPath` + `stepIdx` 从会话 `transcript.jsonl` 尾部(单次上限
   64KB)提取真实退出码与末行摘要。若 `PostToolUse` 触发时刻轨迹尚未刷盘,暂存槽自动保留路径与步号,
   待 `Stop` 折叠前二次补查;仍无退出码证据时如实折叠为 `failed (exit unknown)`,绝不虚报 `0`。
 - **`invoke_subagent` / `Stop` 子智能体配对**:Antigravity 无独立 `SubagentStop` 事件。父会话调
@@ -33,28 +33,40 @@ camelCase JSON(`conversationId` / `workspacePaths` / `transcriptPath` / `stepIdx
 
 ## 两种安装形态与生效时机
 
-### 1. 工作区级安装(`<repo>/.agents/`)
+### 1. 本机级全局注册(缺省推荐:`~/.gemini/AGENTS.md` + `~/.gemini/config/plugins/agentdash/`)
+
+不传目录参数(或显式传 `--global` / `-Global`)默认执行**本机级注册**,作为本机全局 `AGENTS.md` 的一部分对所有工作区统一生效,无需逐项目安装:
+
+```bash
+# Git Bash / macOS / Linux(缺省即 --global)
+./kits/antigravity/install.sh
+
+# Windows PowerShell(缺省即 -Global)
+powershell -ExecutionPolicy Bypass -File .\kits\antigravity\install.ps1
+```
+
+行为:`AGENTS.global.md` 标记段(`<!-- agentdash:begin v1 -->` .. `<!-- agentdash:end -->`)幂等合入本机全局
+`~/.gemini/AGENTS.md`(Antigravity `user_global` `globalScope`,保留既有其他本机规则)→ 同步全局插件包
+`~/.gemini/config/plugins/agentdash/`(`plugin.json`、根级 `hooks.json`、`assets/logo.svg` 与三套技能
+`agentdash` / `agentdash-setup` / `agentdash-orchestrate`,且不重复放置 `rules/AGENTS.md` 以防双重注入)。
+
+- **重载语义**:首次新建 `~/.gemini/config/plugins/agentdash/` 后需**重启一次 Antigravity** 使全局钩子在所有项目中挂载生效;
+  `~/.gemini/AGENTS.md` 全局规则实时纳入 `user_global`。
+
+### 2. 可选工作区级安装(`<repo>/.agents/`)
+
+仅在团队需要将配置随单个项目仓库入库时显式传入目标目录:
 
 ```bash
 # Git Bash / macOS / Linux
-./kits/antigravity/install.sh [目标项目目录]
+./kits/antigravity/install.sh <目标项目目录>
 
-# Windows PowerShell(无 Git Bash / jq 环境)
-powershell -ExecutionPolicy Bypass -File .\kits\antigravity\install.ps1 -Target [目标项目目录]
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File .\kits\antigravity\install.ps1 -Target <目标项目目录>
 ```
 
-行为:`AGENTDASH.md` 幂等合入 `AGENTS.md` → `.agents/hooks.json` 幂等写入 `"agentdash"`
+行为:`AGENTDASH.md` 幂等合入 `<repo>/AGENTS.md` → `.agents/hooks.json` 幂等写入 `"agentdash"`
 顶层命名空间(**保留同文件其他插件/用户命名空间**,损坏时备份 `.bak-agentdash` 后重建)→
-复制 `agentdash` / `agentdash-setup` / `agentdash-orchestrate` 三套技能至 `.agents/skills/` →
-`.gitignore` 幂等追加 `.agentdash/`。
+复制三套技能至 `.agents/skills/` → `.gitignore` 幂等追加 `.agentdash/`。
 
-- **重载语义**:工作区首次新增 `.agents/hooks.json` 与 `.agents/skills/` 后,请**新建会话或重载窗口**使宿主加载新配置。
-
-### 2. 全局插件形态(`~/.gemini/config/plugins/agentdash/`)
-
-本目录同时具备完整原生插件清单(`plugin.json`、根级 `hooks.json`、`assets/logo.svg`、`skills/`),
-可直接复制到 `~/.gemini/config/plugins/agentdash/` 作为本机全局插件使用。
-
-- **重载语义**:新放入 `~/.gemini/config/plugins/` 的插件目录仅在宿主启动时发现,首次安装后需**重启 Antigravity**
-  生效(后续在设置面板开关启用/禁用则即时生效,无需重启)。
-- **一键巡检七宿主 kit**:`bash scripts/verify-kits.sh`(仓库根)。
+- **一键巡检七宿主 kit(含本机级与项目级双形态)**:`bash scripts/verify-kits.sh`(仓库根)。

@@ -1,28 +1,16 @@
 # agentdash - antigravity-kit installer (PowerShell; use install.sh for Bash)
 # Prerequisite: agentdash binary in PATH.
-# Usage: .\install.ps1 [-Target <project-dir>] (defaults to current directory)
-# Steps (idempotent, UTF-8 without BOM):
-#   1. Validate target directory exists and agentdash is in PATH
-#   2. Merge kits/shared/AGENTDASH.md marker block into <Target>\AGENTS.md
-#   3. Register top-level "agentdash" namespace in <Target>\.agents\hooks.json
-#      (preserves sibling top-level keys/plugins; backs up corrupt JSON to .bak-agentdash)
-#   4. Copy skills/{agentdash,agentdash-setup,agentdash-orchestrate} into <Target>\.agents\skills\
-#   5. Ensure .agentdash/ is listed in <Target>\.gitignore
+# Usage:
+#   .\install.ps1 [-Global]                # Default (recommended): machine-level install into ~\.gemini\AGENTS.md + ~\.gemini\config\plugins\agentdash\
+#   .\install.ps1 -Target <project-dir>    # Optional per-project install into <Target>\AGENTS.md + <Target>\.agents\
 param(
-    [string]$Target = (Get-Location).Path
+    [switch]$Global,
+    [string]$Target = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not [System.IO.Path]::IsPathRooted($Target)) {
-    $Target = Join-Path (Get-Location).Path $Target
-}
-$Target = [System.IO.Path]::GetFullPath($Target)
-if (-not (Test-Path -LiteralPath $Target -PathType Container)) {
-    Write-Error "[agentdash] Target directory does not exist: $Target"
-}
 
 # --- 1. Check agentdash in PATH ---
 $agentdashCmd = Get-Command -Name 'agentdash' -ErrorAction SilentlyContinue
@@ -30,16 +18,22 @@ if (-not $agentdashCmd) {
     Write-Error "[agentdash] agentdash binary not found in PATH.`n  1) cargo install --path <agentdash-repo>   2) Download from Releases and add to PATH"
 }
 
-# --- 2. Idempotently merge AGENTDASH.md marker block into AGENTS.md ---
-$blockFile = [System.IO.Path]::GetFullPath((Join-Path $here '..\shared\AGENTDASH.md'))
-$blockText = ([System.IO.File]::ReadAllText($blockFile, [System.Text.Encoding]::UTF8) -replace "`r`n", "`n").TrimEnd("`n") + "`n"
-$agentsMd = Join-Path $Target 'AGENTS.md'
-
-if (-not (Test-Path -LiteralPath $agentsMd -PathType Leaf)) {
-    [System.IO.File]::WriteAllText($agentsMd, $blockText, $utf8NoBom)
-    Write-Host "[agentdash] instructions created: $agentsMd"
-} else {
-    $existing = [System.IO.File]::ReadAllText($agentsMd, [System.Text.Encoding]::UTF8) -replace "`r`n", "`n"
+function Merge-AgentdashInstructions {
+    param(
+        [string]$AgentsMdPath,
+        [string]$BlockFilePath
+    )
+    $parent = Split-Path -Parent $AgentsMdPath
+    if ($parent) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    $blockText = ([System.IO.File]::ReadAllText($BlockFilePath, [System.Text.Encoding]::UTF8) -replace "`r`n", "`n").TrimEnd("`n") + "`n"
+    if (-not (Test-Path -LiteralPath $AgentsMdPath -PathType Leaf)) {
+        [System.IO.File]::WriteAllText($AgentsMdPath, $blockText, $utf8NoBom)
+        Write-Host "[agentdash] instructions created: $AgentsMdPath"
+        return
+    }
+    $existing = [System.IO.File]::ReadAllText($AgentsMdPath, [System.Text.Encoding]::UTF8) -replace "`r`n", "`n"
     if ($existing -match 'agentdash:begin') {
         $lines = $existing -split "`n"
         $outLines = New-Object System.Collections.Generic.List[string]
@@ -64,19 +58,74 @@ if (-not (Test-Path -LiteralPath $agentsMd -PathType Leaf)) {
             }
         }
         $mergedText = ($outLines -join "`n") + "`n"
-        [System.IO.File]::WriteAllText($agentsMd, $mergedText, $utf8NoBom)
-        Write-Host "[agentdash] instructions refreshed: $agentsMd"
+        [System.IO.File]::WriteAllText($AgentsMdPath, $mergedText, $utf8NoBom)
+        Write-Host "[agentdash] instructions refreshed: $AgentsMdPath"
     } else {
         $prefix = $existing
         if ($prefix.Length -gt 0 -and -not $prefix.EndsWith("`n")) {
             $prefix += "`n"
         }
-        [System.IO.File]::WriteAllText($agentsMd, $prefix + $blockText, $utf8NoBom)
-        Write-Host "[agentdash] instructions appended: $agentsMd"
+        [System.IO.File]::WriteAllText($AgentsMdPath, $prefix + $blockText, $utf8NoBom)
+        Write-Host "[agentdash] instructions appended: $AgentsMdPath"
     }
 }
 
-# --- 3. Idempotently register "agentdash" namespace in .agents\hooks.json ---
+function Copy-NormalizedUtf8 {
+    param([string]$Src, [string]$Dst)
+    $parent = Split-Path -Parent $Dst
+    if ($parent) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    $raw = [System.IO.File]::ReadAllText($Src, [System.Text.Encoding]::UTF8) -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText($Dst, $raw, $utf8NoBom)
+}
+
+# ======================= Mode A: Machine-Level Global Install (Default / -Global) =======================
+if ($Global -or [string]::IsNullOrWhiteSpace($Target)) {
+    $userHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+    $geminiHome = Join-Path $userHome '.gemini'
+    $pluginDir = Join-Path $geminiHome 'config\plugins\agentdash'
+
+    # 1. Merge into machine-level global ~\.gemini\AGENTS.md (Antigravity user_global globalScope)
+    Merge-AgentdashInstructions `
+        -AgentsMdPath (Join-Path $geminiHome 'AGENTS.md') `
+        -BlockFilePath (Join-Path $here 'AGENTS.global.md')
+
+    # 2. Sync global plugin bundle ~\.gemini\config\plugins\agentdash\ (without duplicate rules\AGENTS.md)
+    $dupRulesDir = Join-Path $pluginDir 'rules'
+    if (Test-Path -LiteralPath $dupRulesDir) {
+        Remove-Item -LiteralPath $dupRulesDir -Recurse -Force
+    }
+    Copy-NormalizedUtf8 -Src (Join-Path $here 'plugin.json') -Dst (Join-Path $pluginDir 'plugin.json')
+    Copy-NormalizedUtf8 -Src (Join-Path $here 'hooks.json') -Dst (Join-Path $pluginDir 'hooks.json')
+    Copy-NormalizedUtf8 -Src (Join-Path $here 'assets\logo.svg') -Dst (Join-Path $pluginDir 'assets\logo.svg')
+    Copy-NormalizedUtf8 -Src (Join-Path $here 'README.md') -Dst (Join-Path $pluginDir 'README.md')
+    foreach ($skill in @('agentdash', 'agentdash-setup', 'agentdash-orchestrate')) {
+        Copy-NormalizedUtf8 `
+            -Src (Join-Path $here "skills\$skill\SKILL.md") `
+            -Dst (Join-Path $pluginDir "skills\$skill\SKILL.md")
+    }
+
+    Write-Host "[agentdash] antigravity-kit installed globally (machine-level):"
+    Write-Host "  - Global AGENTS.md : $(Join-Path $geminiHome 'AGENTS.md')"
+    Write-Host "  - Global Plugin    : $pluginDir"
+    Write-Host "[agentdash] Note: restart Antigravity once after initial global plugin setup so global hooks activate across all projects."
+    exit 0
+}
+
+# ======================= Mode B: Explicit Per-Project Install (-Target <dir>) =======================
+if (-not [System.IO.Path]::IsPathRooted($Target)) {
+    $Target = Join-Path (Get-Location).Path $Target
+}
+$Target = [System.IO.Path]::GetFullPath($Target)
+if (-not (Test-Path -LiteralPath $Target -PathType Container)) {
+    Write-Error "[agentdash] Target directory does not exist: $Target"
+}
+
+Merge-AgentdashInstructions `
+    -AgentsMdPath (Join-Path $Target 'AGENTS.md') `
+    -BlockFilePath ([System.IO.Path]::GetFullPath((Join-Path $here '..\shared\AGENTDASH.md')))
+
 $agentsDir = Join-Path $Target '.agents'
 New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
 $configFile = Join-Path $agentsDir 'hooks.json'
@@ -118,18 +167,13 @@ if (-not (Test-Path -LiteralPath $configFile -PathType Leaf)) {
     }
 }
 
-# --- 4. Copy skills into .agents\skills\ ---
 foreach ($skill in @('agentdash', 'agentdash-setup', 'agentdash-orchestrate')) {
-    $dstSkillDir = Join-Path $agentsDir (Join-Path 'skills' $skill)
-    New-Item -ItemType Directory -Force -Path $dstSkillDir | Out-Null
-    $srcSkill = Join-Path $here (Join-Path 'skills' (Join-Path $skill 'SKILL.md'))
-    $dstSkill = Join-Path $dstSkillDir 'SKILL.md'
-    $skillContent = [System.IO.File]::ReadAllText($srcSkill, [System.Text.Encoding]::UTF8) -replace "`r`n", "`n"
-    [System.IO.File]::WriteAllText($dstSkill, $skillContent, $utf8NoBom)
+    Copy-NormalizedUtf8 `
+        -Src (Join-Path $here "skills\$skill\SKILL.md") `
+        -Dst (Join-Path $agentsDir "skills\$skill\SKILL.md")
 }
 Write-Host "[agentdash] skills synced: $agentsDir\skills\{agentdash,agentdash-setup,agentdash-orchestrate}"
 
-# --- 5. Idempotently append .agentdash/ to .gitignore ---
 $gitignore = Join-Path $Target '.gitignore'
 $hasEntry = $false
 if (Test-Path -LiteralPath $gitignore -PathType Leaf) {

@@ -1,23 +1,12 @@
 #!/usr/bin/env bash
 # agentdash · antigravity-kit 安装器(W14;Google Antigravity 宿主)
-# 前提:agentdash 二进制在 PATH。用法:./install.sh [目标项目目录]
-# 动作:
-#   1. AGENTDASH.md 标记段幂等合入 <目标>/AGENTS.md(Antigravity 原生层级规则读取)
-#   2. <目标>/.agents/hooks.json 幂等注册顶层 "agentdash" 命名空间三钩子
-#      (PreToolUse[invoke_subagent] / PostToolUse[*] / 扁平 Stop,--host agy;
-#       保留同文件其他插件/用户顶层命名空间)
-#   3. 三套技能(agentdash / agentdash-setup / agentdash-orchestrate)复制进 <目标>/.agents/skills/
-#   4. <目标>/.gitignore 幂等追加 .agentdash/
-# 注意:Antigravity 在 Windows 下经 cmd /c 执行钩子且把 stdout 作 JSON 解析——
-#       命令不带 `|| true`,由 `agentdash hook --host agy` 原生保证恒退 0 与合法 JSON 回执。
+# 前提:agentdash 二进制在 PATH。
+# 用法:
+#   ./install.sh [--global]        # 缺省推荐:本机级注册(~/.gemini/AGENTS.md + ~/.gemini/config/plugins/agentdash/)
+#   ./install.sh <目标项目目录>     # 可选项目级注册(<目标>/AGENTS.md + <目标>/.agents/)
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-target="${1:-$PWD}"
-if [ ! -d "$target" ]; then
-  echo "[agentdash] 目标目录不存在: $target" >&2
-  exit 1
-fi
 
 if ! command -v agentdash >/dev/null 2>&1; then
   echo "[agentdash] 未找到 agentdash —— hook 直调二进制,需要它先在 PATH。" >&2
@@ -25,10 +14,10 @@ if ! command -v agentdash >/dev/null 2>&1; then
   exit 1
 fi
 
-# --- AGENTDASH.md 标记段幂等合入 AGENTS.md(harness 单源,C3)。块经文件传入
-# awk(赋值前缀而非 -v:BSD awk 对 -v 值做转义处理,多行块会炸——W7 实测)---
+# --- 标记段幂等合入 AGENTS.md($1=目标文件, $2=模板块文件)---
 merge_instructions() {
-  local file="$1" block_file="$here/../shared/AGENTDASH.md" tmp
+  local file="$1" block_file="$2" tmp
+  mkdir -p "$(dirname "$file")"
   if [ ! -f "$file" ]; then
     cp "$block_file" "$file"
     echo "[agentdash] instructions created: $file"
@@ -53,9 +42,44 @@ merge_instructions() {
     echo "[agentdash] instructions appended: $file"
   fi
 }
-merge_instructions "$target/AGENTS.md"
 
-# --- .agents/hooks.json 注册顶层 "agentdash" 命名空间(保留其余顶层键/插件)---
+# ======================= 模式 A:本机级全局注册(缺省 / --global)=======================
+if [ $# -eq 0 ] || [ "${1:-}" = "--global" ] || [ "${1:-}" = "-g" ]; then
+  gemini_home="${HOME}/.gemini"
+  plugin_dir="${gemini_home}/config/plugins/agentdash"
+
+  # 1. 合入本机全局 ~/.gemini/AGENTS.md(Antigravity user_global globalScope)
+  merge_instructions "${gemini_home}/AGENTS.md" "$here/AGENTS.global.md"
+
+  # 2. 同步本机全局插件包 ~/.gemini/config/plugins/agentdash/(hooks + skills + manifest;
+  #    不重复放 rules/AGENTS.md,避免与本机 ~/.gemini/AGENTS.md 双重注入)
+  mkdir -p "$plugin_dir/assets" "$plugin_dir/skills"
+  rm -rf "$plugin_dir/rules"
+  cp "$here/plugin.json" "$plugin_dir/plugin.json"
+  cp "$here/hooks.json" "$plugin_dir/hooks.json"
+  cp "$here/assets/logo.svg" "$plugin_dir/assets/logo.svg"
+  cp "$here/README.md" "$plugin_dir/README.md"
+  for skill in agentdash agentdash-setup agentdash-orchestrate; do
+    mkdir -p "$plugin_dir/skills/$skill"
+    cp "$here/skills/$skill/SKILL.md" "$plugin_dir/skills/$skill/SKILL.md"
+  done
+
+  echo "[agentdash] antigravity-kit installed globally (machine-level):"
+  echo "  - Global AGENTS.md : ${gemini_home}/AGENTS.md"
+  echo "  - Global Plugin    : ${plugin_dir}"
+  echo "[agentdash] 提醒:首次创建全局插件目录后请重启 Antigravity 客户端使全局钩子对所有项目生效"
+  exit 0
+fi
+
+# ======================= 模式 B:显式指定项目目录安装 =======================
+target="$1"
+if [ ! -d "$target" ]; then
+  echo "[agentdash] 目标目录不存在: $target" >&2
+  exit 1
+fi
+
+merge_instructions "$target/AGENTS.md" "$here/../shared/AGENTDASH.md"
+
 agents_dir="$target/.agents"
 config_file="$agents_dir/hooks.json"
 tpl_file="$here/hooks.template.json"
@@ -95,24 +119,20 @@ if [ ! -f "$config_file" ]; then
 elif command -v jq >/dev/null 2>&1 && valid_json && merge_with_jq; then
   echo "[agentdash] hooks registered (merged): $config_file"
 elif command -v jq >/dev/null 2>&1; then
-  # JSON 损坏或非对象根:备份后重建
   cp "$config_file" "$config_file.bak-agentdash"
   cp "$tpl_file" "$config_file"
   echo "[agentdash] $config_file 损坏,已备份为 $config_file.bak-agentdash 后重建(仅含 agentdash)" >&2
 else
-  # 无 jq:不动用户配置,打印手工合并指引到 stderr
   echo "[agentdash] 未找到 jq,不改动既有 $config_file;请把以下 agentdash 顶层命名空间并入:" >&2
   cat "$tpl_file" >&2
 fi
 
-# --- 复制三套技能进 .agents/skills/ ---
 for skill in agentdash agentdash-setup agentdash-orchestrate; do
   mkdir -p "$agents_dir/skills/$skill"
   cp "$here/skills/$skill/SKILL.md" "$agents_dir/skills/$skill/SKILL.md"
 done
 echo "[agentdash] skills synced: $agents_dir/skills/{agentdash,agentdash-setup,agentdash-orchestrate}"
 
-# --- .gitignore 幂等追加 .agentdash/(已有任何 .agentdash 条目则跳过)---
 gitignore="$target/.gitignore"
 if [ ! -f "$gitignore" ] || ! grep -q '\.agentdash' "$gitignore"; then
   if [ -f "$gitignore" ] && [ -s "$gitignore" ] && [ -n "$(tail -c1 "$gitignore")" ]; then

@@ -397,6 +397,30 @@ if run_installer antigravity "$t"; then ok "corrupt 场景安装器退出 0"; el
 assert_f "损坏 JSON 备份 .bak-agentdash" "$t/.agents/hooks.json.bak-agentdash"
 assert_jq "损坏 JSON 重建为合法注册" "$t/.agents/hooks.json" '.agentdash.Stop | length == 1'
 
+# 本机级全局模式(无参 / --global):写 $HOME/.gemini/AGENTS.md + $HOME/.gemini/config/plugins/agentdash/
+ghome="$tmp/ag-global-home"
+mkdir -p "$ghome/.gemini"
+printf '# user-global-keep\n' > "$ghome/.gemini/AGENTS.md"
+if HOME="$ghome" bash "$root/kits/antigravity/install.sh" >/dev/null 2>&1; then
+  ok "本机级无参安装退出 0"
+else
+  bad "本机级无参安装退出非 0"
+fi
+assert_f "本机全局 ~/.gemini/AGENTS.md 存在" "$ghome/.gemini/AGENTS.md"
+check_instructions "本机全局 AGENTS.md" "$ghome/.gemini/AGENTS.md"
+assert "本机全局 AGENTS.md 保留用户原有段落" \
+  "$(grep -c 'user-global-keep' "$ghome/.gemini/AGENTS.md" || true)" "1"
+assert_f "本机全局插件 plugin.json 就位" "$ghome/.gemini/config/plugins/agentdash/plugin.json"
+assert_f "本机全局插件 hooks.json 就位" "$ghome/.gemini/config/plugins/agentdash/hooks.json"
+assert "本机全局插件不重复携带 rules/AGENTS.md(防双重注入)" \
+  "$([ -e "$ghome/.gemini/config/plugins/agentdash/rules/AGENTS.md" ] && echo dup || echo clean)" "clean"
+if HOME="$ghome" bash "$root/kits/antigravity/install.sh" --global >/dev/null 2>&1; then
+  ok "本机级二次 --global 幂等安装退出 0"
+else
+  bad "本机级二次 --global 幂等安装退出非 0"
+fi
+check_instructions "本机全局 AGENTS.md(二次)" "$ghome/.gemini/AGENTS.md"
+
 section "汇总"
 echo "PASS $pass / FAIL $fail / SKIP $skip(临时目录: $tmp)"
 if [ "$fail" -gt 0 ]; then
