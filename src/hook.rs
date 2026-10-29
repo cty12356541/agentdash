@@ -937,19 +937,32 @@ fn on_agent_dispatched(payload: &Map<String, Value>, host: Option<&str>) {
     with_lock(&dir, || append_line(&dir, &stamp(event, host, session)));
 }
 
-/// 临界区包装:拿到 `.lock`(`create_new` 自旋,陈锁自愈,超时退化)后执行 `f`,
-/// 退出即删锁(仅在自己真持有才删)。持有方崩溃残留的陈锁由获取方摘除自愈;
+/// 文件锁 RAII 守卫:正常返回或栈展开 panic 时若本实例真持有锁,立即摘除 `.lock`。
+struct FileLockGuard {
+    path: PathBuf,
+    held: bool,
+}
+
+impl Drop for FileLockGuard {
+    fn drop(&mut self) {
+        if self.held {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// 临界区包装:拿到 `.lock`(`create_new` 自旋,陈锁自愈,超时退化)后由
+/// [`FileLockGuard`] 托管生命周期并执行 `f`,退出与栈展开 panic 即删锁
+/// (仅在自己真持有才删)。持有方崩溃残留的陈锁由获取方摘除自愈;
 /// 自愈后仍拿不到时按降级铁律直接写(单行小写入近似原子,常态零丢失由锁保证)。
 fn with_lock(dir: &Path, f: impl FnOnce()) {
     if fs::create_dir_all(dir).is_err() {
         return; // 目录建不出来:无写目标,静默
     }
-    let lock_path = dir.join(LOCK_NAME);
-    let held = acquire_lock(&lock_path);
+    let path = dir.join(LOCK_NAME);
+    let held = acquire_lock(&path);
+    let _guard = FileLockGuard { path, held };
     f();
-    if held {
-        let _ = fs::remove_file(&lock_path);
-    }
 }
 
 /// 锁获取:先到先得(`create_new`);被占则自旋等待。锁文件 mtime 超过
@@ -1516,4 +1529,38 @@ fn clip(s: &str) -> String {
 /// W3-004 起 impl 上收 `model::ts_now`(与 `generated_at` 同源同格式,发现 9)。
 fn ts_now() -> String {
     crate::model::ts_now()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn with_lock_removes_lock_file_when_closure_panics() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let serial = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "agentdash-hook-lock-panic-{}-{serial}",
+            std::process::id()
+        ));
+        let dir = root.join(".agentdash");
+        let lock = dir.join(LOCK_NAME);
+
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_lock(&dir, || {
+                assert!(lock.exists(), "临界区内必须已创建并持有 .lock");
+                panic!("simulated panic inside hook::with_lock");
+            });
+        }));
+
+        let lock_remained = lock.exists();
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(caught.is_err(), "panic 应正常展开并被 catch_unwind 捕获");
+        assert!(
+            !lock_remained,
+            "f() panic 展开后 RAII Drop 守卫必须立即删除 .lock"
+        );
+    }
 }

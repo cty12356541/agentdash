@@ -25,7 +25,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use contract::TaskState;
-use model::{AgentView, GateView, MilestoneView, TaskView};
+use model::{AgentView, GateStatus, GateView, MilestoneView, TaskView};
 use sources::git::GitFacts;
 
 /// 三源齐全组的合法台账:两个车道任务 + 一个未入车道任务,1/3 done。
@@ -175,9 +175,9 @@ fn three_sources_merge_into_dashboard() {
         dash.gates,
         vec![GateView {
             name: "test".to_owned(),
-            state: "passed".to_owned(),
-            detail: "3 passed".to_owned(),
-            unknown: false,
+            status: GateStatus::Passed {
+                detail: "3 passed".to_owned(),
+            },
         }],
         "gate 视图按名排序、state 取事件词表"
     );
@@ -309,9 +309,9 @@ fn corrupt_ledger_warns_and_event_layer_still_merges() {
         dash.gates,
         vec![GateView {
             name: "review".to_owned(),
-            state: "passed".to_owned(),
-            detail: "ok".to_owned(),
-            unknown: false,
+            status: GateStatus::Passed {
+                detail: "ok".to_owned(),
+            },
         }],
         "事件层不受契约损坏影响,照常合并"
     );
@@ -371,9 +371,9 @@ fn agents_and_gates_project_into_dashboard_sorted() {
         dash.gates,
         vec![GateView {
             name: "test".to_owned(),
-            state: "passed".to_owned(),
-            detail: "5 passed".to_owned(),
-            unknown: false,
+            status: GateStatus::Passed {
+                detail: "5 passed".to_owned(),
+            },
         }],
         "gate 由重放终态映射,detail 原样携带"
     );
@@ -525,9 +525,9 @@ fn missing_ledger_warns_and_other_sources_still_merge() {
         dash.gates,
         vec![GateView {
             name: "review".to_owned(),
-            state: "passed".to_owned(),
-            detail: "ok".to_owned(),
-            unknown: false,
+            status: GateStatus::Passed {
+                detail: "ok".to_owned(),
+            },
         }],
         "事件层不受契约缺失影响,照常合并"
     );
@@ -1194,5 +1194,72 @@ fn inferred_agent_since_falls_back_to_first_seen_and_reverts_on_redispatch() {
         bob.since, "2026-09-16T09:01:00Z",
         "同 who 再派复活后还原为首次派发戳 first_seen"
     );
+    cleanup(&repo);
+}
+
+#[test]
+fn gate_status_projects_all_four_sum_type_variants() {
+    const EVENTS: &str = concat!(
+        r#"{"kind":"gate","gate":"a-run","state":"running"}"#,
+        "\n",
+        r#"{"kind":"gate","gate":"b-pass","state":"passed","exit":0,"detail":"12 passed"}"#,
+        "\n",
+        r#"{"kind":"gate","gate":"c-fail","state":"failed","exit":1,"detail":"2 failed"}"#,
+        "\n",
+        r#"{"kind":"gate","gate":"d-unknown","state":"failed","exit":null,"detail":"fmt clean (exit unknown)"}"#,
+        "\n",
+    );
+    let repo = fixture_repo("gate-sumtype");
+    let dir = repo.join(".agentdash");
+    fs::create_dir_all(&dir).expect("create .agentdash");
+    fs::write(dir.join("ledger.json"), LEDGER).expect("write ledger.json");
+    fs::write(dir.join("events.jsonl"), EVENTS).expect("write events.jsonl");
+
+    let dash = model::merge(&repo);
+    assert_eq!(
+        dash.gates,
+        vec![
+            GateView {
+                name: "a-run".to_owned(),
+                status: GateStatus::Running,
+            },
+            GateView {
+                name: "b-pass".to_owned(),
+                status: GateStatus::Passed {
+                    detail: "12 passed".to_owned(),
+                },
+            },
+            GateView {
+                name: "c-fail".to_owned(),
+                status: GateStatus::Failed {
+                    detail: "2 failed".to_owned(),
+                },
+            },
+            GateView {
+                name: "d-unknown".to_owned(),
+                status: GateStatus::Unknown {
+                    detail: "fmt clean (exit unknown)".to_owned(),
+                },
+            },
+        ],
+        "四态闭合枚举(Running/Passed/Failed/Unknown)按门名字典序投影"
+    );
+
+    assert_eq!(dash.gates[0].status.as_label(), "running");
+    assert_eq!(dash.gates[0].status.detail(), "");
+    assert!(!dash.gates[0].status.is_unknown());
+
+    assert_eq!(dash.gates[1].status.as_label(), "passed");
+    assert_eq!(dash.gates[1].status.detail(), "12 passed");
+    assert!(!dash.gates[1].status.is_unknown());
+
+    assert_eq!(dash.gates[2].status.as_label(), "failed");
+    assert_eq!(dash.gates[2].status.detail(), "2 failed");
+    assert!(!dash.gates[2].status.is_unknown());
+
+    assert_eq!(dash.gates[3].status.as_label(), "unknown");
+    assert_eq!(dash.gates[3].status.detail(), "fmt clean (exit unknown)");
+    assert!(dash.gates[3].status.is_unknown());
+
     cleanup(&repo);
 }

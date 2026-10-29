@@ -20,7 +20,7 @@
 //!   到期判定用注入时钟的纯函数 [`model_due`] / [`git_due`],可测);
 //! - watch 位置参数(`[SECONDS] [PATH]` 两形态)解析收口在纯函数
 //!   [`parse_watch_args`],main 层只做打印与退出码;
-//! - 终端还原:正常退出与 panic hook 都走同一条还原路径。
+//! - 终端还原:`TerminalSessionGuard` RAII 守卫在作用域退出(正常返回、`?` 提前返回、panic 展开)时统一还原。
 //!
 //! 真终端仅在 stdin 为 tty 时启用;管道/重定向下 [`watch`] 等同
 //! [`watch_once`](渲染一帧即退,即 `--once` 冒烟路径)。
@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use crossterm::cursor::Show;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -47,7 +48,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::{Frame, Terminal};
 
 use crate::contract::TaskState;
-use crate::model::{self, Dashboard, EventTailView, GateView, TaskView};
+use crate::model::{self, Dashboard, EventTailView, GateStatus, GateView, TaskView};
 use crate::render::{self, C_ACTIVE, C_DONE, C_END, C_PENDING, C_STALLED, elide, graph::Cell};
 use crate::sources::git::{self, GitFacts};
 
@@ -76,10 +77,10 @@ pub fn watch(repo: &Path, interval_secs: u64, infer: bool) -> io::Result<()> {
         // 管道/重定向 stdin:无法交互,等同 --once
         return watch_once(repo, infer);
     }
+    enable_raw_mode()?;
+    let _guard = TerminalSessionGuard;
     let mut terminal = setup_terminal()?;
-    let outcome = run_loop(&mut terminal, repo, interval_secs, infer);
-    let restored = restore_terminal(&mut terminal);
-    outcome.and(restored)
+    run_loop(&mut terminal, repo, interval_secs, infer)
 }
 
 /// 单帧冒烟(`--once`):重建一次模型,经 [`once_output`] 决策形态后打印。
@@ -454,38 +455,29 @@ fn attestation_line(task: &TaskView, dash: &Dashboard) -> String {
     }
 }
 
-/// 详情栏 gate 行(三态映射承 panel;W14-06 补齐 `unknown` 第三态):
+/// 详情栏 gate 行(四态穷举匹配 [`GateStatus`],无通配分支):
 /// `  <mark> <name> <state>[ · <detail>]`,unknown 时走 `? <name> unknown`
 /// (暗灰)并剥除历史 `(exit unknown)` 尾注避免双注。
 fn gate_line(gate: &GateView, width: usize) -> String {
-    let (mark, color, state) = if gate.unknown {
-        ("?", C_PENDING, "unknown")
-    } else {
-        let (mark, color) = gate_visual(&gate.state);
-        (mark, color, gate.state.as_str())
+    let (mark, color, detail) = match &gate.status {
+        GateStatus::Running => ("▶", C_ACTIVE, ""),
+        GateStatus::Passed { detail } => ("✓", C_DONE, detail.as_str()),
+        GateStatus::Failed { detail } => ("✗", C_STALLED, detail.as_str()),
+        GateStatus::Unknown { detail } => (
+            "?",
+            C_PENDING,
+            detail
+                .strip_suffix("(exit unknown)")
+                .map_or(detail.as_str(), str::trim_end),
+        ),
     };
-    let detail = if gate.unknown {
-        gate.detail
-            .strip_suffix("(exit unknown)")
-            .map_or(gate.detail.as_str(), str::trim_end)
-    } else {
-        gate.detail.as_str()
-    };
+    let state = gate.status.as_label();
     let body = if detail.is_empty() {
         format!("  {mark} {} {state}", gate.name)
     } else {
         format!("  {mark} {} {state} · {detail}", gate.name)
     };
     format!("{color}{}{C_END}", elide(&body, width))
-}
-
-/// gate 状态串 → (标记, ANSI 前景色):passed ✓ 绿 / failed ✗ 黄 / 其余 ▶ 蓝。
-fn gate_visual(state: &str) -> (&'static str, &'static str) {
-    match state {
-        "passed" => ("✓", C_DONE),
-        "failed" => ("✗", C_STALLED),
-        _ => ("▶", C_ACTIVE),
-    }
 }
 
 /// 波次选中折算(纯函数,W2-004;W14-06 声明式任务优先):选中索引钳位进
@@ -841,42 +833,23 @@ pub fn spans_from_ansi(line: &str) -> Vec<Span<'static>> {
 /// 本 crate 的终端类型别名(crossterm 后端 + stdout)。
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
-/// 初始化:raw mode + 备用屏 + SGR 鼠标捕获;panic hook 先还原终端再接回
-/// 原 hook(崩溃不留 raw/备用屏残留)。中途失败自动回滚已做的步骤。
-fn setup_terminal() -> io::Result<Tui> {
-    install_panic_restore_hook();
-    enable_raw_mode()?;
-    let attempt = || -> io::Result<Tui> {
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
-        Terminal::new(CrosstermBackend::new(io::stdout()))
-    };
-    let result = attempt();
-    if result.is_err() {
-        let _ = restore_raw();
+/// 终端会话 RAII 守卫:在 `enable_raw_mode` 成功后立即构造,析构时统一还原
+/// 鼠标捕获、备用屏、光标可见性与 raw mode(忽略还原期 IO 错误),覆盖正常退出、
+/// `?` 提前返回与 panic 栈展开三条路径,不修改全局 `panic::set_hook`。
+struct TerminalSessionGuard;
+
+impl Drop for TerminalSessionGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen, Show);
+        let _ = disable_raw_mode();
     }
-    result
 }
 
-/// 正常路径还原:鼠标/备用屏/raw mode + 显示光标;幂等可重入。
-fn restore_terminal(terminal: &mut Tui) -> io::Result<()> {
-    let outcome = restore_raw();
-    terminal.show_cursor()?;
-    outcome
-}
-
-/// 还原核心(panic 路径与正常路径共用;各步骤失败静默——还原序尽量走完)。
-fn restore_raw() -> io::Result<()> {
-    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
-    disable_raw_mode()
-}
-
-/// panic hook:先还原终端,再调用接管前的原 hook。
-fn install_panic_restore_hook() {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = restore_raw();
-        previous(info);
-    }));
+/// 初始化备用屏、SGR 鼠标捕获与 ratatui 终端(调用前已启用 raw mode 并由
+/// [`TerminalSessionGuard`] 托管回滚;任一步 `?` 失败都随守卫析构自动还原)。
+fn setup_terminal() -> io::Result<Tui> {
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    Terminal::new(CrosstermBackend::new(io::stdout()))
 }
 
 // ---------- 主循环与状态 ----------

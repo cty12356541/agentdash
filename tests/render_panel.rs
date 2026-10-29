@@ -19,7 +19,7 @@ mod render;
 mod sources;
 
 use contract::TaskState;
-use model::{AgentView, Dashboard, GateView, MilestoneView, TaskView};
+use model::{AgentView, Dashboard, GateStatus, GateView, MilestoneView, TaskView};
 use render::{DEFAULT_PANEL_WIDTH, display_width, render_oneline, render_panel};
 use sources::git::GitFacts;
 use sources::remote::RemoteFacts;
@@ -275,21 +275,19 @@ fn gates_fill_health_section() {
     dash.gates = vec![
         GateView {
             name: "build".into(),
-            state: "running".into(),
-            detail: String::new(),
-            unknown: false,
+            status: GateStatus::Running,
         },
         GateView {
             name: "lint".into(),
-            state: "failed".into(),
-            detail: String::new(),
-            unknown: false,
+            status: GateStatus::Failed {
+                detail: String::new(),
+            },
         },
         GateView {
             name: "test".into(),
-            state: "passed".into(),
-            detail: "3 passed".into(),
-            unknown: false,
+            status: GateStatus::Passed {
+                detail: "3 passed".into(),
+            },
         },
     ];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
@@ -315,9 +313,9 @@ fn gate_detail_truncates_with_ellipsis_within_width() {
     let long = "x".repeat(200);
     dash.gates = vec![GateView {
         name: "test".into(),
-        state: "failed".into(),
-        detail: long.clone(),
-        unknown: false,
+        status: GateStatus::Failed {
+            detail: long.clone(),
+        },
     }];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
     for line in plain.lines() {
@@ -1310,15 +1308,15 @@ fn brief_view_renders_four_elements_with_zero_residue() {
     dash.gates = vec![
         GateView {
             name: "build".into(),
-            state: "passed".into(),
-            detail: String::new(),
-            unknown: false,
+            status: GateStatus::Passed {
+                detail: String::new(),
+            },
         },
         GateView {
             name: "test".into(),
-            state: "failed".into(),
-            detail: "2 failed".into(),
-            unknown: false,
+            status: GateStatus::Failed {
+                detail: "2 failed".into(),
+            },
         },
     ];
     dash.warnings = vec!["ledger: 未知字段".to_owned()];
@@ -1411,9 +1409,9 @@ fn failed_gate_without_exit_evidence_renders_unknown_third_state() {
     let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
     dash.gates = vec![GateView {
         name: "cargo-fmt".into(),
-        state: "failed".into(),
-        detail: "fmt clean".into(),
-        unknown: true,
+        status: GateStatus::Unknown {
+            detail: "fmt clean".into(),
+        },
     }];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
     assert!(
@@ -1428,9 +1426,9 @@ fn failed_gate_with_exit_evidence_keeps_real_failure_mark() {
     let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
     dash.gates = vec![GateView {
         name: "cargo-test".into(),
-        state: "failed".into(),
-        detail: "3 failed".into(),
-        unknown: false,
+        status: GateStatus::Failed {
+            detail: "3 failed".into(),
+        },
     }];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
     assert!(
@@ -1446,9 +1444,9 @@ fn unknown_gate_strips_legacy_tailnote_from_detail() {
     let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
     dash.gates = vec![GateView {
         name: "cargo-fmt".into(),
-        state: "failed".into(),
-        detail: "fmt clean (exit unknown)".into(),
-        unknown: true,
+        status: GateStatus::Unknown {
+            detail: "fmt clean (exit unknown)".into(),
+        },
     }];
     let plain = strip_ansi(&render_panel(&dash, DEFAULT_PANEL_WIDTH));
     assert!(
@@ -1465,9 +1463,9 @@ fn panel_rows_map_task_lines_to_ids() {
     let mut dash = dash_with(vec![task("T1", "实现契约", "A"), task("T2", "收口", "A")]);
     dash.gates = vec![GateView {
         name: "cargo-test".into(),
-        state: "passed".into(),
-        detail: "3 passed".into(),
-        unknown: false,
+        status: GateStatus::Passed {
+            detail: "3 passed".into(),
+        },
     }];
     let (text, rows) = render::render_panel_rows(&dash, DEFAULT_PANEL_WIDTH);
     assert_eq!(
@@ -1493,5 +1491,63 @@ fn panel_rows_map_task_lines_to_ids() {
     assert!(
         rows.iter().any(std::option::Option::is_none),
         "非任务行存在(None 占位)"
+    );
+}
+
+#[test]
+fn panel_and_brief_exhaustively_render_all_four_gate_statuses() {
+    let mut dash = dash_with(vec![task("T1", "实现契约", "A")]);
+    dash.gates = vec![
+        GateView {
+            name: "a-run".into(),
+            status: GateStatus::Running,
+        },
+        GateView {
+            name: "b-pass".into(),
+            status: GateStatus::Passed {
+                detail: "ok".into(),
+            },
+        },
+        GateView {
+            name: "c-fail".into(),
+            status: GateStatus::Failed {
+                detail: "boom".into(),
+            },
+        },
+        GateView {
+            name: "d-unknown".into(),
+            status: GateStatus::Unknown {
+                detail: "no exit (exit unknown)".into(),
+            },
+        },
+    ];
+    let colored = render_panel(&dash, DEFAULT_PANEL_WIDTH);
+    assert!(
+        colored.contains("\x1b[34m▶ a-run\x1b[0m"),
+        "Running 走 C_ACTIVE 蓝 + ▶: {colored:?}"
+    );
+    assert!(
+        colored.contains("\x1b[32m✓ b-pass · ok\x1b[0m"),
+        "Passed 走 C_DONE 绿 + ✓: {colored:?}"
+    );
+    assert!(
+        colored.contains("\x1b[33m✗ c-fail · boom\x1b[0m"),
+        "Failed 走 C_STALLED 黄 + ✗: {colored:?}"
+    );
+    assert!(
+        colored.contains("\x1b[90m? d-unknown · no exit (unknown)\x1b[0m"),
+        "Unknown 走 C_PENDING 暗灰 + ? + (unknown): {colored:?}"
+    );
+
+    let brief = strip_ansi(&render::render_brief(&dash, DEFAULT_PANEL_WIDTH));
+    assert!(!brief.contains("a-run"), "Running 不上精要视图");
+    assert!(!brief.contains("b-pass"), "Passed 不上精要视图");
+    assert!(
+        brief.contains("✗ c-fail · boom"),
+        "Failed 上精要视图: {brief}"
+    );
+    assert!(
+        brief.contains("? d-unknown · no exit (unknown)"),
+        "Unknown 上精要视图: {brief}"
     );
 }

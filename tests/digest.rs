@@ -19,7 +19,7 @@ mod render;
 mod sources;
 
 use contract::TaskState;
-use model::{AgentView, Dashboard, GateView, MilestoneView, TaskView};
+use model::{AgentView, Dashboard, GateStatus, GateView, MilestoneView, TaskView};
 use render::{digest_needs_attention, render_digest};
 use sources::git::GitFacts;
 use std::fs;
@@ -55,12 +55,10 @@ fn agent(who: &str, task: Option<&str>, since: &str, host: Option<&str>) -> Agen
     }
 }
 
-fn gate(name: &str, state: &str, detail: &str) -> GateView {
+fn gate(name: &str, status: GateStatus) -> GateView {
     GateView {
         name: name.into(),
-        state: state.into(),
-        detail: detail.into(),
-        unknown: false,
+        status,
     }
 }
 
@@ -107,9 +105,19 @@ fn busy_dash() -> Dashboard {
             agent("bob", None, "", None),
         ],
         gates: vec![
-            gate("build", "passed", ""),
-            gate("test", "failed", "2 failed"),
-            gate("lint", "running", ""),
+            gate(
+                "build",
+                GateStatus::Passed {
+                    detail: String::new(),
+                },
+            ),
+            gate(
+                "test",
+                GateStatus::Failed {
+                    detail: "2 failed".into(),
+                },
+            ),
+            gate("lint", GateStatus::Running),
         ],
         barriers: Vec::new(),
         event_tail: Vec::new(),
@@ -242,10 +250,29 @@ fn needs_attention_matches_failed_gate_or_blocked_only() {
         !digest_needs_attention(&dash),
         "无失败门无 blocked 无警告 → false"
     );
-    dash.gates = vec![gate("build", "passed", "")];
+    dash.gates = vec![gate("run", GateStatus::Running)];
+    assert!(!digest_needs_attention(&dash), "running 门不触发 --strict");
+    dash.gates = vec![gate(
+        "build",
+        GateStatus::Passed {
+            detail: String::new(),
+        },
+    )];
     assert!(!digest_needs_attention(&dash), "passed 门不触发 --strict");
-    dash.gates = vec![gate("lint", "failed", "boom")];
+    dash.gates = vec![gate(
+        "lint",
+        GateStatus::Failed {
+            detail: "boom".into(),
+        },
+    )];
     assert!(digest_needs_attention(&dash), "failed gate → true");
+    dash.gates = vec![gate(
+        "fmt",
+        GateStatus::Unknown {
+            detail: "fmt clean".into(),
+        },
+    )];
+    assert!(digest_needs_attention(&dash), "unknown gate → true");
     dash.gates = Vec::new();
     dash.tasks = vec![task("T1", "阻塞任务", TaskState::Blocked, None)];
     assert!(digest_needs_attention(&dash), "blocked 任务 → true");
@@ -397,8 +424,12 @@ fn cli_digest_usage_errors_exit_two() {
 fn digest_unknown_failed_gate_carries_third_state() {
     // W12-009:exit=null 折叠(zcode 绿侧路径)在 digest 同源渲染第三态
     let mut d = quiet_dash();
-    let mut g = gate("cargo-fmt", "failed", "fmt clean");
-    g.unknown = true;
+    let g = gate(
+        "cargo-fmt",
+        GateStatus::Unknown {
+            detail: "fmt clean".into(),
+        },
+    );
     d.gates = vec![g];
     let text = render_digest(&d);
     assert!(

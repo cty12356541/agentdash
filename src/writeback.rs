@@ -18,7 +18,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Map, Value};
@@ -169,20 +169,32 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 临界区包装(承 hook `with_lock` 同一模式,泛化出返回值):拿到 `.lock` 后
-/// 执行 `f`,退出即删锁(仅在自己真持有才删);目录建不出 → `None`。拿不到
+/// 文件锁 RAII 守卫:正常返回、`Err` 或栈展开 panic 时若本实例真持有锁,立即摘除 `.lock`。
+struct FileLockGuard {
+    path: PathBuf,
+    held: bool,
+}
+
+impl Drop for FileLockGuard {
+    fn drop(&mut self) {
+        if self.held {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// 临界区包装(承 hook `with_lock` 同一模式,泛化出返回值):拿到 `.lock` 后由
+/// [`FileLockGuard`] 托管生命周期并执行 `f`,正常返回、`Err` 与栈展开 panic
+/// 均即刻删锁(仅在自己真持有才删);目录建不出 → `None`。拿不到
 /// 锁超时退化仍执行 `f`(降级铁律:单次原子替换,丢改风险远小于让用户干等)。
-fn with_lock<T>(dir: &Path, f: impl FnOnce() -> T) -> Option<T> {
+pub(crate) fn with_lock<T>(dir: &Path, f: impl FnOnce() -> T) -> Option<T> {
     if fs::create_dir_all(dir).is_err() {
         return None;
     }
-    let lock_path = dir.join(LOCK_NAME);
-    let held = acquire_lock(&lock_path);
-    let out = f();
-    if held {
-        let _ = fs::remove_file(&lock_path);
-    }
-    Some(out)
+    let path = dir.join(LOCK_NAME);
+    let held = acquire_lock(&path);
+    let _guard = FileLockGuard { path, held };
+    Some(f())
 }
 
 /// 锁获取(承 hook):先到先得;被占则自旋等待。锁文件 mtime 超过

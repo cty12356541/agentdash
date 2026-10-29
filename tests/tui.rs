@@ -42,7 +42,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Color, Modifier};
 
 use contract::TaskState;
-use model::{BarrierEdges, Dashboard, EventTailView, GateView, MilestoneView, TaskView};
+use model::{
+    BarrierEdges, Dashboard, EventTailView, GateStatus, GateView, MilestoneView, TaskView,
+};
 use render::graph::Cell;
 use sources::git::GitFacts;
 use tui::{Action, Delivery, InputMode};
@@ -555,15 +557,15 @@ fn detail_dash() -> Dashboard {
         gates: vec![
             GateView {
                 name: "pre-merge".into(),
-                state: "passed".into(),
-                detail: "test+clippy".into(),
-                unknown: false,
+                status: GateStatus::Passed {
+                    detail: "test+clippy".into(),
+                },
             },
             GateView {
                 name: "ship".into(),
-                state: "failed".into(),
-                detail: "1 red".into(),
-                unknown: false,
+                status: GateStatus::Failed {
+                    detail: "1 red".into(),
+                },
             },
         ],
         remote: None,
@@ -1171,21 +1173,21 @@ fn detail_gate_unknown_renders_third_state_and_strips_legacy_suffix() {
     dash.gates = vec![
         GateView {
             name: "cargo-fmt".into(),
-            state: "failed".into(),
-            detail: "fmt clean (exit unknown)".into(),
-            unknown: true,
+            status: GateStatus::Unknown {
+                detail: "fmt clean (exit unknown)".into(),
+            },
         },
         GateView {
             name: "lint".into(),
-            state: "failed".into(),
-            detail: "(exit unknown)".into(),
-            unknown: true,
+            status: GateStatus::Unknown {
+                detail: "(exit unknown)".into(),
+            },
         },
         GateView {
             name: "cargo-test".into(),
-            state: "failed".into(),
-            detail: "2 red".into(),
-            unknown: false,
+            status: GateStatus::Failed {
+                detail: "2 red".into(),
+            },
         },
     ];
     let raw_lines = tui::detail_lines(&dash.tasks[0], &dash, 80);

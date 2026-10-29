@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 use super::panel::{agent_body, counts, gate_body, head_line, stats_body};
 use super::{Visual, clock_slice, unattested_done, visual};
-use crate::model::Dashboard;
+use crate::model::{Dashboard, GateStatus};
 
 /// 离场摘要:节序固定 = 页眉(项目 · 活跃里程碑)+ 统计一行 → 失败门
 /// (✗ 名 · detail)→ 在跑 agent(▶)→ blocked 任务(⊘)→ done 任务
@@ -27,10 +27,13 @@ pub fn render_digest(dash: &Dashboard) -> String {
         &clock_slice(&dash.generated_at),
     ));
 
-    // 失败门:✗ 名 · detail(与精要视图同过滤:仅 failed 态上摘要)
+    // 失败门:✗/? 名 · detail(与精要视图同过滤:仅 Failed/Unknown 终态上摘要)
     for gate in &dash.gates {
-        if gate.state == "failed" {
-            lines.push(gate_body(gate));
+        match &gate.status {
+            GateStatus::Failed { .. } | GateStatus::Unknown { .. } => {
+                lines.push(gate_body(gate));
+            }
+            GateStatus::Running | GateStatus::Passed { .. } => {}
         }
     }
 
@@ -77,10 +80,12 @@ pub fn render_digest(dash: &Dashboard) -> String {
 /// 渲染,退出码在 cmd 层收口。
 #[must_use]
 pub fn digest_needs_attention(dash: &Dashboard) -> bool {
-    dash.gates.iter().any(|gate| gate.state == "failed")
-        || dash
-            .tasks
-            .iter()
-            .any(|task| visual(task.state) == Visual::Blocked)
+    dash.gates.iter().any(|gate| match &gate.status {
+        GateStatus::Failed { .. } | GateStatus::Unknown { .. } => true,
+        GateStatus::Running | GateStatus::Passed { .. } => false,
+    }) || dash
+        .tasks
+        .iter()
+        .any(|task| visual(task.state) == Visual::Blocked)
         || !dash.warnings.is_empty()
 }

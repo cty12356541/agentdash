@@ -105,18 +105,66 @@ pub struct AgentView {
     pub inferred: bool,
 }
 
+/// 验证门终态和类型(由 [`events::GateState`] 投影收敛,令非法状态不可表示)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateStatus {
+    /// 正在运行(无 detail)。
+    Running,
+    /// 验证通过,携带 detail 原文。
+    Passed {
+        /// 终态 detail 原文。
+        detail: String,
+    },
+    /// 有退出码证据的真失败,携带 detail 原文。
+    Failed {
+        /// 终态 detail 原文。
+        detail: String,
+    },
+    /// 折叠无退出码证据(`exit=null`),渲染第三态 `? … (unknown)`。
+    Unknown {
+        /// 终态 detail 原文。
+        detail: String,
+    },
+}
+
+impl GateStatus {
+    /// 状态词:`running` / `passed` / `failed` / `unknown`。
+    #[must_use]
+    pub const fn as_label(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Passed { .. } => "passed",
+            Self::Failed { .. } => "failed",
+            Self::Unknown { .. } => "unknown",
+        }
+    }
+
+    /// 终态携带的原始 detail(`Running` 恒为空串)。
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::Running => "",
+            Self::Passed { detail } | Self::Failed { detail } | Self::Unknown { detail } => detail,
+        }
+    }
+
+    /// 是否为 `Unknown` 第三态(折叠无退出码证据)。
+    #[must_use]
+    pub const fn is_unknown(&self) -> bool {
+        match self {
+            Self::Unknown { .. } => true,
+            Self::Running | Self::Passed { .. } | Self::Failed { .. } => false,
+        }
+    }
+}
+
 /// 验证门视图(后到覆盖先到折尽后的终态快照)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateView {
     /// 门名(事件 `gate`)。
     pub name: String,
-    /// 终态,取事件词表:`running` / `passed` / `failed`。
-    pub state: String,
-    /// 终态 detail 原样携带(`running` 恒为空串)。
-    pub detail: String,
-    /// W12-009:`failed` 且折叠无退出码证据(exit=null)为真——渲染第三态
-    /// `? (unknown)`,与有码真失败 ✗ 视觉可辨;passed/running 恒假。
-    pub unknown: bool,
+    /// 门终态和类型。
+    pub status: GateStatus,
 }
 
 /// 详情面板事件尾条目视图(W4-002;[`events::EventModel::tail`] 直投影:
@@ -376,17 +424,19 @@ fn event_views(model: events::EventModel) -> EventViews {
         .gates
         .into_iter()
         .map(|(name, state)| {
-            let (state, detail, unknown) = match state {
-                GateState::Running => ("running", String::new(), false),
-                GateState::Passed { detail } => ("passed", detail, false),
-                GateState::Failed { detail, unknown } => ("failed", detail, unknown),
+            let status = match state {
+                GateState::Running => GateStatus::Running,
+                GateState::Passed { detail } => GateStatus::Passed { detail },
+                GateState::Failed {
+                    detail,
+                    unknown: false,
+                } => GateStatus::Failed { detail },
+                GateState::Failed {
+                    detail,
+                    unknown: true,
+                } => GateStatus::Unknown { detail },
             };
-            GateView {
-                name,
-                state: state.to_owned(),
-                detail,
-                unknown,
-            }
+            GateView { name, status }
         })
         .collect();
     gates.sort_by(|a, b| a.name.cmp(&b.name));

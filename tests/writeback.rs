@@ -354,3 +354,23 @@ fn mark_done_stamps_done_at_and_leaving_done_removes_it() {
         ledger["tasks"]["T2"]
     );
 }
+
+#[test]
+fn with_lock_removes_lock_file_when_closure_panics() {
+    let t = TempDir::new("panic-lock");
+    let dir = t.path().join(".agentdash");
+    let lock = dir.join(".lock");
+
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tui::writeback::with_lock(&dir, || {
+            assert!(lock.exists(), "临界区内必须已创建并持有 .lock");
+            panic!("simulated panic inside writeback::with_lock");
+        });
+    }));
+
+    assert!(caught.is_err(), "panic 应正常展开并被 catch_unwind 捕获");
+    assert!(
+        !lock.exists(),
+        "f() panic 展开后 RAII Drop 守卫必须立即删除 .lock"
+    );
+}
