@@ -26,8 +26,10 @@ if ! command -v agentdash >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$target/.claude/skills/agentdash"
-cp "$here/skills/agentdash/SKILL.md" "$target/.claude/skills/agentdash/SKILL.md"
+for skill in agentdash agentdash-setup agentdash-orchestrate; do
+  mkdir -p "$target/.claude/skills/$skill"
+  cp "$here/skills/$skill/SKILL.md" "$target/.claude/skills/$skill/SKILL.md"
+done
 
 # --- AGENTDASH.md 标记段幂等合入 CLAUDE.md(harness 单源,W7-005/C3)。块经
 # 文件传入 awk(赋值前缀而非 -v:BSD awk 对 -v 值做转义处理,多行块会炸)---

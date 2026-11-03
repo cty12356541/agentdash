@@ -1,4 +1,4 @@
-﻿# agentdash · claude-code 集成包安装器(PowerShell 版;类 Unix shell 用 install.sh)
+# agentdash · claude-code 集成包安装器(PowerShell 版;类 Unix shell 用 install.sh)
 # 前提:agentdash 二进制在 PATH——hook 直调二进制子命令,零 Python 前置(spec §6 修订)。
 # 用法:.\install.ps1 [-Target <目标项目目录>](默认当前目录)
 # 动作:skill 复制;settings.json 幂等注册五钩子(命令为常量,无路径 baked);
@@ -26,9 +26,11 @@ if (-not $agentdashCmd) {
 }
 
 # --- skill 复制 ---
-$skillDir = Join-Path $Target '.claude\skills\agentdash'
-New-Item -ItemType Directory -Force -Path $skillDir | Out-Null
-Copy-Item (Join-Path $here 'skills\agentdash\SKILL.md') (Join-Path $skillDir 'SKILL.md') -Force
+foreach ($skill in @('agentdash', 'agentdash-setup', 'agentdash-orchestrate')) {
+    $skillDir = Join-Path $Target ".claude\skills\$skill"
+    New-Item -ItemType Directory -Force -Path $skillDir | Out-Null
+    Copy-Item (Join-Path $here "skills\$skill\SKILL.md") (Join-Path $skillDir 'SKILL.md') -Force
+}
 
 # --- 清理被二进制方案替代的 Python 垫片残留(老版本安装产物)---
 $staleHook = Join-Path $Target '.claude\agentdash\hooks\record_event.py'
