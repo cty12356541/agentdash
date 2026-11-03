@@ -840,7 +840,12 @@ struct TerminalSessionGuard;
 
 impl Drop for TerminalSessionGuard {
     fn drop(&mut self) {
-        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen, Show);
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            LeaveAlternateScreen,
+            Show
+        );
         let _ = disable_raw_mode();
     }
 }

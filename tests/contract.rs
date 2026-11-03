@@ -453,7 +453,7 @@ fn legacy_v1_ledger_without_started_at_parses_identically() {
         }}"#,
     )
     .expect("仅含 done_at 的 v1.0 台账必须原样解析");
-    assert!(done_only.warnings.is_empty());
+    assert_eq!(done_only.warnings, [] as [std::string::String; 0]);
     assert_eq!(done_only.tasks["09"].started_at, None);
     assert_eq!(
         done_only.tasks["09"].done_at.as_deref(),
@@ -489,7 +489,7 @@ fn invalid_or_edge_started_at_matches_done_at_discipline() {
         null_done.tasks["1"].done_at
     );
     assert_eq!(null_started.warnings, null_done.warnings);
-    assert!(null_started.warnings.is_empty());
+    assert_eq!(null_started.warnings, [] as [std::string::String; 0]);
 
     // 3. 空串与空白串:契约层与 done_at 完全同律 → 原样穿透且零警告(裁剪判空归下游消费端)
     for raw in ["", "   "] {
@@ -511,7 +511,7 @@ fn invalid_or_edge_started_at_matches_done_at_discipline() {
             "契约层原样保留字符串"
         );
         assert_eq!(s_ledger.warnings, d_ledger.warnings);
-        assert!(s_ledger.warnings.is_empty());
+        assert_eq!(s_ledger.warnings, [] as [std::string::String; 0]);
     }
 
     // 4. 富态无 profile 降级时:started_at 与 done_at 一样保持原值不折损
