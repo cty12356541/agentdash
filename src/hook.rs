@@ -386,6 +386,9 @@ fn on_agy_post_tool_call(
         .unwrap_or_default();
     let synth_err = top_error.map(|err| json!({ "is_error": true, "error": err }));
     append_tool_event(dir, &tool, synth_err.as_ref(), summary, host, session);
+    if tool == "manage_subagents" && top_error.is_none() {
+        on_agy_manage_subagents(dir, host, session, payload, args);
+    }
 }
 
 /// Cursor `afterShellExecution` 载荷识别(W9):CLI 事件名归一为 posttooluse 后,
@@ -799,29 +802,46 @@ fn on_stop(payload: &Map<String, Value>, host: Option<&str>) {
             );
         }
         if agy_fully_idle && let Some(sid) = session {
-            maybe_complete_agy_subagent(&dir, host, sid);
+            maybe_complete_agy_subagent(&dir, host, sid, payload);
         }
     });
 }
 
-/// Antigravity 子智能体 `Stop` 完成归并(W14-01):子代理无独立 `SubagentStop`
-/// 事件,仅以自身 `conversationId` + `fullyIdle: true` 发 `Stop`。在锁内有界
-/// 扫描 `events.jsonl`(≤5MB),模拟活跃派发池:若存在未闭合派发、本会话非派发
-/// 发起方且尚未发过 `completed`,追加一条匿名 `completed`。
-fn maybe_complete_agy_subagent(dir: &Path, host: Option<&str>, sid: &str) {
+/// 活跃派发条目:记录 `who`、`task`(前 80 字符)、派发方 `session_id` 及是否已被匿名完成消费。
+struct ActiveDispatch {
+    who: String,
+    task: Option<String>,
+    dispatcher_sid: Option<String>,
+    inferred: bool,
+}
+
+/// Antigravity 子会话轨迹首步探测结果。
+enum AgySubagentProbe {
+    /// 轨迹首步明确为人类顶层会话(`USER_EXPLICIT` / `USER_INPUT`),绝非子智能体。
+    TopLevelUser,
+    /// 轨迹首步确认子智能体身份(`SYSTEM_MESSAGE` 携带父会话 `sender=` 与初始 `content=`)。
+    Subagent {
+        parent_sid: Option<String>,
+        prompt_head: Option<String>,
+    },
+    /// 未提供或无法读取轨迹文件(保持无轨迹场景向后兼容)。
+    Unknown,
+}
+
+/// 有界扫描 `events.jsonl`(≤5MB),重建活跃派发池并判定 `sid` 是否为派发发起方或已完成。
+fn scan_active_dispatches(
+    dir: &Path,
+    sid: Option<&str>,
+) -> Option<(bool, bool, Vec<ActiveDispatch>)> {
     let events_file = dir.join(EVENTS_NAME);
-    let Ok(meta) = fs::metadata(&events_file) else {
-        return;
-    };
+    let meta = fs::metadata(&events_file).ok()?;
     if meta.len() > ROTATE_BYTES {
-        return;
+        return None;
     }
-    let Ok(content) = fs::read_to_string(&events_file) else {
-        return;
-    };
+    let content = fs::read_to_string(&events_file).ok()?;
     let mut is_dispatcher = false;
     let mut already_completed = false;
-    let mut active: Vec<(String, bool)> = Vec::new();
+    let mut active: Vec<ActiveDispatch> = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -844,71 +864,332 @@ fn maybe_complete_agy_subagent(dir: &Path, host: Option<&str>, sid: &str) {
             .get("who")
             .and_then(Value::as_str)
             .filter(|w| !w.is_empty());
+        let task = obj
+            .get("task")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned);
 
         match ev {
             Some("dispatched") => {
-                if line_sid == Some(sid) {
+                if sid.is_some() && line_sid == sid {
                     is_dispatcher = true;
                 }
                 if let Some(w) = who {
-                    if let Some(entry) = active.iter_mut().find(|(name, _)| name == w) {
-                        entry.1 = false;
+                    if let Some(entry) = active.iter_mut().find(|d| d.who == w) {
+                        entry.task = task;
+                        entry.dispatcher_sid = line_sid.map(str::to_owned);
+                        entry.inferred = false;
                     } else {
-                        active.push((w.to_owned(), false));
+                        active.push(ActiveDispatch {
+                            who: w.to_owned(),
+                            task,
+                            dispatcher_sid: line_sid.map(str::to_owned),
+                            inferred: false,
+                        });
                     }
                 }
             }
             Some("completed") => {
-                if line_sid == Some(sid) {
+                if sid.is_some() && line_sid == sid {
                     already_completed = true;
                 }
                 if let Some(w) = who {
-                    active.retain(|(name, _)| name != w);
-                } else if let Some(entry) = active.iter_mut().find(|(_, inferred)| !*inferred) {
-                    entry.1 = true;
+                    active.retain(|d| d.who != w);
+                } else if let Some(entry) = active.iter_mut().find(|d| !d.inferred) {
+                    entry.inferred = true;
                 }
             }
             _ => {}
         }
     }
+    Some((is_dispatcher, already_completed, active))
+}
 
-    let open_dispatches = active.iter().filter(|(_, inferred)| !*inferred).count();
-    if open_dispatches > 0 && !is_dispatcher && !already_completed {
-        append_line(
-            dir,
-            &stamp(
-                json!({
-                    "ts": ts_now(),
-                    "kind": "agent",
-                    "event": "completed",
-                }),
-                host,
-                Some(sid),
-            ),
+/// 定位并解析 Antigravity 会话 `sid` 的 `transcript.jsonl` 首步(`step_index == 0`),
+/// 区分人类顶层会话与子智能体,并提取父会话 `sender=` 与初始任务摘要前 80 字符。
+fn probe_agy_subagent_transcript(sid: &str, payload: &Map<String, Value>) -> AgySubagentProbe {
+    let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
+    if let Some(tp_raw) = payload
+        .get("transcriptPath")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let tp = PathBuf::from(tp_raw);
+        let caller_sid = session_id_of(payload);
+        if caller_sid == Some(sid) || tp_raw.contains(sid) {
+            candidates.push(tp.clone());
+        }
+        // 父会话调 manage_subagents(kill) 时 transcriptPath 指向父会话,可推导兄弟子会话轨迹路径
+        if let Some(brain_dir) = tp
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+        {
+            candidates.push(
+                brain_dir
+                    .join(sid)
+                    .join(".system_generated")
+                    .join("logs")
+                    .join("transcript.jsonl"),
+            );
+        }
+    }
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        candidates.push(
+            PathBuf::from(home)
+                .join(".gemini")
+                .join("antigravity")
+                .join("brain")
+                .join(sid)
+                .join(".system_generated")
+                .join("logs")
+                .join("transcript.jsonl"),
         );
+    }
+
+    let Some(file_path) = candidates.into_iter().find(|p| p.is_file()) else {
+        return AgySubagentProbe::Unknown;
+    };
+    let Ok(file) = File::open(file_path) else {
+        return AgySubagentProbe::Unknown;
+    };
+    let mut buf = Vec::new();
+    if file
+        .take(TRANSCRIPT_TAIL_BYTES)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
+        return AgySubagentProbe::Unknown;
+    }
+    let head = String::from_utf8_lossy(&buf);
+    let Some(first_line) = head.lines().map(str::trim).find(|l| !l.is_empty()) else {
+        return AgySubagentProbe::Unknown;
+    };
+    let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(first_line) else {
+        return AgySubagentProbe::Unknown;
+    };
+    let source = obj.get("source").and_then(Value::as_str);
+    let step_type = obj.get("type").and_then(Value::as_str);
+    if source == Some("USER_EXPLICIT") || step_type == Some("USER_INPUT") {
+        return AgySubagentProbe::TopLevelUser;
+    }
+    if step_type == Some("SYSTEM_MESSAGE") || source == Some("SYSTEM") {
+        let content = obj
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let (parent_sid, prompt_head) = parse_agy_system_message_meta(content);
+        return AgySubagentProbe::Subagent {
+            parent_sid,
+            prompt_head,
+        };
+    }
+    AgySubagentProbe::Unknown
+}
+
+/// 从 Antigravity 子智能体首步 `<SYSTEM_MESSAGE>` 文本提取 `sender=<parent_sid>` 与 `content=<prompt>`。
+fn parse_agy_system_message_meta(content: &str) -> (Option<String>, Option<String>) {
+    const SENDER_KEY: &str = "sender=";
+    const CONTENT_KEY: &str = "content=";
+    const END_TAG: &str = "</SYSTEM_MESSAGE>";
+
+    let scope = match content.find("<SYSTEM_MESSAGE>") {
+        Some(pos) => &content[pos..],
+        None => content,
+    };
+    let parent_sid = scope.find(SENDER_KEY).and_then(|pos| {
+        let after = &scope[pos + SENDER_KEY.len()..];
+        let token: String = after.chars().take_while(|c| !c.is_whitespace()).collect();
+        (!token.is_empty()).then_some(token)
+    });
+    let prompt_head = scope.find(CONTENT_KEY).and_then(|pos| {
+        let after = &scope[pos + CONTENT_KEY.len()..];
+        let body = match after.rfind(END_TAG) {
+            Some(end_pos) => &after[..end_pos],
+            None => after,
+        };
+        let trimmed = body.trim();
+        (!trimmed.is_empty()).then(|| clip(trimmed))
+    });
+    (parent_sid, prompt_head)
+}
+
+/// 按子智能体首步 `(parent_sid, prompt_head)` 在未闭合派发池中匹配最精确的 `who`。
+fn match_active_dispatch_who(
+    active: &[ActiveDispatch],
+    parent_sid: Option<&str>,
+    prompt_head: Option<&str>,
+) -> Option<String> {
+    if let (Some(psid), Some(phead)) = (parent_sid, prompt_head)
+        && let Some(hit) = active.iter().find(|d| {
+            !d.inferred
+                && d.dispatcher_sid.as_deref() == Some(psid)
+                && d.task.as_deref() == Some(phead)
+        })
+    {
+        return Some(hit.who.clone());
+    }
+    if let Some(phead) = prompt_head
+        && let Some(hit) = active
+            .iter()
+            .find(|d| !d.inferred && d.task.as_deref() == Some(phead))
+    {
+        return Some(hit.who.clone());
+    }
+    if let Some(psid) = parent_sid
+        && let Some(hit) = active
+            .iter()
+            .find(|d| !d.inferred && d.dispatcher_sid.as_deref() == Some(psid))
+    {
+        return Some(hit.who.clone());
+    }
+    active.iter().find(|d| !d.inferred).map(|d| d.who.clone())
+}
+
+/// Antigravity 子智能体 `Stop` 完成归并(W14-01 + 实名归因):子代理无独立 `SubagentStop`
+/// 事件,仅以自身 `conversationId` + `fullyIdle: true` 发 `Stop`。在锁内有界扫描
+/// `events.jsonl`(≤5MB),若本会话轨迹首步确认为人类顶层会话则跳过(防历史未闭合派发被误领);
+/// 若轨迹首步可解析父会话与任务摘要则精确写入 `who`,无轨迹文件时回退匿名 `completed`。
+fn maybe_complete_agy_subagent(
+    dir: &Path,
+    host: Option<&str>,
+    sid: &str,
+    payload: &Map<String, Value>,
+) {
+    let Some((is_dispatcher, already_completed, active)) = scan_active_dispatches(dir, Some(sid))
+    else {
+        return;
+    };
+    let open_dispatches = active.iter().filter(|d| !d.inferred).count();
+    if open_dispatches == 0 || is_dispatcher || already_completed {
+        return;
+    }
+    let resolved_who = match probe_agy_subagent_transcript(sid, payload) {
+        AgySubagentProbe::TopLevelUser => return,
+        AgySubagentProbe::Subagent {
+            parent_sid,
+            prompt_head,
+        } => match_active_dispatch_who(&active, parent_sid.as_deref(), prompt_head.as_deref()),
+        AgySubagentProbe::Unknown => None,
+    };
+    let mut event = json!({
+        "ts": ts_now(),
+        "kind": "agent",
+        "event": "completed",
+    });
+    if let Some(who) = resolved_who {
+        event["who"] = json!(clip(&who));
+    }
+    append_line(dir, &stamp(event, host, Some(sid)));
+}
+
+/// Antigravity `manage_subagents`(`Action: "kill"` / `"kill_all"`)完成收口:
+/// 被父会话强杀的子智能体不会再触发自身 `Stop(fullyIdle: true)`,在此处即时补齐其 `completed` 事件。
+fn on_agy_manage_subagents(
+    dir: &Path,
+    host: Option<&str>,
+    session: Option<&str>,
+    payload: &Map<String, Value>,
+    args: Option<&Map<String, Value>>,
+) {
+    let Some(action) = args
+        .and_then(|a| a.get("Action"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+    else {
+        return;
+    };
+    if action.eq_ignore_ascii_case("kill") {
+        let Some(ids) = args
+            .and_then(|a| a.get("ConversationIds"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        with_lock(dir, || {
+            let existing = fs::read_to_string(dir.join(PENDING_NAME))
+                .ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+            let mut slots = pending_slots(existing);
+            let before_len = slots.len();
+            for cid in ids
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                maybe_complete_agy_subagent(dir, host, cid, payload);
+                slots.retain(|slot| slot.get("session").and_then(Value::as_str) != Some(cid));
+            }
+            if slots.len() != before_len {
+                if slots.is_empty() {
+                    let _ = fs::remove_file(dir.join(PENDING_NAME));
+                } else {
+                    write_pending_slots(dir, &slots);
+                }
+            }
+        });
+    } else if action.eq_ignore_ascii_case("kill_all") {
+        with_lock(dir, || {
+            let Some((_, _, active)) = scan_active_dispatches(dir, None) else {
+                return;
+            };
+            for d in active.into_iter().filter(|d| {
+                !d.inferred && (session.is_none() || d.dispatcher_sid.as_deref() == session)
+            }) {
+                append_line(
+                    dir,
+                    &stamp(
+                        json!({
+                            "ts": ts_now(),
+                            "kind": "agent",
+                            "event": "completed",
+                            "who": clip(&d.who),
+                        }),
+                        host,
+                        session,
+                    ),
+                );
+            }
+        });
     }
 }
 
-/// `SubagentStop`:`agent` completed 行;载荷带 `agent_name`/`subagent_type`/`who`
-/// 则透传(第三键为 Cursor 宿主词表,W9;前键缺席时回退,老宿主不受影响)。
+/// `SubagentStop`:`agent` completed 行;载荷带 `agent_name`/`subagent_type`/`agent_type`/`who`
+/// 则直接透传;若宿主 `SubagentStop` 载荷省略代理名但携带与 `PreToolUse` 相同的 `session_id`,
+/// 则在锁内从同 `session_id` 未闭合派发池中补齐 `who`。
 fn on_subagent_stop(payload: &Map<String, Value>, host: Option<&str>) {
-    let who = ["agent_name", "subagent_type", "who"]
+    let explicit_who = ["agent_name", "subagent_type", "agent_type", "who"]
         .iter()
         .find_map(|key| {
             payload
                 .get(*key)
                 .and_then(Value::as_str)
                 .filter(|w| !w.is_empty())
-        });
+        })
+        .map(clip);
     let dir = events_dir(payload);
     let session = session_id_of(payload);
-    let mut event = json!({ "ts": ts_now(), "kind": "agent", "event": "completed" });
-    if let Some(who) = who {
-        event["who"] = json!(clip(who));
-    }
-    // 注:events.rs 重放以 `who` 为 agent 事件主键,`task` 只是可选注记;
-    // 宿主 SubagentStop 载荷天然无 task,本行只发 who 即满足重放契约。
-    with_lock(&dir, || append_line(&dir, &stamp(event, host, session)));
+    with_lock(&dir, || {
+        let resolved_who = explicit_who.or_else(|| {
+            let sid = session?;
+            let (_, _, active) = scan_active_dispatches(&dir, Some(sid))?;
+            active
+                .into_iter()
+                .find(|d| !d.inferred && d.dispatcher_sid.as_deref() == Some(sid))
+                .map(|d| clip(&d.who))
+        });
+        let mut event = json!({ "ts": ts_now(), "kind": "agent", "event": "completed" });
+        if let Some(who) = resolved_who {
+            event["who"] = json!(who);
+        }
+        // 注:events.rs 重放以 `who` 为 agent 事件主键,`task` 只是可选注记;
+        // 宿主 SubagentStop 载荷天然无 task,本行只发 who 即满足重放契约。
+        append_line(&dir, &stamp(event, host, session));
+    });
     // ADE: 子智能体会话结束也折叠该 session 的 pending 槽(复用 Stop 逻辑)。
     on_stop(payload, host);
 }
@@ -1391,17 +1672,22 @@ fn agy_transcript_outcome(transcript_path: &str, step_idx: Option<i64>) -> Optio
         let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(trimmed) else {
             continue;
         };
-        if obj.get("type").and_then(Value::as_str) != Some("GENERIC") {
-            continue;
-        }
-        if let Some(idx) = step_idx
-            && obj.get("step_index").and_then(Value::as_i64) != Some(idx)
-        {
-            continue;
-        }
         let Some(content) = obj.get("content").and_then(Value::as_str) else {
             continue;
         };
+        let step_type = obj.get("type").and_then(Value::as_str);
+        let step_matches = match step_idx {
+            Some(idx) => {
+                (step_type == Some("GENERIC")
+                    && obj.get("step_index").and_then(Value::as_i64) == Some(idx))
+                    || (step_type == Some("SYSTEM_MESSAGE")
+                        && content.contains(&format!("/task-{idx}")))
+            }
+            None => step_type == Some("GENERIC"),
+        };
+        if !step_matches {
+            continue;
+        }
         let Some(pos) = content.find(EXIT_MARKER) else {
             continue;
         };

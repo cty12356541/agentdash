@@ -3182,3 +3182,162 @@ fn agy_step_none_session_isolation_and_subagent_who_fallbacks() {
     assert_eq!(evs[4]["who"], cases[0].1);
     assert_eq!(evs[5]["who"], cases[1].1);
 }
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn agy_and_claude_subagent_completion_resolves_who_and_guards_top_level_user() {
+    let repo = TempDir::new("agy-who-resolve");
+    let ws = [repo.path().to_string_lossy()];
+
+    // 1. 父会话派发 Lane A 与 Lane B 两个子智能体
+    for (role, prompt) in [
+        ("Lane A Builder", "Build module A in wt-a"),
+        ("Lane B Builder", "Build module B in wt-b"),
+    ] {
+        let pre = json!({
+            "conversationId": "parent-main",
+            "workspacePaths": ws,
+            "toolCall": {
+                "name": "invoke_subagent",
+                "args": {"TypeName": "self", "Role": role, "Prompt": prompt}
+            }
+        });
+        assert_agy_stdout(
+            &feed(
+                &["hook", "--host", "agy", "pretooluse"],
+                &pre.to_string(),
+                repo.path(),
+            ),
+            "{\"decision\":\"allow\"}\n",
+            "dispatch subagent",
+        );
+    }
+
+    // 2. 顶层人类用户会话(step 0 为 USER_EXPLICIT / USER_INPUT)Stop(fullyIdle=true)不得误领未闭合派发
+    let user_tp = repo.path().join("user_transcript.jsonl");
+    fs::write(
+        &user_tp,
+        format!(
+            "{}\n",
+            json!({
+                "step_index": 0,
+                "source": "USER_EXPLICIT",
+                "type": "USER_INPUT",
+                "content": "Run product evaluation"
+            })
+        ),
+    )
+    .expect("write user transcript");
+    let user_stop = json!({
+        "conversationId": "user-conv-99",
+        "workspacePaths": ws,
+        "transcriptPath": user_tp.to_string_lossy(),
+        "fullyIdle": true
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &user_stop.to_string(),
+            repo.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "top-level user stop ignored",
+    );
+    assert_eq!(
+        read_events(repo.path()).len(),
+        2,
+        "人类顶层会话不得产出伪 completed"
+    );
+
+    // 3. Lane B 先于 Lane A 完成(乱序):凭子会话 transcript 首步 SYSTEM_MESSAGE 精确归因到 Lane B Builder
+    let child_b_tp = repo.path().join("child_b_transcript.jsonl");
+    fs::write(
+        &child_b_tp,
+        format!(
+            "{}\n",
+            json!({
+                "step_index": 0,
+                "source": "SYSTEM",
+                "type": "SYSTEM_MESSAGE",
+                "content": "Header\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T00:00:00Z sender=parent-main priority=MESSAGE_PRIORITY_HIGH content=Build module B in wt-b\n</SYSTEM_MESSAGE>"
+            })
+        ),
+    )
+    .expect("write child B transcript");
+    let child_b_stop = json!({
+        "conversationId": "child-b",
+        "workspacePaths": ws,
+        "transcriptPath": child_b_tp.to_string_lossy(),
+        "fullyIdle": true
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &child_b_stop.to_string(),
+            repo.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "child B stop",
+    );
+
+    // 4. 父会话通过 manage_subagents(Action=kill_all) 终止剩余未闭合的 Lane A Builder
+    let kill_post = json!({
+        "conversationId": "parent-main",
+        "workspacePaths": ws,
+        "toolCall": {
+            "name": "manage_subagents",
+            "args": {"Action": "kill_all"}
+        }
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &kill_post.to_string(),
+            repo.path(),
+        ),
+        "{}\n",
+        "manage_subagents kill_all",
+    );
+
+    // 5. Claude 同 session_id 下 PreToolUse(Task) + 无 agent_name 的 SubagentStop 自动补齐 who
+    let claude_pre = json!({
+        "session_id": "claude-s1",
+        "cwd": repo.path().to_string_lossy(),
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Task",
+        "tool_input": {"subagent_type": "fork", "description": "Code review"}
+    });
+    let claude_substop = json!({
+        "session_id": "claude-s1",
+        "cwd": repo.path().to_string_lossy(),
+        "hook_event_name": "SubagentStop"
+    });
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "claude", "pretooluse"],
+            &claude_pre.to_string(),
+            repo.path(),
+        ),
+        "claude pretooluse",
+    );
+    assert_silent_success(
+        &feed(
+            &["hook", "--host", "claude", "subagentstop"],
+            &claude_substop.to_string(),
+            repo.path(),
+        ),
+        "claude subagentstop",
+    );
+
+    let evs = read_events(repo.path());
+    let completed: Vec<&Value> = evs
+        .iter()
+        .filter(|e| e["kind"] == "agent" && e["event"] == "completed")
+        .collect();
+    assert_eq!(completed.len(), 3);
+    assert_eq!(completed[0]["who"], "Lane B Builder");
+    assert_eq!(completed[0]["session_id"], "child-b");
+    assert_eq!(completed[1]["who"], "Lane A Builder");
+    assert_eq!(completed[2]["who"], "fork");
+    assert_eq!(completed[2]["host"], "claude");
+}
