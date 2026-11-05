@@ -239,10 +239,27 @@ pub fn merge(repo: &Path) -> Dashboard {
 
 /// [`merge`] 的旗标变体(W11-003):`infer = false` 关闭无 who completed
 /// 配对启发(`--no-infer`,严格丢弃 + 逐行警告),`true` 为缺省开启;
-/// 其余语义与 [`merge`] 完全一致。
+/// 其余语义与 [`merge`] 完全一致。W15-01 起若 `repo` 直接指向波次归档目录
+/// (无 `.agentdash` 子目录但自身含 `ledger.json`/`events.jsonl`/`meta.json`),
+/// 自动按归档波次目录投影并向上推导外层仓库根。
 #[must_use]
 pub fn merge_opts(repo: &Path, infer: bool) -> Dashboard {
+    if is_direct_wave_dir(repo) {
+        let outer = infer_repo_root_from_wave_dir(repo);
+        return merge_wave_opts(outer, repo, infer);
+    }
     build(repo, git::snapshot(repo), infer)
+}
+
+/// 历史归档波次合并入口(W15-01):从 `wave_dir`(如 `<repo>/.agentdash/waves/W14`)
+/// 读取 `ledger.json`、`events.jsonl` 与可选 `meta.json`,项目名与 git 基础快照取自
+/// 外层 `repo`,不探测实时远程 PR(`remote = None`)。当新 `git clone` 因 `.gitignore`
+/// 缺失 `waves/<id>/events.jsonl` 时,自动从 `meta.json` 无损回填门终态、`last_gate_passed`
+/// 与 `event_span_secs`。
+#[allow(dead_code)]
+#[must_use]
+pub fn merge_wave_opts(repo: &Path, wave_dir: &Path, infer: bool) -> Dashboard {
+    build_wave(wave_dir, git::snapshot(repo), infer)
 }
 
 impl Dashboard {
@@ -277,6 +294,7 @@ fn build(repo: &Path, git: GitFacts, infer: bool) -> Dashboard {
 
     // 契约层(可信序最高):合法则任务/里程碑出自台账;损坏降级为警告行
     let mut contract_ok = false;
+    let mut active_wave: Option<String> = None;
     let mut tasks = Vec::new();
     let mut milestones = Vec::new();
     let mut barriers = Vec::new();
@@ -286,6 +304,7 @@ fn build(repo: &Path, git: GitFacts, infer: bool) -> Dashboard {
         match contract::parse_ledger(&text) {
             Ok(ledger) => {
                 contract_ok = true;
+                active_wave.clone_from(&ledger.wave);
                 // 台账自带警告加源前缀透传,与事件层/损坏降级行可区分
                 warnings.extend(
                     ledger
@@ -324,7 +343,7 @@ fn build(repo: &Path, git: GitFacts, infer: bool) -> Dashboard {
     let mut event_span_secs = None;
     let events_path = repo.join(".agentdash").join("events.jsonl");
     let (events_text, events_present) = read_source(&events_path, "events.jsonl", &mut warnings);
-    let (agents, gates, event_tail, last_gate_passed) = match events_text {
+    let (agents, gates, event_tail, mut last_gate_passed) = match events_text {
         Some(text) => {
             let model = events::replay_infer(text.lines().map(str::to_owned), infer);
             event_span_secs = event_span_of(&model);
@@ -334,6 +353,14 @@ fn build(repo: &Path, git: GitFacts, infer: bool) -> Dashboard {
         }
         None => (Vec::new(), Vec::new(), Vec::new(), None),
     };
+    if contract_ok && last_gate_passed.is_none() {
+        if let Some(wave) = active_wave.as_deref() {
+            last_gate_passed = archived_wave_last_gate_passed(repo, wave);
+        }
+        if last_gate_passed.is_none() && events_present {
+            last_gate_passed = latest_archived_wave_last_gate_passed(repo);
+        }
+    }
 
     // AD-ERR-001:契约**缺失**(文件不存在,非损坏)同样降级为警告行,措辞
     // 对齐损坏路径;但仅当其余源(事件文件 / git 仓)在场——三源全无走下方
@@ -377,6 +404,373 @@ fn build(repo: &Path, git: GitFacts, infer: bool) -> Dashboard {
         // 发现 9(W3-004):与事件 ts 同用本地时区偏移格式,页眉不再 UTC/本地并存
         generated_at: ts_now(),
     }
+}
+
+/// 判定 `path` 是否直接指向波次归档目录(自身无 `.agentdash` 子目录,但含
+/// `ledger.json` / `events.jsonl` / `meta.json` 之一)。
+pub(crate) fn is_direct_wave_dir(path: &Path) -> bool {
+    path.is_dir()
+        && !path.join(".agentdash").exists()
+        && (path.join("ledger.json").is_file()
+            || path.join("events.jsonl").is_file()
+            || path.join("meta.json").is_file())
+}
+
+/// 校验并归一化安全波次 ID(`1..=64` 字节,首字符 `[A-Za-z0-9]`,其余 `[A-Za-z0-9._-]`,
+/// 禁尾点、禁 `..`、禁 Windows 保留设备名)。
+pub(crate) fn normalize_wave_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return None;
+    }
+    let bytes = trimmed.as_bytes();
+    if !bytes[0].is_ascii_alphanumeric() || bytes[bytes.len() - 1] == b'.' {
+        return None;
+    }
+    if !bytes
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return None;
+    }
+    if trimmed.contains("..") {
+        return None;
+    }
+    let stem = trimmed.split('.').next().unwrap_or(trimmed);
+    let upper = stem.to_ascii_uppercase();
+    if matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+/// 从 `<repo>/.agentdash/waves/<id>` 逆推外层 `<repo>`;相对路径顶层为空串时归一为 `"."`。
+fn infer_repo_root_from_wave_dir(wave_dir: &Path) -> &Path {
+    if let Some(waves_dir) = wave_dir.parent()
+        && waves_dir.file_name().and_then(|n| n.to_str()) == Some("waves")
+        && let Some(dash_dir) = waves_dir.parent()
+        && dash_dir.file_name().and_then(|n| n.to_str()) == Some(".agentdash")
+        && let Some(repo_root) = dash_dir.parent()
+    {
+        return if repo_root.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            repo_root
+        };
+    }
+    wave_dir
+}
+
+/// 归档波次专用折叠核(W15-01):数据源取自 `wave_dir`,当 `events.jsonl` 被
+/// `.gitignore` 忽略缺席时从 `meta.json` 回填门终态、对账锚与活动窗跨度。
+#[allow(clippy::too_many_lines)]
+fn build_wave(wave_dir: &Path, mut git: GitFacts, infer: bool) -> Dashboard {
+    let mut warnings = Vec::new();
+    let mut contract_ok = false;
+    let mut tasks = Vec::new();
+    let mut milestones = Vec::new();
+    let mut barriers = Vec::new();
+    let ledger_path = wave_dir.join("ledger.json");
+    let (ledger_text, ledger_present) = read_source(&ledger_path, "ledger.json", &mut warnings);
+    if let Some(text) = ledger_text {
+        match contract::parse_ledger(&text) {
+            Ok(ledger) => {
+                contract_ok = true;
+                warnings.extend(
+                    ledger
+                        .warnings
+                        .iter()
+                        .map(|warning| format!("ledger: {warning}")),
+                );
+                let since = file_mtime_iso(&ledger_path);
+                tasks = contract_tasks(&ledger, since.as_deref());
+                let (views, group_warnings) = milestone_views(&ledger);
+                milestones = views;
+                warnings.extend(
+                    group_warnings
+                        .iter()
+                        .map(|warning| format!("ledger: {warning}")),
+                );
+                barriers = ledger
+                    .barriers
+                    .iter()
+                    .map(|barrier| BarrierEdges {
+                        after: barrier.after.clone(),
+                        unlocks: barrier.unlocks.clone(),
+                    })
+                    .collect();
+            }
+            Err(err) => warnings.push(err.to_string()),
+        }
+    }
+
+    let meta_json = fs::read_to_string(wave_dir.join("meta.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+
+    let mut event_span_secs = None;
+    let events_path = wave_dir.join("events.jsonl");
+    let (events_text, mut events_present) =
+        read_source(&events_path, "events.jsonl", &mut warnings);
+    let empty_events_file = events_text.as_deref().is_some_and(|t| t.trim().is_empty());
+    let (agents, mut gates, event_tail, mut last_gate_passed) = match events_text {
+        Some(text) => {
+            let model = events::replay_infer(text.lines().map(str::to_owned), infer);
+            event_span_secs = event_span_of(&model);
+            let (agents, gates, tail, anchor, model_warnings) = event_views(model);
+            warnings.extend(model_warnings);
+            (agents, gates, tail, anchor)
+        }
+        None => (Vec::new(), Vec::new(), Vec::new(), None),
+    };
+
+    if (!events_present || empty_events_file)
+        && let Some(ref meta) = meta_json
+    {
+        if empty_events_file && ledger_present {
+            events_present = false;
+        }
+        hydrate_wave_from_meta(
+            meta,
+            &mut gates,
+            &mut last_gate_passed,
+            &mut event_span_secs,
+            &mut events_present,
+            &mut warnings,
+        );
+    }
+
+    let mut generated_at = file_mtime_iso(&ledger_path).unwrap_or_else(ts_now);
+    if let Some(ref meta) = meta_json {
+        apply_wave_meta_overrides(meta, &mut generated_at, &mut git);
+    }
+
+    if !ledger_present && (events_present || git.present) {
+        warnings.push("missing ledger.json: expected .agentdash/ledger.json".to_owned());
+    }
+    if !contract_ok && git.present {
+        tasks = git_tasks(&git);
+    }
+    if !ledger_present && !events_present && !git.present {
+        warnings.push(EMPTY_GUIDANCE.to_owned());
+    }
+
+    let project = project_of(&git);
+    Dashboard {
+        tasks,
+        milestones,
+        barriers,
+        warnings,
+        agents,
+        gates,
+        event_tail,
+        events_present,
+        last_gate_passed,
+        event_span_secs,
+        git,
+        remote: None,
+        project,
+        generated_at,
+    }
+}
+
+/// 从 `waves/<id>/meta.json` 覆盖归档时刻与 Git 快照元数据。
+fn apply_wave_meta_overrides(
+    meta: &serde_json::Value,
+    generated_at: &mut String,
+    git: &mut GitFacts,
+) {
+    if let Some(archived_at) = meta
+        .get("archived_at")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        archived_at.clone_into(generated_at);
+    }
+    if let Some(git_obj) = meta.get("git").and_then(serde_json::Value::as_object) {
+        match git_obj.get("branch") {
+            Some(serde_json::Value::String(branch)) if !branch.trim().is_empty() => {
+                git.branch = Some(branch.trim().to_owned());
+                git.present = true;
+            }
+            Some(serde_json::Value::Null) => git.branch = None,
+            _ => {}
+        }
+        match git_obj.get("head_short") {
+            Some(serde_json::Value::String(head)) if !head.trim().is_empty() => {
+                git.head_short = Some(head.trim().to_owned());
+                git.present = true;
+            }
+            Some(serde_json::Value::Null) => git.head_short = None,
+            _ => {}
+        }
+        if let Some(dirty_n) = git_obj
+            .get("dirty")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+        {
+            git.dirty = dirty_n;
+        } else if let Some(dirty_b) = git_obj.get("dirty").and_then(serde_json::Value::as_bool) {
+            git.dirty = u32::from(dirty_b);
+        }
+    }
+}
+
+/// 新克隆仓库无 `waves/<id>/events.jsonl` 时,从 `meta.json` 恢复门视图、对账锚、事件跨度与警告。
+fn hydrate_wave_from_meta(
+    meta: &serde_json::Value,
+    gates: &mut Vec<GateView>,
+    last_gate_passed: &mut Option<String>,
+    event_span_secs: &mut Option<u64>,
+    events_present: &mut bool,
+    warnings: &mut Vec<String>,
+) {
+    if let Some(gates_obj) = meta.get("gates").and_then(serde_json::Value::as_object) {
+        if let Some(summary) = gates_obj
+            .get("summary")
+            .and_then(serde_json::Value::as_array)
+        {
+            for item in summary {
+                let Some(name) = item
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                else {
+                    continue;
+                };
+                let status_str = item
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let detail = item
+                    .get("detail")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                let status = match status_str {
+                    "running" => GateStatus::Running,
+                    "passed" => GateStatus::Passed { detail },
+                    "failed" => GateStatus::Failed { detail },
+                    "unknown" => GateStatus::Unknown { detail },
+                    _ => continue,
+                };
+                gates.push(GateView {
+                    name: name.to_owned(),
+                    status,
+                });
+            }
+            gates.sort_by(|a, b| a.name.cmp(&b.name));
+        }
+        if let Some(anchor) = gates_obj
+            .get("last_gate_passed")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            *last_gate_passed = Some(anchor.to_owned());
+        }
+    }
+    if event_span_secs.is_none()
+        && let Some(span) = meta
+            .get("window")
+            .and_then(|w| w.get("span_secs"))
+            .and_then(serde_json::Value::as_u64)
+            .filter(|&s| s > 0)
+    {
+        *event_span_secs = Some(span);
+    }
+    if let Some(meta_warnings) = meta.get("warnings").and_then(serde_json::Value::as_array) {
+        for item in meta_warnings.iter().filter_map(serde_json::Value::as_str) {
+            if !item.is_empty() && !warnings.iter().any(|w| w == item) {
+                warnings.push(item.to_owned());
+            }
+        }
+    }
+    let meta_ev_count = meta
+        .get("events_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let meta_unattested = meta
+        .get("tasks")
+        .and_then(|t| t.get("unattested_done"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if meta_ev_count > 0 || meta_unattested > 0 || !gates.is_empty() || last_gate_passed.is_some() {
+        *events_present = true;
+    }
+}
+
+/// 当活跃台账刚执行 `archive --prune-events` 尚未切入下一波次时,从同名归档波次
+/// `waves/<wave>/meta.json` 或 `events.jsonl` 回退读取 `last_gate_passed`,防误标 `done ?`。
+fn archived_wave_last_gate_passed(repo: &Path, wave: &str) -> Option<String> {
+    let valid = normalize_wave_id(wave)?;
+    let waves_root = repo.join(".agentdash").join("waves");
+    let direct = waves_root.join(&valid);
+    let wave_dir = if direct.is_dir() {
+        direct
+    } else {
+        fs::read_dir(&waves_root)
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| {
+                p.is_dir()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.eq_ignore_ascii_case(&valid))
+            })?
+    };
+    if let Ok(raw) = fs::read_to_string(wave_dir.join("meta.json"))
+        && let Ok(meta) = serde_json::from_str::<serde_json::Value>(&raw)
+        && let Some(anchor) = meta
+            .get("gates")
+            .and_then(|g| g.get("last_gate_passed"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    {
+        return Some(anchor.to_owned());
+    }
+    if let Ok(events_raw) = fs::read_to_string(wave_dir.join("events.jsonl")) {
+        let model = events::replay(events_raw.lines().map(str::to_owned));
+        return model.last_gate_passed;
+    }
+    None
+}
+
+/// 台账未声明顶层 `wave` 但刚通过 `--wave <id> --prune-events` 封存时,回退读取 `waves/index.json` 的 `latest` 对账锚。
+fn latest_archived_wave_last_gate_passed(repo: &Path) -> Option<String> {
+    let index_raw =
+        fs::read_to_string(repo.join(".agentdash").join("waves").join("index.json")).ok()?;
+    let index: serde_json::Value = serde_json::from_str(&index_raw).ok()?;
+    let latest = index.get("latest")?.as_str()?;
+    archived_wave_last_gate_passed(repo, latest)
 }
 
 /// 事件流活动窗(W3-006):重放模型 → 合格活动窗跨度(秒)。极值折叠在

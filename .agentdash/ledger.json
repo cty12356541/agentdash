@@ -1,222 +1,154 @@
 {
- "title": "W14: 缺陷清零 + 契约 v1.1 + Antigravity 第七宿主插件与多轨编排",
- "wave": "W14",
- "profile": "sdd",
- "note": "ADE 本仓台账。与迁移主仓台账隔离。依赖只写 barriers。",
- "lanes": [
-  {
-   "name": "A-agy-host",
-   "tasks": [
-    "W14-01",
-    "W14-05",
-    "W14-09"
-   ]
+  "$schema": "agentdash.tasklog.v1",
+  "profile": "sdd",
+  "wave": "W15",
+  "title": "W15: 原生波次归档(archive) + 历史波次透视(--wave) + 多根路由与白名单追踪",
+  "lanes": [
+    {
+      "name": "A-archive-cli",
+      "tasks": [
+        "W15-01",
+        "W15-04",
+        "W15-05",
+        "W15-06"
+      ]
+    },
+    {
+      "name": "B-hook-multiroot",
+      "tasks": [
+        "W15-02"
+      ]
+    },
+    {
+      "name": "C-kits-gitignore",
+      "tasks": [
+        "W15-03"
+      ]
+    }
+  ],
+  "tasks": {
+    "W15-01": {
+      "label": "历史波次投影与新克隆 meta.json 无事件回填(model+stats)",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/merge.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T10:40:50+08:00",
+      "done_at": "2026-11-05T10:53:46+08:00",
+      "note": "merge 28/28 + stats 14/14 passed"
+    },
+    "W15-02": {
+      "label": "多根 workspacePaths 路径前缀路由与 Stop 门禁折叠",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/hook.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T10:40:50+08:00",
+      "done_at": "2026-11-05T10:53:46+08:00",
+      "note": "hook 80/80 passed"
+    },
+    "W15-03": {
+      "label": "七宿主 kit .gitignore 白名单迁移与 git check-ignore 巡检",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "scripts/verify-kits.sh",
+      "gate": "verify-kits",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T10:40:50+08:00",
+      "done_at": "2026-11-05T10:53:46+08:00",
+      "note": "verify-kits PASS 346 / FAIL 0"
+    },
+    "W15-04": {
+      "label": "波次归档内核:ID 校验、双代切片、原子交换与自愈索引",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/archive_unit.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T10:53:46+08:00",
+      "done_at": "2026-11-05T11:06:27+08:00",
+      "note": "archive_unit 7/7 + proptest 14/14 passed"
+    },
+    "W15-05": {
+      "label": "CLI archive 子命令、--wave 路由、双语帮助与退出码端到端测试",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/archive.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T11:06:27+08:00",
+      "done_at": "2026-11-05T12:17:42+08:00",
+      "note": "archive 2/2 + version 7/7 + 23-agent review clean"
+    },
+    "W15-06": {
+      "label": "0.13.0 升版、全量门禁、全局重装与 W14/W15 实盘归档收口",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/version.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T12:08:00+08:00",
+      "done_at": "2026-11-05T12:17:42+08:00",
+      "note": "0.13.0 installed, 341/341 Rust tests + 346/346 verify-kits, clippy+fmt clean"
+    }
   },
-  {
-   "name": "B-graph-tui",
-   "tasks": [
-    "W14-02",
-    "W14-06"
-   ]
-  },
-  {
-   "name": "C-contract-stats",
-   "tasks": [
-    "W14-03",
-    "W14-07"
-   ]
-  },
-  {
-   "name": "D-events-plugin",
-   "tasks": [
-    "W14-04",
-    "W14-08",
-    "W14-10"
-   ]
-  }
- ],
- "tasks": {
-  "W14-01": {
-   "label": "Antigravity(--host agy) hook 协议与载荷适配",
-   "state": "done",
-   "note": "3648c32 · hook 77/77, 298/298 total, clippy+fmt clean",
-   "spec": "docs/contract.md",
-   "tests": "tests/hook.rs",
-   "gate": "cargo-test",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T11:56:23+08:00"
-  },
-  "W14-02": {
-   "label": "宽 DAG 动态画布解除 240 列截断与超宽测试",
-   "state": "done",
-   "note": "792ad76 · render_graph 18/18, clippy+fmt clean",
-   "spec": "src/render/graph.rs",
-   "tests": "tests/render_graph.rs",
-   "gate": "cargo-clippy",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T11:43:24+08:00"
-  },
-  "W14-03": {
-   "label": "契约 v1.1 started_at 字段与 JSON Schema 演进",
-   "state": "done",
-   "note": "10990ac · contract 16/16, clippy+fmt clean",
-   "spec": "docs/superpowers/specs/2026-09-16-agentdash-w12-delta.md",
-   "tests": "tests/contract.rs",
-   "gate": "cargo-test",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T11:46:06+08:00"
-  },
-  "W14-04": {
-   "label": "事件流完成时刻/双语警告与 digest --strict 严判",
-   "state": "done",
-   "note": "0fb1bf0 · events/merge/digest 292/292, clippy+fmt clean",
-   "spec": "docs/superpowers/specs/2026-09-16-agentdash-w12-delta.md",
-   "tests": "tests/events.rs",
-   "gate": "cargo-test",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T11:47:21+08:00"
-  },
-  "W14-05": {
-   "label": "kits/antigravity 第七宿主套件与 verify-kits 巡检",
-   "state": "done",
-   "note": "dbf9756 · verify-kits PASS 158 / FAIL 0",
-   "spec": "docs/kit-install-guide.md",
-   "tests": "scripts/verify-kits.sh",
-   "gate": "verify-kits",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T12:14:22+08:00"
-  },
-  "W14-06": {
-   "label": "TUI 详情 unknown 第三态 + 里程碑过滤 + watch --no-infer",
-   "state": "done",
-   "note": "e6ded2a · tui 42/42, 299/299 total, clippy+fmt clean",
-   "spec": "docs/superpowers/specs/2026-09-16-agentdash-w12-delta.md",
-   "tests": "tests/tui.rs",
-   "gate": "cargo-test",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T12:11:47+08:00"
-  },
-  "W14-07": {
-   "label": "stats 真实周转时长 + CJK 列宽对齐 + 空事件渲染",
-   "state": "done",
-   "note": "1e19feb · stats 13/13, clippy+fmt clean",
-   "spec": "docs/superpowers/specs/2026-09-16-agentdash-w12-delta.md",
-   "tests": "tests/stats.rs",
-   "gate": "cargo-test",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T12:04:48+08:00"
-  },
-  "W14-08": {
-   "label": "反重力全局插件包组装注册与编排技能(SKILL.md)",
-   "state": "done",
-   "note": "GetAllPlugins ingested: skills=[agentdash,agentdash-orchestrate,agentdash-setup], hooksLoaded=True",
-   "spec": "kits/antigravity/README.md",
-   "tests": "scripts/verify-kits.sh",
-   "gate": "verify-kits",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T12:10:42+08:00"
-  },
-  "W14-09": {
-   "label": "0.12.0 升版 + 契约 v1.1 文档同步 + 全量重编安装",
-   "state": "done",
-   "note": "f4a2a7e · 0.12.0 installed, 318/318 tests, clippy+fmt clean",
-   "spec": "docs/contract.md",
-   "tests": "tests/version.rs",
-   "gate": "cargo-test",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T12:28:22+08:00"
-  },
-  "W14-10": {
-   "label": "ADE 采集桥跨仓联调回归 + W14 收口报告与入库",
-   "state": "done",
-   "note": "ADE pytest 7/7 + verify-kits 158/158 + 318/318 Rust tests",
-   "spec": "docs/superpowers/reports/2026-10-28-w14-closeout.md",
-   "tests": "tests/test_collector_contract.py",
-   "gate": "pytest",
-   "round": 1,
-   "max_rounds": 3,
-   "attempts": [],
-   "done_at": "2026-10-28T12:30:05+08:00"
-  }
- },
- "barriers": [
-  {
-   "id": "b-W14-05",
-   "after": [
-    "W14-01"
-   ],
-   "unlocks": [
-    "W14-05"
-   ]
-  },
-  {
-   "id": "b-W14-06",
-   "after": [
-    "W14-04",
-    "W14-02"
-   ],
-   "unlocks": [
-    "W14-06"
-   ]
-  },
-  {
-   "id": "b-W14-07",
-   "after": [
-    "W14-03"
-   ],
-   "unlocks": [
-    "W14-07"
-   ]
-  },
-  {
-   "id": "b-W14-08",
-   "after": [
-    "W14-04",
-    "W14-01"
-   ],
-   "unlocks": [
-    "W14-08"
-   ]
-  },
-  {
-   "id": "b-W14-09",
-   "after": [
-    "W14-08",
-    "W14-05",
-    "W14-06",
-    "W14-07"
-   ],
-   "unlocks": [
-    "W14-09"
-   ]
-  },
-  {
-   "id": "b-W14-10",
-   "after": [
-    "W14-09"
-   ],
-   "unlocks": [
-    "W14-10"
-   ]
-  }
- ],
- "milestones": []
+  "barriers": [
+    {
+      "id": "B1",
+      "after": [
+        "W15-01"
+      ],
+      "unlocks": [
+        "W15-04"
+      ]
+    },
+    {
+      "id": "B2",
+      "after": [
+        "W15-04"
+      ],
+      "unlocks": [
+        "W15-05"
+      ]
+    },
+    {
+      "id": "B3",
+      "after": [
+        "W15-02",
+        "W15-03",
+        "W15-05"
+      ],
+      "unlocks": [
+        "W15-06"
+      ]
+    }
+  ],
+  "milestones": [
+    {
+      "id": "M1",
+      "title": "底座投影、多根路由与七宿主白名单",
+      "tasks": [
+        "W15-01",
+        "W15-02",
+        "W15-03"
+      ]
+    },
+    {
+      "id": "M2",
+      "title": "归档引擎、CLI 接线与 0.13.0 实盘收口",
+      "tasks": [
+        "W15-04",
+        "W15-05",
+        "W15-06"
+      ]
+    }
+  ]
 }

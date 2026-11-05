@@ -4,7 +4,7 @@ agent 进度仪表盘:从任务台账、会话事件流与 git 快照三个数�
 验证门状态与里程碑进度——纯只读、降级不失败、零 Python/Node 运行时前置。
 
 Rust 单 crate 实现(ratatui + crossterm / serde_json,stable ≥**1.88**——源码使用
-let-chains,见 `rust-toolchain.toml`),通用任务契约 v1.1 见 `schema/agentdash.tasklog.v1.json`
+let-chains,见 `rust-toolchain.toml`),通用任务契约 v1.2 见 `schema/agentdash.tasklog.v1.json`
 与 [`docs/contract.md`](docs/contract.md)。
 
 ## 安装
@@ -102,12 +102,13 @@ hook 自身任何失败静默退出 0,绝不阻塞会话。插件市场分发直
 
 | 命令 | 作用 |
 |---|---|
-| `agentdash render panel [--no-infer] [PATH...]` | 终端面板:页眉统计 → 健康(验证门/警告)→ 轨迹(里程碑进度条)→ 车道任务(多路径出精要聚合视图) |
-| `agentdash render graph [--format ansi\|svg] [--no-infer] [PATH]` | 任务 DAG 字符图(同车道链 + 屏障边,拓扑分层布局,动态画布列宽无 240 列截断);`--format svg` 出矢量文档 |
-| `agentdash render digest [--strict] [--no-infer] [PATH]` | 离场摘要:纯文本无 ANSI(失败门/在跑 agent/blocked/done 任务/⚠);`--strict` 在存在失败门、blocked 任务**或任一降级/事件警告(`⚠`)**时退 1,全净才退 0(cron/CI 完整性门禁) |
-| `agentdash oneline [--no-infer] [PATH]` | 无 ANSI 单行 statusline:`[dash] <project> ✓d▶a·r ⚑s ·nag` |
+| `agentdash render panel [--no-infer] [--wave <id>] [PATH...]` | 终端面板:页眉统计 → 健康(验证门/警告)→ 轨迹(里程碑进度条)→ 车道任务(多路径或 `.agentdash/waves/*` 出精要对比视图) |
+| `agentdash render graph [--format ansi\|svg] [--no-infer] [--wave <id>] [PATH]` | 任务 DAG 字符图(同车道链 + 屏障边,拓扑分层布局,动态画布列宽无 240 列截断);`--format svg` 出矢量文档 |
+| `agentdash render digest [--strict] [--no-infer] [--wave <id>] [PATH]` | 离场摘要:纯文本无 ANSI(失败门/在跑 agent/blocked/done 任务/⚠);`--strict` 在存在失败门、blocked 任务**或任一降级/事件警告(`⚠`)**时退 1,全净才退 0 |
+| `agentdash oneline [--no-infer] [--wave <id>] [PATH]` | 无 ANSI 单行 statusline:`[dash] <project> ✓d▶a·r ⚑s ·nag` |
+| `agentdash stats [--host <name>] [--wave <id>] [PATH]` | 观测统计:宿主使用率/gate 通过率/任务周转三张纯文本表(零 ANSI,恒退 0;`--host` 大小写不敏感过滤宿主表;`started_at`+`done_at` 折算真周转中位/最大/均值) |
+| `agentdash archive [--list [--json]] [--wave <id>] [--strict] [--force] [--prune-events\|--keep-events] [--no-infer] [PATH]` | 原生波次归档与列表:将当前波次封存至 `.agentdash/waves/<id>/`(`ledger.json`/`meta.json`/`digest.txt`/`stats.txt`/`graph.svg` 入 Git,`events.jsonl` 本地忽略)并更新自愈索引 `waves/index.json`;`--list`(或 `-l`/`list`)按自然波次序打印历史归档 |
 | `agentdash watch [--once] [--no-infer] [SECONDS] [PATH]` | 常驻 TUI(默认 5s 刷新档,git 快照 30s 节流;`q`/Ctrl-C 退出);`--once` 或非 tty stdin 渲染一帧即退 |
-| `agentdash stats [--host <name>] [PATH]` | 观测统计:宿主使用率/gate 通过率/任务周转三张纯文本表(零 ANSI,恒退 0;`--host` 大小写不敏感过滤宿主表;v1.1 `started_at`+`done_at` 折算真周转中位/最大/均值) |
 | `agentdash hook [--host <name>] <EVENT>` | 消费宿主 hook 载荷(stdin),折叠后追加 `.agentdash/events.jsonl`(`--host agy` 输出协议 JSON 回执) |
 
 `[PATH]` 缺省 `.`;面板渲染宽度非 tty 用默认、tty 按终端列钳 40..120(字符 DAG 画布按节点实际坐标动态扩展不截断),
@@ -123,10 +124,10 @@ dispatched 行(FIFO);配对行在 panel/摘要/精要中显式标注
 (`panel` / `graph` / `digest` / `oneline` / `watch` 全观测面支持)关闭启发回到严格丢弃 +
 逐行警告,行为与启发落地前逐字节一致。
 
-## 数据契约 v1.1(两文件 + config.json)
+## 数据契约 v1.2(台账 + 事件流 + config.json + waves/ 波次归档)
 
-**契约公开版 v1.1 全文见 [`docs/contract.md`](docs/contract.md)**(全词表/字段语义/
-折叠与会话池/推断配对/七宿主证据分级,第三方宿主照写即可);本节为速览。
+**契约公开版 v1.2 全文见 [`docs/contract.md`](docs/contract.md)**(全词表/字段语义/
+折叠与会话池/推断配对/七宿主证据分级/波次归档与新克隆回填,第三方宿主照写即可);本节为速览。
 
 约定目录 `<repo>/.agentdash/`;合并可信序 **契约 > 事件 > git 快照**,
 任何单源缺失/损坏只降级为警告行,不失败、不白屏。
@@ -134,8 +135,10 @@ dispatched 行(FIFO);配对行在 panel/摘要/精要中显式标注
 | 文件 | 写入方 | 内容 |
 |---|---|---|
 | `ledger.json` | agent 或人 | 任务台账:`wave` / `title`(必填)/ `profile` / `lanes` / `tasks`(`label`+`state`;可选 `started_at` 开始自报时刻与 `done_at` 完成自报时刻,TUI `d` 键写回自动盖 `done_at`,两者配对供 `stats` 折算真周转时长)/ `barriers`(after→unlocks)/ `milestones`(可选声明式分组:被引用任务按组归并、重复引用首见为准并记降级警告,余者入「未分组」尾组;缺省由 wave+全任务合成单里程碑)/ `note`(可选根级波次注记:自由文本,内核按未知字段忽略语义容忍,供人读/流程留痕)。状态机最小核 `pending→active→done`,终态 `blocked`;`review`/`fix-round` 富态仅在声明 `profile` 后有效,否则自动降级并记警告。物证核对:done 任务自带 `done_at` 且事件窗在场时,自报晚于最近通过门(或窗内无通过门)打 `?`(自报无物证);严格校验面:`schema/agentdash.tasklog.v1.json` |
-| `events.jsonl` | `agentdash hook` | 会话事件流:`gate`(running→passed/failed,退出码不可知按 failed 折叠,验证门自动登记)、`tool`、`agent`;多进程并发追加经 `.lock` 有界自旋锁串行(步进 2ms、上限 2s,10s 超龄陈锁自动摘除自愈;最终超时按不阻塞铁律退化直接追加单行,详见 `docs/contract.md §1`) |
+| `events.jsonl` | `agentdash hook` | 会话事件流:`gate`(running→passed/failed,退出码不可知按 failed 折叠,验证门自动登记)、`tool`、`agent`;多进程并发追加经 `.lock` 有界自旋锁串行(步进 2ms、上限 2s,`archive` 采用 5s 严判锁,10s 超龄陈锁自动摘除自愈,详见 `docs/contract.md §1`) |
 | `config.json` | 人或 agent(可选) | 用户自定义 gate 词表(W10-003,见下) |
+| `waves/index.json` | `agentdash archive` | 波次归档目录索引(`$schema: agentdash.waves.index.v1`,Git 追踪,缺失或损坏时自动扫描 `waves/*/` 自愈重建) |
+| `waves/<id>/` | `agentdash archive` | 历史波次归档包:`ledger.json`/`meta.json`(`$schema: agentdash.wave.v1`,含 FNV-1a64 指纹与门禁/宿主/周转快照)/`digest.txt`/`stats.txt`/`graph.svg` 入 Git,`events.jsonl` 本地忽略;新克隆无 `events.jsonl` 时 `render`/`oneline`/`stats` 自动从 `meta.json` 无损回填 |
 
 **用户自定义 gate**(W10-003;取代 v1 设计散文中的 `config.toml` 提法):
 `.agentdash/config.json` 声明验证门词表,验证门从内置六条(cargo test/clippy/fmt、
@@ -167,6 +170,7 @@ go test、npm test、gh pr checks)开放——
 - **0.10 观测可读性与 TUI 交互(W12,0.10.0,已完成)**:面板 unknown 第三态(`exit=null` 折叠——如 zcode 绿侧——渲染暗色 `? … (unknown)`,与有码真失败 ✗ 视觉可辨,panel/digest 同源,stats 三列既有)、watch TUI 点击交互(面板视图左键点击任务行聚焦——行映射与渲染同源零漂移;滚轮滚动主区/详情右栏按列路由;换视图滚移归零;图视图点击守卫修复漏算页眉行)。
 - **0.11 事件归因(W13,0.11.0,已完成)**:事件行落 `session_id`(每条事件携带归属会话,多会话并存可分)、SubagentStop 折叠(子代理收口并入归属会话,不虚增在跑)、opencode metadata 退出码(绿侧真码,不再 unknown)、claude-code kit 增 `session.status`(会话状态查询入口);RFC 003-ade-attribution 草案随附([`docs/rfcs/003-ade-attribution.md`](docs/rfcs/003-ade-attribution.md))。
 - **0.12 反重力第七宿主与契约 v1.1(W14,0.12.0,已完成)**:Antigravity 宿主协议(`--host agy`:单行 JSON `stdout` 回执、`workspacePaths` 优先含 `.agentdash` 根、`conversationId` 会话归属、`transcript.jsonl` 末尾 64KB 退出码提取 + `Stop` 延迟补查、`invoke_subagent` / 子会话 `Stop[fullyIdle]` 完成配对)+ `kits/antigravity`(全局插件与工作区双形态,附三套编排/配置/看板技能,`verify-kits.sh` 七宿主巡检);契约 v1.1 `started_at` + `stats` 真周转时长(中位/最大/均值,无事件有台账照常渲染,旧台账黄金逐字节不变)+ CJK/`agy` 终端显示宽列对齐;宽 DAG 字符画布动态列宽(移除 240 列截断);`watch` TUI 右栏详情门 `unknown` 第三态、声明式 `milestones[].tasks` 波次过滤、`watch --no-infer` 与 `oneline` 参数报错归一;`render digest --strict` 告警门禁(`warnings > 0` 退 `1`)与推断配对完成时刻/双语汇总警告。
+- **0.13 原生波次归档与契约 v1.2(W15,0.13.0,已完成)**:`agentdash archive [--list [--json]] [--wave <id>] [--strict] [--force] [--prune-events|--keep-events]`(双代 `events.jsonl.1`+`events.jsonl` 接缝去重与三层时间窗切片、回滚安全原子交换、`waves/index.json` 自然序自愈索引)+ `--wave <id>` 与 `.agentdash/waves/*` 历史波次透视(`render panel|graph|digest` / `oneline` / `stats`,新克隆缺 `waves/<id>/events.jsonl` 时从 `meta.json` 无损回填门禁、对账锚与三表统计);多根 `workspacePaths` 目标路径最长前缀路由与跨根 `Stop` 折叠;七宿主 kit `.gitignore` 迁移为 `/.agentdash/*` 白名单追踪体系(`verify-kits.sh` `git check-ignore` 实测)。
 - **二期**:远程源扩展(PR / CI 缓存)、观察者兜底完善。
 - **三期**:分发矩阵铺满(Release 二进制 / 包管理器 / 插件市场)。
 

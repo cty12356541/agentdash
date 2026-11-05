@@ -1,0 +1,96 @@
+{
+  "$schema": "agentdash.wave.v1",
+  "wave": "W15",
+  "title": "W15: 原生波次归档(archive) + 历史波次透视(--wave) + 多根路由与白名单追踪",
+  "profile": "sdd",
+  "archived_at": "2026-11-05T12:34:44+08:00",
+  "window": {
+    "started_at": "2026-11-05T10:40:00+08:00",
+    "ended_at": "2026-11-05T12:34:44+08:00",
+    "span_secs": 6884,
+    "source": "ledger_started_at"
+  },
+  "git": {
+    "branch": "main",
+    "head_short": "21a965c",
+    "dirty": 40
+  },
+  "tasks": {
+    "total": 6,
+    "done": 6,
+    "active": 0,
+    "pending": 0,
+    "blocked": 0,
+    "unattested_done": 0
+  },
+  "gates": {
+    "summary": [
+      {
+        "name": "cargo-clippy",
+        "status": "passed",
+        "detail": "0 warnings"
+      },
+      {
+        "name": "cargo-fmt",
+        "status": "passed",
+        "detail": "rustfmt clean"
+      },
+      {
+        "name": "cargo-test",
+        "status": "passed",
+        "detail": "341 passed; 0 failed"
+      },
+      {
+        "name": "verify-kits",
+        "status": "passed",
+        "detail": "PASS 346 / FAIL 0 / SKIP 0"
+      }
+    ],
+    "folds": [
+      {
+        "gate": "cargo-clippy",
+        "host": "claude",
+        "passed": 2,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "gate": "cargo-fmt",
+        "host": "claude",
+        "passed": 2,
+        "failed": 0,
+        "unknown": 1
+      },
+      {
+        "gate": "cargo-test",
+        "host": "claude",
+        "passed": 2,
+        "failed": 6,
+        "unknown": 4
+      },
+      {
+        "gate": "verify-kits",
+        "host": "claude",
+        "passed": 2,
+        "failed": 1,
+        "unknown": 5
+      }
+    ],
+    "last_gate_passed": "2026-11-05T12:20:06+08:00"
+  },
+  "hosts": {
+    "claude": 858
+  },
+  "turnover": {
+    "samples": 6,
+    "median_secs": 776,
+    "max_secs": 4275,
+    "mean_secs": 1324
+  },
+  "events_count": 858,
+  "events_bytes": 174780,
+  "events_fnv1a64": "0xe46f4ca7684ed625",
+  "ledger_fnv1a64": "0x62d887c198d6c730",
+  "strict_passed": true,
+  "warnings": []
+}

@@ -650,3 +650,65 @@ fn stats_host_filter_case_insensitive_matching() {
         "`--host AGY` 应命中 agy 宿主行并保底 host 列宽 4:\n{agy_stdout}"
     );
 }
+
+#[test]
+fn stats_direct_wave_dir_hydrates_from_meta_when_events_gitignored() {
+    let repo = TempDir::new("wave-meta-stats");
+    let wave_dir = repo.path().join(".agentdash").join("waves").join("W14");
+    fs::create_dir_all(&wave_dir).expect("create wave dir");
+    fs::write(
+        wave_dir.join("ledger.json"),
+        r#"{
+          "$schema": "agentdash.tasklog.v1",
+          "wave": "W14",
+          "title": "归档统计回填",
+          "tasks": {
+            "T1": {
+              "label": "回填任务",
+              "state": "done",
+              "started_at": "2026-10-28T11:00:00+08:00",
+              "done_at": "2026-10-28T11:05:00+08:00"
+            }
+          }
+        }"#,
+    )
+    .expect("write wave ledger");
+    fs::write(
+        wave_dir.join("meta.json"),
+        r#"{
+          "$schema": "agentdash.wave.v1",
+          "wave": "W14",
+          "hosts": {
+            "agy": 5,
+            "claude": 3
+          },
+          "gates": {
+            "folds": [
+              {"gate": "cargo-test", "host": "agy", "passed": 2, "failed": 0, "unknown": 0},
+              {"gate": "cargo-clippy", "host": "claude", "passed": 0, "failed": 0, "unknown": 1}
+            ]
+          }
+        }"#,
+    )
+    .expect("write wave meta");
+
+    let wave_path = wave_dir.to_str().expect("utf8 wave path");
+    let out = run(&["stats", wave_path]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let expected = "\
+宿主使用率(生效事件按 host 戳计数;无戳归 unknown)
+  agy     5
+  claude  3
+gate 通过率(终态折叠计数;unknown = exit 不可知折叠)
+  gate          host    passed  failed  unknown
+  cargo-clippy  claude       0       0        1
+  cargo-test    agy          2       0        0
+任务周转: 中位 5m · 最大 5m · 均值 5m (样本 1)
+  T1 回填任务 · 5m (2026-10-28T11:00:00+08:00 → 2026-10-28T11:05:00+08:00)";
+    assert_eq!(
+        stdout.trim_end_matches('\n'),
+        expected,
+        "直传无 events.jsonl 的波次目录时应从 meta.json 无损回填三张统计表:\n{stdout}"
+    );
+}

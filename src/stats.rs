@@ -34,12 +34,34 @@ const EVENTS_NAME: &str = "events.jsonl";
 const LEDGER_NAME: &str = "ledger.json";
 
 /// stats 子命令入口:`PATH` 缺省 `.`(调用方收口参数解析),`--host` 过滤
-/// ①② 两表(大小写不敏感)。读文件、replay、渲染、打印,恒退 0(D2)。
+/// ①② 两表(大小写不敏感)。W15-01 起若 `path` 直接指向波次归档目录(自身含
+/// `ledger.json`/`events.jsonl`/`meta.json`),直接按该目录统计。
 pub fn run(path: &Path, host: Option<&str>) -> ExitCode {
-    let dir = path.join(".agentdash");
-    let model = match fs::read_to_string(dir.join(EVENTS_NAME)) {
-        Ok(text) => events::replay(text.lines().map(str::to_owned)),
-        Err(_) => events::EventModel::default(),
+    let dir = if !path.join(".agentdash").exists()
+        && (path.join(LEDGER_NAME).is_file()
+            || path.join(EVENTS_NAME).is_file()
+            || path.join("meta.json").is_file())
+    {
+        path.to_path_buf()
+    } else {
+        path.join(".agentdash")
+    };
+    run_dir(&dir, host)
+}
+
+/// 指定数据目录(`.agentdash` 或 `.agentdash/waves/<id>`)运行 stats(W15-01):
+/// 归档目录存在 `meta.json` 时优先从 `meta.json` 读取封存时刻的宿主与门折叠快照
+/// (保证 `--no-infer` 归档与新克隆无 `events.jsonl` 前后逐字节一致);否则重放 `events.jsonl`。
+#[allow(dead_code)]
+pub fn run_dir(dir: &Path, host: Option<&str>) -> ExitCode {
+    let meta_path = dir.join("meta.json");
+    let model = if let Some(from_meta) = model_from_wave_meta(&meta_path) {
+        from_meta
+    } else {
+        match fs::read_to_string(dir.join(EVENTS_NAME)) {
+            Ok(text) => events::replay(text.lines().map(str::to_owned)),
+            Err(_) => events::EventModel::default(),
+        }
     };
     let ledger = fs::read_to_string(dir.join(LEDGER_NAME)).ok();
     // 空态口径:零生效事件且无台账 → 单行空态,不出表;台账在场则照出 ③ 周转表
@@ -49,6 +71,65 @@ pub fn run(path: &Path, host: Option<&str>) -> ExitCode {
     }
     println!("{}", render(&model, ledger.as_deref(), host));
     ExitCode::SUCCESS
+}
+
+/// 从 `waves/<id>/meta.json` 回填 `EventModel` 的 `host_events` 与 `gate_folds`(新克隆无 `events.jsonl` 兜底)。
+fn model_from_wave_meta(meta_path: &Path) -> Option<EventModel> {
+    let raw = fs::read_to_string(meta_path).ok()?;
+    let meta: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let mut model = EventModel::default();
+    if let Some(hosts) = meta.get("hosts").and_then(serde_json::Value::as_object) {
+        for (k, v) in hosts {
+            if let Some(count) = v.as_u64()
+                && count > 0
+            {
+                model.host_events.insert(k.clone(), count);
+            }
+        }
+    }
+    if let Some(folds) = meta
+        .get("gates")
+        .and_then(|g| g.get("folds"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for item in folds {
+            let Some(gate) = item
+                .get("gate")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            let host_name = item
+                .get("host")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unknown");
+            let passed = item
+                .get("passed")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let failed = item
+                .get("failed")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let unknown = item
+                .get("unknown")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            if passed > 0 || failed > 0 || unknown > 0 {
+                model.gate_folds.insert(
+                    (gate.to_owned(), host_name.to_owned()),
+                    GateFoldTally {
+                        passed,
+                        failed,
+                        unknown,
+                    },
+                );
+            }
+        }
+    }
+    Some(model)
 }
 
 /// 三表渲染(纯函数,零 ANSI):`host` 给定时 ①② 只留该宿主(大小写不敏感;

@@ -1,15 +1,19 @@
-# agentdash 契约 v1.1(公开版)
+# agentdash 契约 v1.2(公开版)
 
-- **契约版本:1.1**(2026-09-16 v1.0 定稿;2026-10-28 v1.1 增订)。契约版本与 crate 版本**相互独立**:凡事件词表、
+- **契约版本:1.2**(2026-09-16 v1.0 定稿;2026-10-28 v1.1 增订;2026-11-05 v1.2 增订)。契约版本与 crate 版本**相互独立**:凡事件词表、
   状态机、折叠/归池/配对语义、证据分级的变更,必须 bump 契约版本并更新本文档;
   纯加法的可选字段不改既有读者语义,亦须在本文档记档。
-- 台账自身的版本载体是 `$schema: agentdash.tasklog.v1`(见 §2,v1.1 为向后兼容纯加法,`$schema` 保持不变)。
-- **读者**:第三方宿主作者。照本文即可实现接入(发事件 / 写台账 / 自定义验证门),
-  无需阅读 agentdash 源码;每条语义均以 `src/contract.rs`、`src/events.rs`、`src/hook.rs`、
+- 台账自身的版本载体是 `$schema: agentdash.tasklog.v1`(见 §2,v1.1/v1.2 均为向后兼容纯加法,`$schema` 保持不变)。
+- **读者**:第三方宿主作者。照本文即可实现接入(发事件 / 写台账 / 自定义验证门 / 消费波次归档),
+  无需阅读 agentdash 源码;每条语义均以 `src/archive.rs`、`src/contract.rs`、`src/events.rs`、`src/hook.rs`、
   `src/model.rs`、`src/stats.rs`、`src/tui.rs`、`src/render/` 为对账基准。
 - 运行时解析是**容错语义**;发布给集成包的**严格校验面**是
   [`schema/agentdash.tasklog.v1.json`](../schema/agentdash.tasklog.v1.json)(JSON Schema 2020-12)。
   两者关系:Schema 管类型/必填/枚举(未知字段两侧皆容忍),内核管降级与警告。
+- **v1.2 变更记事(相对 v1.1)**:
+  1. **原生波次封存与历史波次透视**(§1、§8):新增 `agentdash archive [--list [--json]] [--wave <id>] [--strict] [--force] [--prune-events|--keep-events]` 子命令与 `--wave <id>` 历史透视旗标(覆盖 `render panel|graph|digest`、`oneline`、`stats`,并支持直传 `.agentdash/waves/<id>` 或 `.agentdash/waves/*`),新增 `agentdash.waves.index.v1`(`waves/index.json`)与 `agentdash.wave.v1`(`waves/<id>/meta.json`,含 FNV-1a64 指纹与新克隆缺 `events.jsonl` 时的门禁/对账锚/统计无损回填)。
+  2. **多根工作区目标路径最长前缀路由与跨根 `Stop` 折叠**(§1、§4.1):当 `workspacePaths` 含多个根且无顶层 `cwd` 时,优先从工具载荷提取目标路径/命令提示并按组件边界最长前缀匹配根目录;`Stop` 事件在无 `cwd` 时扫描所有含在途槽或未闭合子代理的 `workspacePaths` 根目录;在途槽持久化可选 `"host"` 归属并支持同回合 `archive` 延迟恢复 Antigravity `transcript.jsonl`。
+  3. **七宿主 `.gitignore` 白名单追踪与严判归档锁**(§1):七套安装器统一写入 `/.agentdash/*` 白名单(追踪 `ledger.json`、`config.json` 与 `waves/` 元数据/快照,忽略实时与归档 `events.jsonl`);`archive` 采用 5 秒严判文件锁(超时退 `1`,绝不无锁写多文件)。
 - **v1.1 变更记事(相对 v1.0)**:
   1. **任务开始时刻 `tasks.<id>.started_at`**(§2.2、§2.6):可选 ISO 8601 / RFC 3339 字符串,解析与容错降级规则同 `done_at`;供 `agentdash stats` ③ 任务周转表在 `done_secs >= start_secs` 时计算真实周转时长(中位 / 最大 / 均值),全账无合法计时对时与 v1.0 输出逐字节一致。
   2. **第七宿主 Antigravity(`--host agy`)接入契约**(§1、§4、§5、§7):强制单行 JSON `stdout` 回执(`{"decision":"allow"}` / `{}` / `{"decision":"stop"}`)、`workspacePaths` 优先含 `.agentdash` 根目录回退、`conversationId` → `session_id` 会话归因、`transcript.jsonl` 末尾有界 64KB(`step_index` / `"Command exited with code N."`)退出码提取 + `Stop` 延迟补查、`invoke_subagent` 与子会话 `Stop`(`fullyIdle: true`)完成配对。
@@ -30,7 +34,7 @@
 
 约定目录 `<repo>/.agentdash/`,落盘根目录解析优先级:
 1. 载荷顶层非空 `cwd`;
-2. 载荷顶层 `workspacePaths` 字符串数组(Antigravity 多根工作区:优先选取首个已存在 `.agentdash` 子目录的根路径,否则取首个非空路径);
+2. 载荷顶层 `workspacePaths` 字符串数组(Antigravity 等多根工作区:若含 >1 个根,优先从工具参数提取目标路径/命令提示并按组件边界最长前缀匹配根目录;未命中时优先选取首个已存在 `.agentdash` 子目录的根路径,否则取首个非空路径);
 3. 进程当前工作目录。
 
 **宿主载荷务必携带 `cwd` 或 `workspacePaths`**,否则事件可能落入进程启动目录。
@@ -41,12 +45,14 @@
 | `events.jsonl` | `agentdash hook` | 会话事件流,一行一 JSON 追加写(§3、§4) |
 | `config.json` | 人或 agent(可选) | 用户自定义验证门词表(§6) |
 | `pending_gate.json` | hook | 在途 gate 交接暂存,槽位数组(§4.5);内部文件,格式跨进程兼容 |
-| `.lock` | hook / 写回 | 跨进程文件锁 |
+| `.lock` | hook / 写回 / 归档 | 跨进程文件锁 |
 | `events.jsonl.1` | hook | 轮转代(§4.6) |
+| `waves/index.json` | `agentdash archive` | 波次归档目录索引(`$schema: agentdash.waves.index.v1`,可自愈) |
+| `waves/<id>/` | `agentdash archive` | 历史波次归档包(`ledger.json`/`meta.json`/`digest.txt`/`stats.txt`/`graph.svg` 入 Git,`events.jsonl` 本地忽略) |
 
-- **锁**:`.lock` 先到先得(`create_new` 原子建),被占自旋(步进 2ms、上限 2s);
-  锁文件 mtime 超 10s 判陈锁(持有方崩溃残留)→ 摘除后重抢;最终拿不到 → 退化直接写
-  (单行小写入近似原子)。hook 追加与 ledger 写回共用同一把锁,跨进程串行。
+- **锁**:`.lock` 先到先得(`create_new` 原子建),锁文件 mtime 超 10s 判陈锁(持有方崩溃残留)→ 摘除后重抢。
+  hook 追加与 TUI 写回自旋上限 2s(步进 2ms),最终拿不到按不阻塞铁律退化直接写;
+  `agentdash archive` 为多文件事务,采用 **5s 严判锁**,超时退 `1` 绝不无锁写入。
 - **轮转**:`events.jsonl` 严格超过 5MB 时滚动为 `events.jsonl.1`(单代保留,新轮转覆盖
   旧 `.1`);任何失败静默——轮转缺失只损失历史留存,不阻塞追加。
 
@@ -415,3 +421,15 @@ agentdash hook --host agy <event>
 4. 退出码证据:能带就带(对象键 `status`/`exit_code`/`exit`、`metadata.exit`、字符串尾契约或
    `transcript.jsonl` 有界回执);带不了就如实缺席——契约保证不虚报,只标 unknown。
 5. 验证门词表需要扩展时写 `.agentdash/config.json`(§6),不改二进制。
+
+## 8. 波次归档契约(`waves/`,v1.2 新增)
+
+1. **波次 ID 语法(`validate_wave_id`)**:trim 后长度 `1..=64` ASCII 字节,首字节限 `[A-Za-z0-9]`,其余限 `[A-Za-z0-9._-]`,末字节禁止 `.`,禁止包含 `..`,且首段(首个 `.` 前)大小写不敏感拒绝 Windows 保留设备名(`CON`/`PRN`/`AUX`/`NUL`/`COM1..COM9`/`LPT1..LPT9`)。
+2. **归档目录结构(`.agentdash/waves/<wave>/`)**:
+   - `ledger.json`:封存时刻的 `$schema: agentdash.tasklog.v1` 台账(未声明 `wave` 或由 `--wave <id>` 覆盖时自动注入顶层 `"wave"`);
+   - `meta.json`:`$schema: agentdash.wave.v1`,持久化 `archived_at`、`window`(`started_at`/`ended_at`/`span_secs`/`source`)、`git`(`branch`/`head_short`/`dirty`)、`tasks`(含 `unattested_done`)、`gates`(`summary` + `folds` + `last_gate_passed`)、`hosts`、`turnover`、`events_count`/`events_bytes`、64 位 FNV-1a 指纹(`events_fnv1a64`/`ledger_fnv1a64`)、`strict_passed` 与 `warnings`;
+   - `digest.txt` / `stats.txt` / `graph.svg`:封存时刻预渲染的零 ANSI 摘要、三表统计与矢量 DAG;
+   - `events.jsonl`:经 `events.jsonl.1` + `events.jsonl` 接缝去重与三层时间窗切片后的本波次事件流(默认由 `.gitignore` 忽略,防本机绝对路径外泄与仓库体积膨胀)。
+3. **自愈总览索引(`.agentdash/waves/index.json`)**:`$schema: agentdash.waves.index.v1`,按自然波次序(`natural_wave_cmp`,如 `W1 < W2 < W9 < W10 < W14`)排列;索引缺失、损坏或与子目录不一致时,`archive --list` 与后续归档自动扫描 `waves/*/` 自愈重建(`AD-ERR-001`)。
+4. **新克隆无事件回填**:当仓库从 Git 新克隆、`waves/<wave>/events.jsonl` 不存在时,`render` / `oneline` / `stats` 的 `--wave <id>`(或直接传入 `.agentdash/waves/<wave>`)自动从 `meta.json` 无损回填验证门终态、`last_gate_passed` 对账锚、`event_span_secs` 速度分母以及宿主使用率与门折叠统计。
+

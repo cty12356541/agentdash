@@ -16,6 +16,8 @@
 
 #![allow(dead_code)]
 
+#[path = "../src/archive.rs"]
+mod archive;
 #[path = "../src/contract.rs"]
 mod contract;
 #[path = "../src/events.rs"]
@@ -24,8 +26,12 @@ mod events;
 mod hook;
 #[path = "../src/model.rs"]
 mod model;
+#[path = "../src/render/mod.rs"]
+mod render;
 #[path = "../src/sources/mod.rs"]
 mod sources;
+#[path = "../src/stats.rs"]
+mod stats;
 
 use proptest::prelude::*;
 
@@ -182,6 +188,40 @@ proptest! {
         let clipped = &name[..40];
         prop_assert_eq!(&parsed[0].name, clipped, "名截 40(ASCII 单字节)");
         prop_assert_eq!(&parsed[0].words, &["w".to_owned()][..]);
+    }
+
+    /// P10(W15-04):`validate_wave_id` 对任意输入不 panic,且通过校验的 ID 永不含
+    /// `/`、`\`、`..`、首尾 `.` 或空串。
+    #[test]
+    fn wave_id_validator_never_panics_and_enforces_path_safety(
+        raw in proptest::string::string_regex("(?s).{0,100}").unwrap(),
+    ) {
+        if let Ok(valid) = archive::validate_wave_id(&raw) {
+            prop_assert!(!valid.is_empty() && valid.len() <= 64);
+            prop_assert!(!valid.contains('/') && !valid.contains('\\') && !valid.contains(".."));
+            prop_assert!(!valid.starts_with('.') && !valid.ends_with('.'));
+            prop_assert!(valid.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric()));
+        }
+    }
+
+    /// P11(W15):`natural_wave_cmp` 满足严格全序反对称性与传递性(绝不产生比较环)。
+    #[test]
+    fn natural_wave_cmp_satisfies_total_order_laws(
+        a in "[A-Za-z0-9._-]{1,12}",
+        b in "[A-Za-z0-9._-]{1,12}",
+        c in "[A-Za-z0-9._-]{1,12}",
+    ) {
+        use std::cmp::Ordering;
+        prop_assert_eq!(archive::natural_wave_cmp(&a, &a), Ordering::Equal);
+        prop_assert_eq!(
+            archive::natural_wave_cmp(&a, &b),
+            archive::natural_wave_cmp(&b, &a).reverse()
+        );
+        let ab = archive::natural_wave_cmp(&a, &b);
+        let bc = archive::natural_wave_cmp(&b, &c);
+        if ab == bc && ab != Ordering::Equal {
+            prop_assert_eq!(archive::natural_wave_cmp(&a, &c), ab);
+        }
     }
 }
 

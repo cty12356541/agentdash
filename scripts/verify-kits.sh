@@ -70,8 +70,41 @@ check_instructions() { # name file
   assert "$1 标记段 end 恰一次" "$(grep -c 'agentdash:end' "$2" || true)" "1"
 }
 check_gitignore() { # target
-  assert ".gitignore 含 .agentdash/ 恰一次" \
-    "$(grep -c '^\.agentdash/$' "$1/.gitignore" || true)" "1"
+  assert ".gitignore 含 /.agentdash/* 恰一次" \
+    "$(grep -cE '^[[:space:]]*/?\.agentdash/\*[[:space:]]*$' "$1/.gitignore" || true)" "1"
+  assert ".gitignore 放行 ledger.json 恰一次" \
+    "$(grep -cE '^[[:space:]]*!/?\.agentdash/ledger\.json[[:space:]]*$' "$1/.gitignore" || true)" "1"
+  assert ".gitignore 放行 config.json 恰一次" \
+    "$(grep -cE '^[[:space:]]*!/?\.agentdash/config\.json[[:space:]]*$' "$1/.gitignore" || true)" "1"
+  assert ".gitignore 放行 waves/ 恰一次" \
+    "$(grep -cE '^[[:space:]]*!/?\.agentdash/waves/[[:space:]]*$' "$1/.gitignore" || true)" "1"
+  assert ".gitignore 忽略 waves/.tmp-* 恰一次" \
+    "$(grep -cE '^[[:space:]]*/?\.agentdash/waves/\.tmp-\*[[:space:]]*$' "$1/.gitignore" || true)" "1"
+  assert ".gitignore 忽略 waves/.old-* 恰一次" \
+    "$(grep -cE '^[[:space:]]*/?\.agentdash/waves/\.old-\*[[:space:]]*$' "$1/.gitignore" || true)" "1"
+  assert ".gitignore 忽略 waves/*/events.jsonl 恰一次" \
+    "$(grep -cE '^[[:space:]]*/?\.agentdash/waves/\*/events\.jsonl[[:space:]]*$' "$1/.gitignore" || true)" "1"
+  assert ".gitignore 无遗留裸 .agentdash/ 目录忽略" \
+    "$(grep -cE '^[[:space:]]*/?\.agentdash/?[[:space:]]*$' "$1/.gitignore" || true)" "0"
+  if command -v git >/dev/null 2>&1; then
+    [ -d "$1/.git" ] || git -C "$1" init -q
+    assert "git check-ignore 忽略实时 events.jsonl" \
+      "$(git -C "$1" check-ignore -q .agentdash/events.jsonl && echo ignored || echo tracked)" "ignored"
+    assert "git check-ignore 忽略归档 waves/W14/events.jsonl" \
+      "$(git -C "$1" check-ignore -q .agentdash/waves/W14/events.jsonl && echo ignored || echo tracked)" "ignored"
+    assert "git check-ignore 忽略临时 waves/.tmp-W14-1/ledger.json" \
+      "$(git -C "$1" check-ignore -q .agentdash/waves/.tmp-W14-1/ledger.json && echo ignored || echo tracked)" "ignored"
+    assert "git check-ignore 忽略备份 waves/.old-W14-1/ledger.json" \
+      "$(git -C "$1" check-ignore -q .agentdash/waves/.old-W14-1/ledger.json && echo ignored || echo tracked)" "ignored"
+    assert "git check-ignore 放行活跃 ledger.json" \
+      "$(git -C "$1" check-ignore -q .agentdash/ledger.json && echo ignored || echo tracked)" "tracked"
+    assert "git check-ignore 放行归档 waves/index.json" \
+      "$(git -C "$1" check-ignore -q .agentdash/waves/index.json && echo ignored || echo tracked)" "tracked"
+    assert "git check-ignore 放行归档 waves/W14/ledger.json" \
+      "$(git -C "$1" check-ignore -q .agentdash/waves/W14/ledger.json && echo ignored || echo tracked)" "tracked"
+    assert "git check-ignore 放行归档 waves/W14/meta.json" \
+      "$(git -C "$1" check-ignore -q .agentdash/waves/W14/meta.json && echo ignored || echo tracked)" "tracked"
+  fi
 }
 check_exec_bit() { # kit
   assert "kits/$1/install.sh 可执行位" "$([ -x "$root/kits/$1/install.sh" ] && echo y || echo n)" "y"
@@ -422,6 +455,24 @@ else
   bad "本机级二次 --global 幂等安装退出非 0"
 fi
 check_instructions "本机全局 AGENTS.md(二次)" "$ghome/.gemini/AGENTS.md"
+
+# 旧版单行 .agentdash/ 迁移为白名单块且二次安装幂等(W15-03)
+t="$tmp/gi-legacy"; mkdir -p "$t"
+printf 'node_modules/\n.agentdash/\ndist/\n' > "$t/.gitignore"
+if run_installer claude-code "$t"; then ok "legacy .gitignore 升级退出 0"; else bad "legacy .gitignore 升级退出非 0"; fi
+assert "保留原有 node_modules/" "$(grep -c '^node_modules/$' "$t/.gitignore" || true)" "1"
+assert "保留原有 dist/" "$(grep -c '^dist/$' "$t/.gitignore" || true)" "1"
+check_gitignore "$t"
+if run_installer claude-code "$t"; then ok "legacy .gitignore 二次幂等退出 0"; else bad "legacy .gitignore 二次幂等退出非 0"; fi
+check_gitignore "$t"
+
+# CRLF + 旧新共存(.agentdash/ 与 /.agentdash/* 同时存在)去重幂等回归
+t="$tmp/gi-crlf-coexist"; mkdir -p "$t"
+printf '.agentdash/\r\n/.agentdash/*\r\n!/.agentdash/ledger.json  \r\n' > "$t/.gitignore"
+if run_installer claude-code "$t"; then ok "CRLF+共存 .gitignore 修复退出 0"; else bad "CRLF+共存 .gitignore 修复退出非 0"; fi
+check_gitignore "$t"
+if run_installer claude-code "$t"; then ok "CRLF+共存 .gitignore 二次幂等退出 0"; else bad "CRLF+共存 .gitignore 二次幂等退出非 0"; fi
+check_gitignore "$t"
 
 section "汇总"
 echo "PASS $pass / FAIL $fail / SKIP $skip(临时目录: $tmp)"

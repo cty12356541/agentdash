@@ -1,0 +1,20 @@
+宿主使用率(生效事件按 host 戳计数;无戳归 unknown)
+  agy     58
+  claude  1
+gate 通过率(终态折叠计数;unknown = exit 不可知折叠)
+  gate          host  passed  failed  unknown
+  cargo-clippy  agy        3       0        0
+  cargo-fmt     agy        3       0        0
+  cargo-test    agy        2       0        0
+  verify-kits   agy        4       0        3
+任务周转: 契约无 started_at,仅列完成时刻(不虚构时长)
+  W14-01 Antigravity(--host agy) hook 协议与载荷适配 · 2026-10-28T11:56:23+08:00
+  W14-02 宽 DAG 动态画布解除 240 列截断与超宽测试 · 2026-10-28T11:43:24+08:00
+  W14-03 契约 v1.1 started_at 字段与 JSON Schema 演进 · 2026-10-28T11:46:06+08:00
+  W14-04 事件流完成时刻/双语警告与 digest --strict 严判 · 2026-10-28T11:47:21+08:00
+  W14-05 kits/antigravity 第七宿主套件与 verify-kits 巡检 · 2026-10-28T12:14:22+08:00
+  W14-06 TUI 详情 unknown 第三态 + 里程碑过滤 + watch --no-infer · 2026-10-28T12:11:47+08:00
+  W14-07 stats 真实周转时长 + CJK 列宽对齐 + 空事件渲染 · 2026-10-28T12:04:48+08:00
+  W14-08 反重力全局插件包组装注册与编排技能(SKILL.md) · 2026-10-28T12:10:42+08:00
+  W14-09 0.12.0 升版 + 契约 v1.1 文档同步 + 全量重编安装 · 2026-10-28T12:28:22+08:00
+  W14-10 ADE 采集桥跨仓联调回归 + W14 收口报告与入库 · 2026-10-28T12:30:05+08:00

@@ -5,6 +5,8 @@
 //! 与 hook 降级铁律同源)。文案覆盖 `--help` 用法全文与 main 层参数错误;
 //! 渲染词表(panel/oneline/graph)本就中文,不经此表。
 
+use std::path::Path;
+
 /// CLI 文案语言。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Lang {
@@ -43,6 +45,8 @@ agentdash - agent 进度仪表盘(agent progress dashboard)
   render digest [--strict] [PATH] 离场摘要(纯文本;--strict 遇失败门、阻塞或告警退 1)
   oneline [PATH]                  打印单行状态摘要
   stats [PATH] [--host <name>]    观测统计:宿主/gate/周转三表(纯文本,恒退 0)
+  archive [--list] [--wave <id>] [--strict] [--force] [PATH]
+                                  封存当前波次到 .agentdash/waves/<id>/ 或列出归档
   watch [--once] [SECONDS] [PATH] 常驻实时刷新(q/Ctrl-C 退出)
   hook <EVENT>                    从 stdin 消费宿主工具钩子载荷
 
@@ -52,6 +56,7 @@ agentdash - agent 进度仪表盘(agent progress dashboard)
   watch --once  只渲染一帧即退(stdin 非 TTY 时自动生效)
 
 选项:
+  --wave <id>    指定归档波次 ID(render/oneline/stats/archive 系)
   --no-infer     关闭无 who completed 配对启发(render/oneline/watch 系;缺省开启推断)
   -V, --version  打印版本号
   -h, --help     打印本帮助
@@ -73,6 +78,8 @@ Commands:
   oneline [PATH]                  Print a one-line status summary
   stats [PATH] [--host <name>]    Observation tables: hosts / gates / turnover
                                   (plain text, always exits 0)
+  archive [--list] [--wave <id>] [--strict] [--force] [PATH]
+                                  Archive active wave to .agentdash/waves/<id>/ or list waves
   watch [--once] [SECONDS] [PATH] Watch a plan and refresh live (q/Ctrl-C quits)
   hook <EVENT>                    Consume a host-tool hook payload from stdin
 
@@ -82,6 +89,7 @@ Arguments:
   watch --once  Render a single frame and exit (implied when stdin is not a TTY)
 
 Options:
+  --wave <id>    Select archived wave ID (render/oneline/stats/archive family)
   --no-infer     Disable no-who completed pairing inference (render/oneline/watch
                  family; inference is on by default)
   -V, --version  Print version
@@ -171,6 +179,135 @@ Language/语言: English · AGENTDASH_LANG=zh 切换中文(switch to Chinese)"
         match self {
             Lang::Zh => format!("--host 需要宿主名,得到 {got}"),
             Lang::En => format!("--host needs a host name, got {got}"),
+        }
+    }
+
+    /// `--wave` 取值非法或缺失(W15-05)。
+    pub(crate) fn wave_invalid(self, got: &str) -> String {
+        match self {
+            Lang::Zh => {
+                format!("--wave 需要合法波次 ID([A-Za-z0-9][A-Za-z0-9._-]{{0,63}}),得到 {got}")
+            }
+            Lang::En => format!(
+                "--wave needs a valid wave ID ([A-Za-z0-9][A-Za-z0-9._-]{{0,63}}), got {got}"
+            ),
+        }
+    }
+
+    /// 互斥旗标报错(W15-05)。
+    pub(crate) fn incompatible_flags(self, a: &str, b: &str) -> String {
+        match self {
+            Lang::Zh => format!("旗标 `{a}` 与 `{b}` 互斥"),
+            Lang::En => format!("flags `{a}` and `{b}` cannot be used together"),
+        }
+    }
+
+    /// 历史波次未找到(退 1)。
+    pub(crate) fn wave_not_found(self, wave: &str, path: &Path) -> String {
+        match self {
+            Lang::Zh => format!("error: 未找到归档波次 `{wave}`(期望 {})", path.display()),
+            Lang::En => format!(
+                "error: archived wave `{wave}` not found (expected {})",
+                path.display()
+            ),
+        }
+    }
+
+    /// 归档时台账缺失(退 1)。
+    pub(crate) fn archive_missing_ledger(self, path: &Path) -> String {
+        match self {
+            Lang::Zh => format!("error: 归档失败:未找到台账 {}", path.display()),
+            Lang::En => format!(
+                "error: archive failed: ledger not found at {}",
+                path.display()
+            ),
+        }
+    }
+
+    /// 归档时台账损坏(退 1)。
+    pub(crate) fn archive_corrupt_ledger(self, why: &str) -> String {
+        match self {
+            Lang::Zh => format!("error: 归档失败:台账损坏 ({why})"),
+            Lang::En => format!("error: archive failed: corrupt ledger ({why})"),
+        }
+    }
+
+    /// 归档时缺少波次 ID(退 1)。
+    pub(crate) fn archive_missing_wave_id(self) -> &'static str {
+        match self {
+            Lang::Zh => "error: 归档需要波次 ID:请在 ledger.json 声明 \"wave\" 或传入 --wave <id>",
+            Lang::En => {
+                "error: archive requires a wave ID: set \"wave\" in ledger.json or pass --wave <id>"
+            }
+        }
+    }
+
+    /// 归档波次已存在(退 1)。
+    pub(crate) fn archive_exists(self, wave: &str) -> String {
+        match self {
+            Lang::Zh => format!("error: 归档波次 `{wave}` 已存在(传入 --force 可覆盖)"),
+            Lang::En => {
+                format!("error: archived wave `{wave}` already exists (pass --force to overwrite)")
+            }
+        }
+    }
+
+    /// `--strict` 归档门禁未通过(退 1)。
+    pub(crate) fn archive_strict_failed(self, reasons: &[String]) -> String {
+        match self {
+            Lang::Zh => format!(
+                "error: --strict 归档门禁未通过:\n  - {}",
+                reasons.join("\n  - ")
+            ),
+            Lang::En => format!(
+                "error: --strict archive check failed:\n  - {}",
+                reasons.join("\n  - ")
+            ),
+        }
+    }
+
+    /// 归档锁超时(退 1)。
+    pub(crate) fn archive_lock_timeout(self, path: &Path) -> String {
+        match self {
+            Lang::Zh => format!("error: 归档无法获取文件锁 {}", path.display()),
+            Lang::En => format!(
+                "error: archive timed out waiting for lock {}",
+                path.display()
+            ),
+        }
+    }
+
+    /// 归档 IO 失败(退 1)。
+    pub(crate) fn archive_io_error(self, why: &str) -> String {
+        match self {
+            Lang::Zh => format!("error: 归档读写失败: {why}"),
+            Lang::En => format!("error: archive I/O failed: {why}"),
+        }
+    }
+
+    /// 归档成功一行回执(stdout)。
+    pub(crate) fn archive_receipt(
+        self,
+        wave: &str,
+        done: usize,
+        total: usize,
+        events: usize,
+    ) -> String {
+        match self {
+            Lang::Zh => format!(
+                "已归档 {wave} -> .agentdash/waves/{wave} ({done}/{total} done, {events} 条事件)"
+            ),
+            Lang::En => format!(
+                "archived {wave} -> .agentdash/waves/{wave} ({done}/{total} done, {events} events)"
+            ),
+        }
+    }
+
+    /// 归档列表空态(stdout)。
+    pub(crate) fn archive_empty_list(self) -> &'static str {
+        match self {
+            Lang::Zh => "archive: 暂无归档波次",
+            Lang::En => "archive: no archived waves",
         }
     }
 }

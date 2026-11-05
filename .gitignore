@@ -1,8 +1,12 @@
 __pycache__/
 *.pyc
 /target
-# dogfood:台账提交,事件产物不提交
+# dogfood:台账与波次归档提交,实时事件产物不提交
 /.agentdash/*
 !/.agentdash/ledger.json
 !/.agentdash/config.json
+!/.agentdash/waves/
+/.agentdash/waves/.tmp-*
+/.agentdash/waves/.old-*
+/.agentdash/waves/*/events.jsonl
 .dash/

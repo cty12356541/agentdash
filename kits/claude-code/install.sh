@@ -65,17 +65,70 @@ merge_instructions "$target/CLAUDE.md"
 rm -f "$target/.claude/agentdash/hooks/record_event.py"
 rmdir "$target/.claude/agentdash/hooks" "$target/.claude/agentdash" 2>/dev/null || true
 
-# --- M-2:目标仓 .gitignore 幂等追加 .agentdash/ ---
-gitignore="$target/.gitignore"
-if [ ! -f "$gitignore" ] || ! grep -qE '^[[:space:]]*\.agentdash/?[[:space:]]*$' "$gitignore"; then
-  # 末行无换行时先补一个:否则 .agentdash/ 粘上最后一行失效,且幂等检查永远失配
-  # ($(… ) 命令替换会吞掉尾部换行:尾字节是换行时结果为空,非换行时为该字符)
-  if [ -f "$gitignore" ] && [ -s "$gitignore" ] && [ -n "$(tail -c1 "$gitignore")" ]; then
-    printf '\n' >> "$gitignore"
+# --- M-2 / W15-03:目标仓 .gitignore 幂等维护 .agentdash 白名单(兼容旧版单行 .agentdash/、CRLF 与半白名单原地升级)---
+ensure_gitignore() {
+  local gi="$1" tmp
+  if [ ! -f "$gi" ]; then
+    cat > "$gi" <<'EOF'
+# agentdash: track ledger, config, and wave archives; ignore live event streams
+/.agentdash/*
+!/.agentdash/ledger.json
+!/.agentdash/config.json
+!/.agentdash/waves/
+/.agentdash/waves/.tmp-*
+/.agentdash/waves/.old-*
+/.agentdash/waves/*/events.jsonl
+EOF
+    return
   fi
-  printf '.agentdash/\n' >> "$gitignore"
-fi
-echo "[agentdash] .gitignore ensured: .agentdash/ ($gitignore)"
+  tmp="$gi.tmp-agentdash"
+  awk '
+    { sub(/\r$/, "") }
+    /^[ \t]*# agentdash: track ledger, config, and wave archives; ignore live event streams[ \t]*$/ { next }
+    /^[ \t]*\/?\.agentdash\/?[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/\*[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/ledger\.json[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/config\.json[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/waves\/[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\.tmp-\*[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\.old-\*[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\*\/events\.jsonl[ \t]*$/ {
+      if (!emitted) {
+        print "# agentdash: track ledger, config, and wave archives; ignore live event streams"
+        print "/.agentdash/*"
+        print "!/.agentdash/ledger.json"
+        print "!/.agentdash/config.json"
+        print "!/.agentdash/waves/"
+        print "/.agentdash/waves/.tmp-*"
+        print "/.agentdash/waves/.old-*"
+        print "/.agentdash/waves/*/events.jsonl"
+        emitted = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!emitted) {
+        print "# agentdash: track ledger, config, and wave archives; ignore live event streams"
+        print "/.agentdash/*"
+        print "!/.agentdash/ledger.json"
+        print "!/.agentdash/config.json"
+        print "!/.agentdash/waves/"
+        print "/.agentdash/waves/.tmp-*"
+        print "/.agentdash/waves/.old-*"
+        print "/.agentdash/waves/*/events.jsonl"
+      }
+    }
+  ' "$gi" > "$tmp"
+  if cmp -s "$gi" "$tmp"; then
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$gi"
+  fi
+}
+gitignore="$target/.gitignore"
+ensure_gitignore "$gitignore"
+echo "[agentdash] .gitignore ensured: /.agentdash/* whitelist ($gitignore)"
 
 # --- settings.json 幂等注册五钩子 ---
 settings="$target/.claude/settings.json"

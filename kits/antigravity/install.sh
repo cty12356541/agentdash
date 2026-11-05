@@ -133,13 +133,67 @@ for skill in agentdash agentdash-setup agentdash-orchestrate; do
 done
 echo "[agentdash] skills synced: $agents_dir/skills/{agentdash,agentdash-setup,agentdash-orchestrate}"
 
-gitignore="$target/.gitignore"
-if [ ! -f "$gitignore" ] || ! grep -q '\.agentdash' "$gitignore"; then
-  if [ -f "$gitignore" ] && [ -s "$gitignore" ] && [ -n "$(tail -c1 "$gitignore")" ]; then
-    printf '\n' >> "$gitignore"
+ensure_gitignore() {
+  local gi="$1" tmp
+  if [ ! -f "$gi" ]; then
+    cat > "$gi" <<'EOF'
+# agentdash: track ledger, config, and wave archives; ignore live event streams
+/.agentdash/*
+!/.agentdash/ledger.json
+!/.agentdash/config.json
+!/.agentdash/waves/
+/.agentdash/waves/.tmp-*
+/.agentdash/waves/.old-*
+/.agentdash/waves/*/events.jsonl
+EOF
+    return
   fi
-  printf '.agentdash/\n' >> "$gitignore"
-fi
+  tmp="$gi.tmp-agentdash"
+  awk '
+    { sub(/\r$/, "") }
+    /^[ \t]*# agentdash: track ledger, config, and wave archives; ignore live event streams[ \t]*$/ { next }
+    /^[ \t]*\/?\.agentdash\/?[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/\*[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/ledger\.json[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/config\.json[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/waves\/[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\.tmp-\*[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\.old-\*[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\*\/events\.jsonl[ \t]*$/ {
+      if (!emitted) {
+        print "# agentdash: track ledger, config, and wave archives; ignore live event streams"
+        print "/.agentdash/*"
+        print "!/.agentdash/ledger.json"
+        print "!/.agentdash/config.json"
+        print "!/.agentdash/waves/"
+        print "/.agentdash/waves/.tmp-*"
+        print "/.agentdash/waves/.old-*"
+        print "/.agentdash/waves/*/events.jsonl"
+        emitted = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!emitted) {
+        print "# agentdash: track ledger, config, and wave archives; ignore live event streams"
+        print "/.agentdash/*"
+        print "!/.agentdash/ledger.json"
+        print "!/.agentdash/config.json"
+        print "!/.agentdash/waves/"
+        print "/.agentdash/waves/.tmp-*"
+        print "/.agentdash/waves/.old-*"
+        print "/.agentdash/waves/*/events.jsonl"
+      }
+    }
+  ' "$gi" > "$tmp"
+  if cmp -s "$gi" "$tmp"; then
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$gi"
+  fi
+}
+ensure_gitignore "$target/.gitignore"
 
 echo "[agentdash] antigravity-kit installed into $target"
 echo "[agentdash] 提醒:首次写入 .agents/hooks.json 与 .agents/skills/ 后请新建会话或重载窗口生效"

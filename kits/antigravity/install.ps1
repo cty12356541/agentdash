@@ -175,18 +175,42 @@ foreach ($skill in @('agentdash', 'agentdash-setup', 'agentdash-orchestrate')) {
 Write-Host "[agentdash] skills synced: $agentsDir\skills\{agentdash,agentdash-setup,agentdash-orchestrate}"
 
 $gitignore = Join-Path $Target '.gitignore'
-$hasEntry = $false
-if (Test-Path -LiteralPath $gitignore -PathType Leaf) {
-    $hasEntry = [bool](Select-String -LiteralPath $gitignore -Pattern '\.agentdash' -Quiet)
-}
-if (-not $hasEntry) {
-    if (Test-Path -LiteralPath $gitignore -PathType Leaf) {
-        $giText = [System.IO.File]::ReadAllText($gitignore, [System.Text.Encoding]::UTF8)
-        if ($giText.Length -gt 0 -and $giText[-1] -ne "`n") {
-            [System.IO.File]::AppendAllText($gitignore, "`n", $utf8NoBom)
+$canonicalBlock = @(
+    '# agentdash: track ledger, config, and wave archives; ignore live event streams',
+    '/.agentdash/*',
+    '!/.agentdash/ledger.json',
+    '!/.agentdash/config.json',
+    '!/.agentdash/waves/',
+    '/.agentdash/waves/.tmp-*',
+    '/.agentdash/waves/.old-*',
+    '/.agentdash/waves/*/events.jsonl'
+)
+$managedPattern = '^[\t ]*(?:# agentdash: track ledger, config, and wave archives; ignore live event streams|/?\.agentdash/?|/?\.agentdash/\*|!/?\.agentdash/ledger\.json|!/?\.agentdash/config\.json|!/?\.agentdash/waves/|/?\.agentdash/waves/\.tmp-\*|/?\.agentdash/waves/\.old-\*|/?\.agentdash/waves/\*/events\.jsonl)[\t ]*$'
+if (-not (Test-Path -LiteralPath $gitignore -PathType Leaf)) {
+    [System.IO.File]::WriteAllText($gitignore, ($canonicalBlock -join "`n") + "`n", $utf8NoBom)
+} else {
+    $rawGi = ([System.IO.File]::ReadAllText($gitignore, [System.Text.Encoding]::UTF8) -replace "`r+`n", "`n") -replace "`r", "`n"
+    $lines = New-Object System.Collections.Generic.List[string]
+    $emitted = $false
+    $trimmedGi = $rawGi.TrimEnd("`n")
+    $srcLines = if ($trimmedGi.Length -eq 0) { @() } else { @($trimmedGi -split "`n") }
+    foreach ($line in $srcLines) {
+        if ($line -match '^[\t ]*# agentdash: track ledger, config, and wave archives; ignore live event streams[\t ]*$') {
+            continue
         }
+        if ($line -match $managedPattern) {
+            if (-not $emitted) {
+                foreach ($b in $canonicalBlock) { $lines.Add($b) }
+                $emitted = $true
+            }
+            continue
+        }
+        $lines.Add($line)
     }
-    [System.IO.File]::AppendAllText($gitignore, ".agentdash/`n", $utf8NoBom)
+    if (-not $emitted) {
+        foreach ($b in $canonicalBlock) { $lines.Add($b) }
+    }
+    [System.IO.File]::WriteAllText($gitignore, ($lines -join "`n") + "`n", $utf8NoBom)
 }
 
 Write-Host "[agentdash] antigravity-kit installed into $Target"

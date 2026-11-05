@@ -1,0 +1,22 @@
+agentdash
+✓10 ▶0 ·0 ⚑0 ⊘0 · 0 agents · 11-05T12:34
+▶⇢✓ W14-01 Agy Hook Engineer [agy] · W14-01: Antigravity --host agy hook adapter · 10-28T11:59 (inferred)
+▶⇢✓ W14-02 Graph Canvas Engineer [agy] · W14-02: Dynamic wide DAG canvas · 10-28T11:59 (inferred)
+▶⇢✓ W14-03 Contract v1.1 Engineer [agy] · W14-03: Contract v1.1 started_at · 10-28T11:59 (inferred)
+▶⇢✓ W14-04 Events & Digest Engineer [agy] · W14-04: Events completed_at & digest --strict · 10-28T11:59 (inferred)
+▶⇢✓ W14-05 Agy Kit Builder [agy] · W14-05: kits/antigravity 7th host kit + verify-kits.sh · 10-28T12:14 (inferred)
+▶⇢✓ W14-06 TUI & Wave Engineer [agy] · W14-06: TUI unknown gate + MilestoneView.tasks + watch --no-infer · 10-28T12:04 (inferred)
+▶⇢✓ W14-07 Stats Engineer [agy] · W14-07: Stats real turnover durations + CJK alignment · 10-28T12:10 (inferred)
+▶⇢✓ W14-08 Global Plugin Author [agy] · W14-08: Global Antigravity plugin ~/.gemini/config/plugins/agentdash · 10-28T12:11 (inferred)
+▶⇢✓ W14-09 Release & Docs Engineer [agy] · W14-09: 0.12.0 release bump + contract v1.1 + 7-host docs sync · 10-28T12:28 (inferred)
+✓ W14-01 Antigravity(--host agy) hook 协议与载荷适配 · 10-28T11:56
+✓ W14-05 kits/antigravity 第七宿主套件与 verify-kits 巡检 · 10-28T12:14
+✓ W14-09 0.12.0 升版 + 契约 v1.1 文档同步 + 全量重编安装 · 10-28T12:28
+✓ W14-02 宽 DAG 动态画布解除 240 列截断与超宽测试 · 10-28T11:43
+✓ W14-06 TUI 详情 unknown 第三态 + 里程碑过滤 + watch --no-infer · 10-28T12:11
+✓ W14-03 契约 v1.1 started_at 字段与 JSON Schema 演进 · 10-28T11:46
+✓ W14-07 stats 真实周转时长 + CJK 列宽对齐 + 空事件渲染 · 10-28T12:04
+✓ W14-04 事件流完成时刻/双语警告与 digest --strict 严判 · 10-28T11:47
+✓ W14-08 反重力全局插件包组装注册与编排技能(SKILL.md) · 10-28T12:10
+✓ W14-10 ADE 采集桥跨仓联调回归 + W14 收口报告与入库 · 10-28T12:30
+⚠ 9 个无 who completed 已推断配对

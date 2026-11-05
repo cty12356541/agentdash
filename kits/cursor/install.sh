@@ -100,15 +100,68 @@ else
   cat "$here/hooks.template.json" >&2
 fi
 
-# --- .gitignore 幂等追加 .agentdash/(已有任何 .agentdash 条目则跳过——
-# 防止裸忽略行落在白名单例外之后,语义反转,如本仓的台账白名单)---
-gitignore="$target/.gitignore"
-if [ ! -f "$gitignore" ] || ! grep -q '\.agentdash' "$gitignore"; then
-  if [ -f "$gitignore" ] && [ -s "$gitignore" ] && [ -n "$(tail -c1 "$gitignore")" ]; then
-    printf '\n' >> "$gitignore"
+# --- W15-03:.gitignore 幂等维护 .agentdash 白名单(兼容旧版单行 .agentdash/、CRLF 与半白名单原地升级)---
+ensure_gitignore() {
+  local gi="$1" tmp
+  if [ ! -f "$gi" ]; then
+    cat > "$gi" <<'EOF'
+# agentdash: track ledger, config, and wave archives; ignore live event streams
+/.agentdash/*
+!/.agentdash/ledger.json
+!/.agentdash/config.json
+!/.agentdash/waves/
+/.agentdash/waves/.tmp-*
+/.agentdash/waves/.old-*
+/.agentdash/waves/*/events.jsonl
+EOF
+    return
   fi
-  printf '.agentdash/\n' >> "$gitignore"
-fi
+  tmp="$gi.tmp-agentdash"
+  awk '
+    { sub(/\r$/, "") }
+    /^[ \t]*# agentdash: track ledger, config, and wave archives; ignore live event streams[ \t]*$/ { next }
+    /^[ \t]*\/?\.agentdash\/?[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/\*[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/ledger\.json[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/config\.json[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/waves\/[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\.tmp-\*[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\.old-\*[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\*\/events\.jsonl[ \t]*$/ {
+      if (!emitted) {
+        print "# agentdash: track ledger, config, and wave archives; ignore live event streams"
+        print "/.agentdash/*"
+        print "!/.agentdash/ledger.json"
+        print "!/.agentdash/config.json"
+        print "!/.agentdash/waves/"
+        print "/.agentdash/waves/.tmp-*"
+        print "/.agentdash/waves/.old-*"
+        print "/.agentdash/waves/*/events.jsonl"
+        emitted = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!emitted) {
+        print "# agentdash: track ledger, config, and wave archives; ignore live event streams"
+        print "/.agentdash/*"
+        print "!/.agentdash/ledger.json"
+        print "!/.agentdash/config.json"
+        print "!/.agentdash/waves/"
+        print "/.agentdash/waves/.tmp-*"
+        print "/.agentdash/waves/.old-*"
+        print "/.agentdash/waves/*/events.jsonl"
+      }
+    }
+  ' "$gi" > "$tmp"
+  if cmp -s "$gi" "$tmp"; then
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$gi"
+  fi
+}
+ensure_gitignore "$target/.gitignore"
 
 echo "[agentdash] cursor-kit installed into $target"
 echo "[agentdash] 提醒:项目级 hooks 需在 Cursor 内信任本工作区;载荷无退出码证据,gate 折叠按 exit unknown(不虚报通过)"

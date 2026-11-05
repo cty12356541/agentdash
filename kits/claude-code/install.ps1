@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not [System.IO.Path]::IsPathRooted($Target)) {
@@ -25,12 +26,67 @@ if (-not $agentdashCmd) {
     Write-Error "[agentdash] 未找到 agentdash —— hook 直调二进制,需要它先在 PATH。安装方式二选一:`n  1) 仓库内安装:  cargo install --path <agentdash 仓库根目录>`n  2) 发布件:      从项目 Releases 下载对应平台二进制,放入 PATH"
 }
 
-# --- skill 复制 ---
+function Merge-AgentdashInstructions {
+    param(
+        [string]$AgentsMdPath,
+        [string]$BlockFilePath
+    )
+    $parent = Split-Path -Parent $AgentsMdPath
+    if ($parent) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    $blockText = ([System.IO.File]::ReadAllText($BlockFilePath, [System.Text.Encoding]::UTF8) -replace "`r`n", "`n").TrimEnd("`n") + "`n"
+    if (-not (Test-Path -LiteralPath $AgentsMdPath -PathType Leaf)) {
+        [System.IO.File]::WriteAllText($AgentsMdPath, $blockText, $utf8NoBom)
+        Write-Host "[agentdash] instructions created: $AgentsMdPath"
+        return
+    }
+    $existing = [System.IO.File]::ReadAllText($AgentsMdPath, [System.Text.Encoding]::UTF8) -replace "`r`n", "`n"
+    if ($existing -match 'agentdash:begin') {
+        $lines = $existing -split "`n"
+        $outLines = New-Object System.Collections.Generic.List[string]
+        $skip = $false
+        $hasTrailingNewline = $existing.EndsWith("`n")
+        $limit = if ($hasTrailingNewline -and $lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') { $lines.Count - 1 } else { $lines.Count }
+        for ($i = 0; $i -lt $limit; $i++) {
+            $line = $lines[$i]
+            if ($line -match '<!-- agentdash:begin') {
+                $skip = $true
+                foreach ($bLine in ($blockText.TrimEnd("`n") -split "`n")) {
+                    $outLines.Add($bLine)
+                }
+                continue
+            }
+            if ($line -match '<!-- agentdash:end') {
+                $skip = $false
+                continue
+            }
+            if (-not $skip) {
+                $outLines.Add($line)
+            }
+        }
+        $mergedText = ($outLines -join "`n") + "`n"
+        [System.IO.File]::WriteAllText($AgentsMdPath, $mergedText, $utf8NoBom)
+        Write-Host "[agentdash] instructions refreshed: $AgentsMdPath"
+    } else {
+        $prefix = $existing
+        if ($prefix.Length -gt 0 -and -not $prefix.EndsWith("`n")) {
+            $prefix += "`n"
+        }
+        [System.IO.File]::WriteAllText($AgentsMdPath, $prefix + $blockText, $utf8NoBom)
+        Write-Host "[agentdash] instructions appended: $AgentsMdPath"
+    }
+}
+
+# --- skill 复制与 CLAUDE.md 标记段合并 ---
 foreach ($skill in @('agentdash', 'agentdash-setup', 'agentdash-orchestrate')) {
     $skillDir = Join-Path $Target ".claude\skills\$skill"
     New-Item -ItemType Directory -Force -Path $skillDir | Out-Null
     Copy-Item (Join-Path $here "skills\$skill\SKILL.md") (Join-Path $skillDir 'SKILL.md') -Force
 }
+Merge-AgentdashInstructions `
+    -AgentsMdPath (Join-Path $Target 'CLAUDE.md') `
+    -BlockFilePath ([System.IO.Path]::GetFullPath((Join-Path $here '..\shared\AGENTDASH.md')))
 
 # --- 清理被二进制方案替代的 Python 垫片残留(老版本安装产物)---
 $staleHook = Join-Path $Target '.claude\agentdash\hooks\record_event.py'
@@ -44,24 +100,46 @@ if (Test-Path -LiteralPath $staleHook) {
     }
 }
 
-# --- M-2:.gitignore 幂等追加 .agentdash/ ---
+# --- M-2 / W15-03:.gitignore 幂等维护 .agentdash 白名单(兼容旧版单行 .agentdash/、CRLF 与半白名单原地升级)---
 $gitignore = Join-Path $Target '.gitignore'
-$hasEntry = $false
-if (Test-Path -LiteralPath $gitignore) {
-    $hasEntry = [bool](Select-String -LiteralPath $gitignore -Pattern '^\s*\.agentdash/?\s*$' -Quiet)
-}
-if (-not $hasEntry) {
-    # 末行无换行时先补一个:否则 .agentdash/ 粘上最后一行失效,且幂等检查永远失配
-    if (Test-Path -LiteralPath $gitignore) {
-        $text = [System.IO.File]::ReadAllText($gitignore)
-        if ($text.Length -gt 0 -and $text[-1] -ne "`n") {
-            [System.IO.File]::AppendAllText($gitignore, [Environment]::NewLine)
+$canonicalBlock = @(
+    '# agentdash: track ledger, config, and wave archives; ignore live event streams',
+    '/.agentdash/*',
+    '!/.agentdash/ledger.json',
+    '!/.agentdash/config.json',
+    '!/.agentdash/waves/',
+    '/.agentdash/waves/.tmp-*',
+    '/.agentdash/waves/.old-*',
+    '/.agentdash/waves/*/events.jsonl'
+)
+$managedPattern = '^[\t ]*(?:# agentdash: track ledger, config, and wave archives; ignore live event streams|/?\.agentdash/?|/?\.agentdash/\*|!/?\.agentdash/ledger\.json|!/?\.agentdash/config\.json|!/?\.agentdash/waves/|/?\.agentdash/waves/\.tmp-\*|/?\.agentdash/waves/\.old-\*|/?\.agentdash/waves/\*/events\.jsonl)[\t ]*$'
+if (-not (Test-Path -LiteralPath $gitignore -PathType Leaf)) {
+    [System.IO.File]::WriteAllText($gitignore, ($canonicalBlock -join "`n") + "`n", $utf8NoBom)
+} else {
+    $rawGi = ([System.IO.File]::ReadAllText($gitignore, [System.Text.Encoding]::UTF8) -replace "`r+`n", "`n") -replace "`r", "`n"
+    $lines = New-Object System.Collections.Generic.List[string]
+    $emitted = $false
+    $trimmedGi = $rawGi.TrimEnd("`n")
+    $srcLines = if ($trimmedGi.Length -eq 0) { @() } else { @($trimmedGi -split "`n") }
+    foreach ($line in $srcLines) {
+        if ($line -match '^[\t ]*# agentdash: track ledger, config, and wave archives; ignore live event streams[\t ]*$') {
+            continue
         }
+        if ($line -match $managedPattern) {
+            if (-not $emitted) {
+                foreach ($b in $canonicalBlock) { $lines.Add($b) }
+                $emitted = $true
+            }
+            continue
+        }
+        $lines.Add($line)
     }
-    # .NET 追加:UTF-8 无 BOM(BOM 会使 .gitignore 首行模式失配)
-    [System.IO.File]::AppendAllText($gitignore, '.agentdash/' + [Environment]::NewLine)
+    if (-not $emitted) {
+        foreach ($b in $canonicalBlock) { $lines.Add($b) }
+    }
+    [System.IO.File]::WriteAllText($gitignore, ($lines -join "`n") + "`n", $utf8NoBom)
 }
-Write-Host "[agentdash] .gitignore ensured: .agentdash/ ($gitignore)"
+Write-Host "[agentdash] .gitignore ensured: /.agentdash/* whitelist ($gitignore)"
 
 # --- settings.json 幂等注册四钩子 ---
 $settingsPath = Join-Path $Target '.claude\settings.json'

@@ -194,8 +194,11 @@ fn events_dir(payload: &Map<String, Value>) -> PathBuf {
     base.join(".agentdash")
 }
 
-/// Antigravity `workspacePaths` 多根工作区选取(W14-01):优先首个存在
-/// `.agentdash` 的目录,否则使用首个非空目录。
+/// Antigravity `workspacePaths` 多根工作区选取(W14-01;W15-02 增目标路径最长前缀匹配):
+/// 1. 若工具调用携带目标路径/目录提示(如 `TargetFile`/`Path`/`Cwd`/`CommandLine` 等),
+///    按路径组件边界匹配 `workspacePaths` 中最长前缀的根目录(解决多仓会话串写与嵌套工作区归属);
+/// 2. 未命中目标路径(如相对路径 `src/hook.rs`)时,优先首个存在 `.agentdash` 的目录;
+/// 3. 否则使用首个非空目录。
 fn workspace_base(payload: &Map<String, Value>) -> Option<PathBuf> {
     let items = payload.get("workspacePaths")?.as_array()?;
     let paths: Vec<&str> = items
@@ -204,6 +207,22 @@ fn workspace_base(payload: &Map<String, Value>) -> Option<PathBuf> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
+    if paths.len() > 1 {
+        let hints = extract_target_hints(payload);
+        let mut best: Option<(&str, usize)> = None;
+        for hint in &hints {
+            for &root in &paths {
+                if let Some(score) = match_workspace_prefix(hint, root)
+                    && best.is_none_or(|(_, best_score)| score > best_score)
+                {
+                    best = Some((root, score));
+                }
+            }
+        }
+        if let Some((matched, _)) = best {
+            return Some(PathBuf::from(matched));
+        }
+    }
     if let Some(hit) = paths
         .iter()
         .find(|p| Path::new(p).join(".agentdash").exists())
@@ -211,6 +230,118 @@ fn workspace_base(payload: &Map<String, Value>) -> Option<PathBuf> {
         return Some(PathBuf::from(hit));
     }
     paths.first().map(PathBuf::from)
+}
+
+/// 从载荷 `toolCall.args` 或 `tool_input` 提取用于匹配工作区根的目标路径/命令字符串。
+fn extract_target_hints(payload: &Map<String, Value>) -> Vec<&str> {
+    let mut hints = Vec::new();
+    let args_objs = [
+        payload
+            .get("toolCall")
+            .and_then(Value::as_object)
+            .and_then(|tc| tc.get("args"))
+            .and_then(Value::as_object),
+        payload.get("tool_input").and_then(Value::as_object),
+    ];
+    for args in args_objs.into_iter().flatten() {
+        for key in [
+            "Cwd",
+            "cwd",
+            "DirectoryPath",
+            "SearchDirectory",
+            "AbsolutePath",
+            "TargetFile",
+            "Path",
+            "SearchPath",
+            "file_path",
+            "path",
+            "CommandLine",
+            "command",
+            "Prompt",
+            "prompt",
+        ] {
+            if let Some(val) = args
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                hints.push(val);
+            }
+        }
+    }
+    if let Some(top_cmd) = payload
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        hints.push(top_cmd);
+    }
+    hints
+}
+
+/// 路径分隔符与大小写归一(剥离 Windows `\\?\` 前缀、统一 `/`、折叠重复 `/`、转 ASCII 小写并去尾 `/`)。
+fn norm_path_str(raw: &str) -> String {
+    let stripped = raw.strip_prefix(r"\\?\").unwrap_or(raw);
+    let mut s = String::with_capacity(stripped.len());
+    for c in stripped.chars() {
+        let mapped = if c == '\\' {
+            '/'
+        } else {
+            c.to_ascii_lowercase()
+        };
+        if mapped == '/' && s.ends_with('/') {
+            continue;
+        }
+        s.push(mapped);
+    }
+    if let Some(rest) = s.strip_prefix("//?/") {
+        s = rest.to_owned();
+    }
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    s
+}
+
+/// 判断 `hint`(文件路径或命令串)是否指向 `root` 工作区下,命中时返回归一化根长度(最长前缀优先)。
+fn match_workspace_prefix(hint: &str, root: &str) -> Option<usize> {
+    let norm_root = norm_path_str(root);
+    if norm_root.is_empty() {
+        return None;
+    }
+    let norm_hint = norm_path_str(hint);
+    if norm_root == "/" {
+        return norm_hint.starts_with('/').then_some(1);
+    }
+    if let Some(rest) = norm_hint.strip_prefix(&norm_root)
+        && (rest.is_empty() || rest.starts_with('/'))
+    {
+        return Some(norm_root.len());
+    }
+    // 命令串或 Prompt 内嵌绝对路径:逐处扫描避免前序兄弟前缀目录(如 D:/repo_deps)遮蔽后段真实匹配
+    let mut search_from = 0usize;
+    while let Some(rel) = norm_hint[search_from..].find(&norm_root) {
+        let pos = search_from + rel;
+        let before_ok = pos == 0
+            || matches!(
+                norm_hint.as_bytes()[pos - 1],
+                b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'=' | b'(' | b'|' | b';' | b'&'
+            );
+        let after_idx = pos + norm_root.len();
+        let after_ok = after_idx == norm_hint.len()
+            || matches!(
+                norm_hint.as_bytes()[after_idx],
+                b'/' | b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b';' | b'&' | b'|' | b')'
+            );
+        if before_ok && after_ok {
+            return Some(norm_root.len());
+        }
+        let step = norm_hint[pos..].chars().next().map_or(1, char::len_utf8);
+        search_from = pos + step;
+    }
+    None
 }
 
 /// 会话归属(W11-001;W14-01 补 Antigravity `conversationId` 回退):载荷顶层
@@ -465,7 +596,7 @@ fn bash_receipt_ext(
                     slot["step_idx"] = json!(idx);
                 }
             }
-            append_pending_slot(dir, &slot, session);
+            append_pending_slot(dir, &slot, host, session);
         });
         return;
     }
@@ -513,7 +644,7 @@ fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
         detail = clip(last.unwrap_or_default());
     }
     with_lock(&dir, || {
-        if supersede_pending_slot(&dir, gate.as_ref(), exit, &detail, session) {
+        if supersede_pending_slot(&dir, gate.as_ref(), exit, &detail, host, session) {
             return; // 既有槽已换上新证据,running 行在案
         }
         append_line(
@@ -532,6 +663,7 @@ fn on_post_tool_use_failure(payload: &Map<String, Value>, host: Option<&str>) {
         append_pending_slot(
             &dir,
             &json!({ "gate": gate.as_ref(), "exit": exit, "detail": detail }),
+            host,
             session,
         );
     });
@@ -581,6 +713,7 @@ fn supersede_pending_slot(
     gate: &str,
     exit: i64,
     detail: &str,
+    host: Option<&str>,
     session: Option<&str>,
 ) -> bool {
     let existing = fs::read_to_string(dir.join(PENDING_NAME))
@@ -593,6 +726,9 @@ fn supersede_pending_slot(
         {
             slot["exit"] = json!(exit);
             slot["detail"] = json!(clip(detail));
+            if let Some(h) = host {
+                slot["host"] = json!(h);
+            }
             if let Some(obj) = slot.as_object_mut() {
                 obj.remove("transcript");
                 obj.remove("step_idx");
@@ -729,82 +865,113 @@ fn append_tool_event(
 /// (写回失败按降级铁律整体消费——折叠仍只做一次)。槽缺 `gate` 字段跳过,
 /// 不产生幽灵事件。W14-01 起支持延迟补查槽位 `transcript` 与 Antigravity
 /// 子会话 `fullyIdle` 完成归并。
+#[allow(clippy::too_many_lines)]
 fn on_stop(payload: &Map<String, Value>, host: Option<&str>) {
-    let dir = events_dir(payload);
+    let primary_dir = events_dir(payload);
     let session = session_id_of(payload);
     let agy_fully_idle =
         is_agy_host(host) && payload.get("fullyIdle").and_then(Value::as_bool) == Some(true);
-    with_lock(&dir, || {
-        let pending = fs::read_to_string(dir.join(PENDING_NAME))
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-        let _ = fs::remove_file(dir.join(PENDING_NAME));
-        let (folding, foreign): (Vec<Value>, Vec<Value>) = pending_slots(pending)
-            .into_iter()
-            .partition(|slot| slot_in_session(slot, session));
-        if !foreign.is_empty() {
-            write_pending_slots(&dir, &foreign); // 他会话在途槽原位保留
-        }
-        for slot in folding {
-            let gate = slot.get("gate").and_then(Value::as_str).unwrap_or_default();
-            if gate.is_empty() {
-                continue;
+    let mut dirs = vec![primary_dir];
+    if payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .is_none_or(|s| s.trim().is_empty())
+        && let Some(items) = payload.get("workspacePaths").and_then(Value::as_array)
+    {
+        for root in items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let cand = Path::new(root).join(".agentdash");
+            let has_work = cand.join(PENDING_NAME).is_file()
+                || (agy_fully_idle && cand.join(EVENTS_NAME).is_file());
+            let cand_norm = norm_path_str(&cand.to_string_lossy());
+            if has_work
+                && !dirs
+                    .iter()
+                    .any(|d| norm_path_str(&d.to_string_lossy()) == cand_norm)
+            {
+                dirs.push(cand);
             }
-            let mut exit = slot.get("exit").and_then(Value::as_i64);
-            let mut detail = clip(
-                slot.get("detail")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            );
-            if exit.is_none()
-                && let Some(tp) = slot
-                    .get("transcript")
+        }
+    }
+    for dir in dirs {
+        with_lock(&dir, || {
+            let pending = fs::read_to_string(dir.join(PENDING_NAME))
+                .ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+            let _ = fs::remove_file(dir.join(PENDING_NAME));
+            let (folding, foreign): (Vec<Value>, Vec<Value>) = pending_slots(pending)
+                .into_iter()
+                .partition(|slot| slot_in_session(slot, session));
+            if !foreign.is_empty() {
+                write_pending_slots(&dir, &foreign); // 他会话在途槽原位保留
+            }
+            for slot in folding {
+                let gate = slot.get("gate").and_then(Value::as_str).unwrap_or_default();
+                if gate.is_empty() {
+                    continue;
+                }
+                let slot_host = slot
+                    .get("host")
                     .and_then(Value::as_str)
                     .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                && let Some((recovered_code, recovered_detail)) =
-                    agy_transcript_outcome(tp, slot.get("step_idx").and_then(Value::as_i64))
-            {
-                exit = Some(recovered_code);
-                if !recovered_detail.is_empty() || detail.is_empty() {
-                    detail = recovered_detail;
+                    .filter(|s| !s.is_empty());
+                let mut exit = slot.get("exit").and_then(Value::as_i64);
+                let mut detail = clip(
+                    slot.get("detail")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
+                if exit.is_none()
+                    && let Some(tp) = slot
+                        .get("transcript")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    && let Some((recovered_code, recovered_detail)) =
+                        agy_transcript_outcome(tp, slot.get("step_idx").and_then(Value::as_i64))
+                {
+                    exit = Some(recovered_code);
+                    if !recovered_detail.is_empty() || detail.is_empty() {
+                        detail = recovered_detail;
+                    }
                 }
+                let (state, detail) = match exit {
+                    Some(0) => ("passed", detail),
+                    Some(_) => ("failed", detail),
+                    None => (
+                        "failed",
+                        if detail.is_empty() {
+                            String::from("(exit unknown)")
+                        } else {
+                            format!("{detail} (exit unknown)")
+                        },
+                    ),
+                };
+                append_line(
+                    &dir,
+                    &stamp(
+                        json!({
+                            "ts": ts_now(),
+                            "kind": "gate",
+                            "gate": gate,
+                            "state": state,
+                            "exit": exit,
+                            "detail": detail,
+                        }),
+                        host.or(slot_host),
+                        session,
+                    ),
+                );
             }
-            // 折叠语义(W4-001 D1):显式 0 才 passed;非零(含 interrupted 130)
-            // failed;不可知(null)同样 failed——宁可误报失败,不虚报通过。
-            // 尾注 `(exit unknown)` 只加在不可知路径,区分"真失败"与"证据缺失"。
-            let (state, detail) = match exit {
-                Some(0) => ("passed", detail),
-                Some(_) => ("failed", detail),
-                None => (
-                    "failed",
-                    if detail.is_empty() {
-                        String::from("(exit unknown)")
-                    } else {
-                        format!("{detail} (exit unknown)")
-                    },
-                ),
-            };
-            append_line(
-                &dir,
-                &stamp(
-                    json!({
-                        "ts": ts_now(),
-                        "kind": "gate",
-                        "gate": gate,
-                        "state": state,
-                        "exit": exit,
-                        "detail": detail,
-                    }),
-                    host,
-                    session,
-                ),
-            );
-        }
-        if agy_fully_idle && let Some(sid) = session {
-            maybe_complete_agy_subagent(&dir, host, sid, payload);
-        }
-    });
+            if agy_fully_idle && let Some(sid) = session {
+                maybe_complete_agy_subagent(&dir, host, sid, payload);
+            }
+        });
+    }
 }
 
 /// 活跃派发条目:记录 `who`、`task`(前 80 字符)、派发方 `session_id` 及是否已被匿名完成消费。
@@ -1381,12 +1548,15 @@ fn write_pending_slots(dir: &Path, slots: &[Value]) -> bool {
 /// 槽位记录归属(同会话 Stop 才折叠);未自报不落字段(default 池,与遗留
 /// 格式同形,零迁移)。读-并-写同在锁内临界区;暂存失败只损失折叠,不损
 /// events.jsonl。
-fn append_pending_slot(dir: &Path, slot: &Value, session: Option<&str>) {
+fn append_pending_slot(dir: &Path, slot: &Value, host: Option<&str>, session: Option<&str>) {
     let existing = fs::read_to_string(dir.join(PENDING_NAME))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok());
     let mut slots = pending_slots(existing);
     let mut slot = slot.clone();
+    if let Some(h) = host {
+        slot["host"] = json!(h);
+    }
     if let Some(session) = session {
         slot["session"] = json!(session);
     }
@@ -1646,7 +1816,10 @@ fn exit_code_of_error_head(text: &str) -> Option<i64> {
 /// 逆序扫描 JSON 行,匹配 `"type" == "GENERIC"`(传入 `step_idx` 时要求
 /// `step_index` 相等),从 `"content"` 提取 `"Command exited with code N"` 真实
 /// 退出码与 `"Command output:"` 后末条非空行摘要。缺档/不可读/未命中恒返 `None`。
-fn agy_transcript_outcome(transcript_path: &str, step_idx: Option<i64>) -> Option<(i64, String)> {
+pub(crate) fn agy_transcript_outcome(
+    transcript_path: &str,
+    step_idx: Option<i64>,
+) -> Option<(i64, String)> {
     const EXIT_MARKER: &str = "Command exited with code ";
     const OUTPUT_MARKER: &str = "Command output:";
 

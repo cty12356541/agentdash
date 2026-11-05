@@ -1,0 +1,94 @@
+{
+  "$schema": "agentdash.wave.v1",
+  "wave": "W14",
+  "title": "W14: 缺陷清零 + 契约 v1.1 + Antigravity 第七宿主插件与多轨编排",
+  "profile": "sdd",
+  "archived_at": "2026-11-05T12:34:14+08:00",
+  "window": {
+    "started_at": "2026-10-28T11:59:19+08:00",
+    "ended_at": "2026-11-05T09:50:26+08:00",
+    "span_secs": 683467,
+    "source": "stream_full"
+  },
+  "git": {
+    "branch": "main",
+    "head_short": "21a965c",
+    "dirty": 39
+  },
+  "tasks": {
+    "total": 10,
+    "done": 10,
+    "active": 0,
+    "pending": 0,
+    "blocked": 0,
+    "unattested_done": 0
+  },
+  "gates": {
+    "summary": [
+      {
+        "name": "cargo-clippy",
+        "status": "passed",
+        "detail": "all passed"
+      },
+      {
+        "name": "cargo-fmt",
+        "status": "passed",
+        "detail": "all passed"
+      },
+      {
+        "name": "cargo-test",
+        "status": "passed",
+        "detail": "all passed"
+      },
+      {
+        "name": "verify-kits",
+        "status": "passed",
+        "detail": "all passed"
+      }
+    ],
+    "folds": [
+      {
+        "gate": "cargo-clippy",
+        "host": "agy",
+        "passed": 3,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "gate": "cargo-fmt",
+        "host": "agy",
+        "passed": 3,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "gate": "cargo-test",
+        "host": "agy",
+        "passed": 2,
+        "failed": 0,
+        "unknown": 0
+      },
+      {
+        "gate": "verify-kits",
+        "host": "agy",
+        "passed": 4,
+        "failed": 0,
+        "unknown": 3
+      }
+    ],
+    "last_gate_passed": "2026-10-28T12:30:42+08:00"
+  },
+  "hosts": {
+    "agy": 58,
+    "claude": 1
+  },
+  "turnover": null,
+  "events_count": 59,
+  "events_bytes": 11436,
+  "events_fnv1a64": "0xfbd9516788a3cbeb",
+  "ledger_fnv1a64": "0x104fb10f09c5204c",
+  "strict_passed": false,
+  "warnings": [
+    "9 个无 who completed 已推断配对"
+  ]
+}

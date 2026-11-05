@@ -59,14 +59,68 @@ mkdir -p "$plugin_dir"
 cp "$here/plugins/agentdash.js" "$plugin_dir/agentdash.js"
 echo "[agentdash] plugin installed: $plugin_dir/agentdash.js"
 
-# --- .gitignore 幂等追加 .agentdash/ ---
-gitignore="$target/.gitignore"
-if [ ! -f "$gitignore" ] || ! grep -qE '^[[:space:]]*\.agentdash/?[[:space:]]*$' "$gitignore"; then
-  if [ -f "$gitignore" ] && [ -s "$gitignore" ] && [ -n "$(tail -c1 "$gitignore")" ]; then
-    printf '\n' >> "$gitignore"
+# --- W15-03:.gitignore 幂等维护 .agentdash 白名单(兼容旧版单行 .agentdash/、CRLF 与半白名单原地升级)---
+ensure_gitignore() {
+  local gi="$1" tmp
+  if [ ! -f "$gi" ]; then
+    cat > "$gi" <<'EOF'
+# agentdash: track ledger, config, and wave archives; ignore live event streams
+/.agentdash/*
+!/.agentdash/ledger.json
+!/.agentdash/config.json
+!/.agentdash/waves/
+/.agentdash/waves/.tmp-*
+/.agentdash/waves/.old-*
+/.agentdash/waves/*/events.jsonl
+EOF
+    return
   fi
-  printf '.agentdash/\n' >> "$gitignore"
-fi
+  tmp="$gi.tmp-agentdash"
+  awk '
+    { sub(/\r$/, "") }
+    /^[ \t]*# agentdash: track ledger, config, and wave archives; ignore live event streams[ \t]*$/ { next }
+    /^[ \t]*\/?\.agentdash\/?[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/\*[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/ledger\.json[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/config\.json[ \t]*$/ ||
+    /^[ \t]*!\/?\.agentdash\/waves\/[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\.tmp-\*[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\.old-\*[ \t]*$/ ||
+    /^[ \t]*\/?\.agentdash\/waves\/\*\/events\.jsonl[ \t]*$/ {
+      if (!emitted) {
+        print "# agentdash: track ledger, config, and wave archives; ignore live event streams"
+        print "/.agentdash/*"
+        print "!/.agentdash/ledger.json"
+        print "!/.agentdash/config.json"
+        print "!/.agentdash/waves/"
+        print "/.agentdash/waves/.tmp-*"
+        print "/.agentdash/waves/.old-*"
+        print "/.agentdash/waves/*/events.jsonl"
+        emitted = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!emitted) {
+        print "# agentdash: track ledger, config, and wave archives; ignore live event streams"
+        print "/.agentdash/*"
+        print "!/.agentdash/ledger.json"
+        print "!/.agentdash/config.json"
+        print "!/.agentdash/waves/"
+        print "/.agentdash/waves/.tmp-*"
+        print "/.agentdash/waves/.old-*"
+        print "/.agentdash/waves/*/events.jsonl"
+      }
+    }
+  ' "$gi" > "$tmp"
+  if cmp -s "$gi" "$tmp"; then
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$gi"
+  fi
+}
+ensure_gitignore "$target/.gitignore"
 
 echo "[agentdash] opencode-kit installed into $target"
 echo "[agentdash] 提醒:子代理边界事件 opencode 插件 API 暂未提供,在跑 agent 面板仅 claude-code/codex 宿主可见"

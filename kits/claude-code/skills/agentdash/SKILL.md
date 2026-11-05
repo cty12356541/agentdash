@@ -12,9 +12,10 @@ description: Render the agentdash task dashboard (panel/oneline) on demand, and 
 ## 执行
 
 ```bash
-agentdash render panel   # 会话内点播(附图)
-agentdash oneline        # 单行摘要(statusline 同源)
-agentdash watch          # 常驻 TUI(侧栏分屏跑)
+agentdash render panel              # 会话内点播(附图;支持 --wave <id> 查看历史归档波次)
+agentdash oneline                   # 单行摘要(statusline 同源;支持 --wave <id>)
+agentdash watch                     # 常驻 TUI(侧栏分屏跑)
+agentdash archive [--strict|--list] # 封存当前波次到 .agentdash/waves/<id>/ 或列出归档
 ```
 
 ## 跃迁约定(编排波次中)

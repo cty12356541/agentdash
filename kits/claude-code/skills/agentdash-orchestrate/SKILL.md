@@ -148,12 +148,13 @@ git worktree add <worktree_root>/wt-<task-id> -b feat/<task-id>-r1
      1) 先在主工作区 `.agentdash/ledger.json` 将合流任务置为 `"state": "done"`,写入当前 RFC 3339 `"done_at"` 与 `"note": "<commit> · <test summary>"`;
      2) **紧接着在主工作区运行真实项目验证门命令**(使 `--host claude` 钩子采集并在 `Stop` 折叠出 `last_gate_passed_ts >= done_at` 的最新物证)。
    - **防跨仓门禁污染**:在非 Rust 业务仓会话中,切勿在顶层命令裸跑其他仓的验证门词(如 `cargo test`/`clippy`/`fmt`),以免工作区钩子误记跨仓验证门事件。
-4. **严格摘要与周转统计闭环**:
+4. **严格摘要、周转统计与波次归档闭环**:
    - 波次收尾时依次执行:
      ```bash
      agentdash render digest --strict
      agentdash render panel
      agentdash render graph
      agentdash stats --host claude
+     agentdash archive --strict
      ```
-   - 确认 `digest --strict` 退出码为 `0`(无失败门、无 `blocked` 任务、无契约/事件警告),核对 `started_at → done_at` 周转表后向用户汇报并附上最终面板。
+   - 确认 `digest --strict` 与 `archive --strict` 退出码均为 `0`(无失败门、无 `blocked` 任务、无契约/事件警告,波次快照已原子封存至 `.agentdash/waves/<wave>/` 并更新 `waves/index.json`);随时可用 `agentdash archive --list` 或 `agentdash render panel --wave <wave>` 回溯历史批次。

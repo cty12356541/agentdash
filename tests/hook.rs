@@ -3341,3 +3341,135 @@ fn agy_and_claude_subagent_completion_resolves_who_and_guards_top_level_user() {
     assert_eq!(completed[2]["who"], "fork");
     assert_eq!(completed[2]["host"], "claude");
 }
+
+// ---------------------------------------------------------------- W15-02:多根 workspacePaths 目标路径前缀路由与 Stop 全根折叠
+
+#[test]
+fn agy_multi_root_routes_event_to_matching_target_workspace_and_folds_on_stop() {
+    let proc_cwd = TempDir::new("agy-mr-proc");
+    let repo_a = TempDir::new("agy-mr-repo-a");
+    let repo_b = TempDir::new("agy-mr-repo-b");
+    fs::create_dir_all(repo_a.path().join(".agentdash")).expect("mkdir a .agentdash");
+    fs::create_dir_all(repo_b.path().join(".agentdash")).expect("mkdir b .agentdash");
+
+    let ws = [
+        repo_a.path().to_string_lossy().into_owned(),
+        repo_b.path().to_string_lossy().into_owned(),
+    ];
+
+    // 1. TargetFile 指向 repo_b:即便 repo_a 排在 workspacePaths[0] 且已有 .agentdash,事件必须落入 repo_b
+    let target_b_file = repo_b.path().join("src").join("lib.rs");
+    let read_b = json!({
+        "conversationId": "conv-mr-1",
+        "workspacePaths": ws,
+        "toolCall": {
+            "name": "read_file",
+            "args": {"TargetFile": target_b_file.to_string_lossy()}
+        }
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &read_b.to_string(),
+            proc_cwd.path(),
+        ),
+        "{}\n",
+        "multi-root target file in repo_b",
+    );
+    assert!(
+        !events_path(repo_a.path()).exists(),
+        "repo_b 的文件读取不得串写进 repo_a"
+    );
+    assert_eq!(read_events(repo_b.path()).len(), 1);
+
+    // 2. run_command 的 Cwd 指向 repo_b 执行验证门,随后无 Cwd 的顶层 Stop 必须遍历 workspacePaths 折叠 repo_b 的暂存槽
+    let gate_b = json!({
+        "conversationId": "conv-mr-1",
+        "workspacePaths": ws,
+        "tool_response": {"status": 0, "stdout": "test result: ok.\n"},
+        "toolCall": {
+            "name": "run_command",
+            "args": {
+                "Cwd": repo_b.path().to_string_lossy(),
+                "CommandLine": "cargo test --offline"
+            }
+        }
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &gate_b.to_string(),
+            proc_cwd.path(),
+        ),
+        "{}\n",
+        "multi-root gate in repo_b",
+    );
+    assert!(
+        pending_path(repo_b.path()).exists(),
+        "在途门槽应写入 repo_b"
+    );
+    assert!(
+        !pending_path(repo_a.path()).exists(),
+        "repo_a 不应出现串仓门槽"
+    );
+
+    let stop_all = json!({
+        "conversationId": "conv-mr-1",
+        "workspacePaths": ws,
+        "fullyIdle": true
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "stop"],
+            &stop_all.to_string(),
+            proc_cwd.path(),
+        ),
+        "{\"decision\":\"stop\"}\n",
+        "multi-root stop folds repo_b pending gate",
+    );
+    assert!(
+        !pending_path(repo_b.path()).exists(),
+        "Stop 应折叠并清理非首根 repo_b 的 pending_gate.json"
+    );
+    let evs_b = read_events(repo_b.path());
+    assert_eq!(evs_b.len(), 3, "tool + gate running + gate passed");
+    assert_eq!(evs_b[2]["kind"], "gate");
+    assert_eq!(evs_b[2]["state"], "passed");
+    assert_eq!(evs_b[2]["exit"], 0);
+}
+
+#[test]
+fn agy_multi_root_longest_prefix_wins_for_nested_workspaces() {
+    let proc_cwd = TempDir::new("agy-nest-proc");
+    let outer = TempDir::new("agy-nest-outer");
+    let inner = outer.path().join("packages").join("inner-crate");
+    fs::create_dir_all(outer.path().join(".agentdash")).expect("mkdir outer .agentdash");
+    fs::create_dir_all(inner.join(".agentdash")).expect("mkdir inner .agentdash");
+
+    let target = inner.join("src").join("main.rs");
+    let payload = json!({
+        "conversationId": "conv-nest",
+        "workspacePaths": [
+            outer.path().to_string_lossy(),
+            inner.to_string_lossy()
+        ],
+        "toolCall": {
+            "name": "view_file",
+            "args": {"Path": target.to_string_lossy()}
+        }
+    });
+    assert_agy_stdout(
+        &feed(
+            &["hook", "--host", "agy", "posttooluse"],
+            &payload.to_string(),
+            proc_cwd.path(),
+        ),
+        "{}\n",
+        "nested workspace longest prefix",
+    );
+    assert!(
+        !events_path(outer.path()).exists(),
+        "嵌套子工作区最长前缀应优先于外层根"
+    );
+    assert_eq!(read_events(&inner).len(), 1);
+}

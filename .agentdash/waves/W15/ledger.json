@@ -1,0 +1,154 @@
+{
+  "$schema": "agentdash.tasklog.v1",
+  "profile": "sdd",
+  "wave": "W15",
+  "title": "W15: 原生波次归档(archive) + 历史波次透视(--wave) + 多根路由与白名单追踪",
+  "lanes": [
+    {
+      "name": "A-archive-cli",
+      "tasks": [
+        "W15-01",
+        "W15-04",
+        "W15-05",
+        "W15-06"
+      ]
+    },
+    {
+      "name": "B-hook-multiroot",
+      "tasks": [
+        "W15-02"
+      ]
+    },
+    {
+      "name": "C-kits-gitignore",
+      "tasks": [
+        "W15-03"
+      ]
+    }
+  ],
+  "tasks": {
+    "W15-01": {
+      "label": "历史波次投影与新克隆 meta.json 无事件回填(model+stats)",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/merge.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T10:40:50+08:00",
+      "done_at": "2026-11-05T10:53:46+08:00",
+      "note": "merge 28/28 + stats 14/14 passed"
+    },
+    "W15-02": {
+      "label": "多根 workspacePaths 路径前缀路由与 Stop 门禁折叠",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/hook.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T10:40:50+08:00",
+      "done_at": "2026-11-05T10:53:46+08:00",
+      "note": "hook 80/80 passed"
+    },
+    "W15-03": {
+      "label": "七宿主 kit .gitignore 白名单迁移与 git check-ignore 巡检",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "scripts/verify-kits.sh",
+      "gate": "verify-kits",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T10:40:50+08:00",
+      "done_at": "2026-11-05T10:53:46+08:00",
+      "note": "verify-kits PASS 346 / FAIL 0"
+    },
+    "W15-04": {
+      "label": "波次归档内核:ID 校验、双代切片、原子交换与自愈索引",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/archive_unit.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T10:53:46+08:00",
+      "done_at": "2026-11-05T11:06:27+08:00",
+      "note": "archive_unit 7/7 + proptest 14/14 passed"
+    },
+    "W15-05": {
+      "label": "CLI archive 子命令、--wave 路由、双语帮助与退出码端到端测试",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/archive.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T11:06:27+08:00",
+      "done_at": "2026-11-05T12:17:42+08:00",
+      "note": "archive 2/2 + version 7/7 + 23-agent review clean"
+    },
+    "W15-06": {
+      "label": "0.13.0 升版、全量门禁、全局重装与 W14/W15 实盘归档收口",
+      "state": "done",
+      "spec": "docs/superpowers/specs/2026-11-05-agentdash-w15-wave-archive-design.md",
+      "tests": "tests/version.rs",
+      "gate": "cargo-test",
+      "round": 1,
+      "max_rounds": 3,
+      "started_at": "2026-11-05T12:08:00+08:00",
+      "done_at": "2026-11-05T12:17:42+08:00",
+      "note": "0.13.0 installed, 341/341 Rust tests + 346/346 verify-kits, clippy+fmt clean"
+    }
+  },
+  "barriers": [
+    {
+      "id": "B1",
+      "after": [
+        "W15-01"
+      ],
+      "unlocks": [
+        "W15-04"
+      ]
+    },
+    {
+      "id": "B2",
+      "after": [
+        "W15-04"
+      ],
+      "unlocks": [
+        "W15-05"
+      ]
+    },
+    {
+      "id": "B3",
+      "after": [
+        "W15-02",
+        "W15-03",
+        "W15-05"
+      ],
+      "unlocks": [
+        "W15-06"
+      ]
+    }
+  ],
+  "milestones": [
+    {
+      "id": "M1",
+      "title": "底座投影、多根路由与七宿主白名单",
+      "tasks": [
+        "W15-01",
+        "W15-02",
+        "W15-03"
+      ]
+    },
+    {
+      "id": "M2",
+      "title": "归档引擎、CLI 接线与 0.13.0 实盘收口",
+      "tasks": [
+        "W15-04",
+        "W15-05",
+        "W15-06"
+      ]
+    }
+  ]
+}

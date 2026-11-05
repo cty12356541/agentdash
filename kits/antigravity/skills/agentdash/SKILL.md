@@ -18,11 +18,12 @@ description: >-
 通过 `run_command` 在工作区根目录执行:
 
 ```bash
-agentdash render panel                 # 全面板视图(支持多路径/glob 聚合精要面板)
-agentdash render graph                 # 终端字符 DAG 图(--format svg 可导出矢量图)
+agentdash render panel                 # 全面板视图(支持多路径/glob 聚合及 --wave <id> 历史归档)
+agentdash render graph                 # 终端字符 DAG 图(--format svg 可导出矢量图;支持 --wave <id>)
 agentdash render digest --strict       # 纯文本离场摘要;存在失败 gate 或 blocked 任务时退出码为 1
-agentdash oneline                      # 无 ANSI 单行状态摘要
+agentdash oneline                      # 无 ANSI 单行状态摘要(支持 --wave <id>)
 agentdash stats --host agy             # 观测三表:[agy] 宿主使用率 / gate 通过率 / started_at→done_at 周转耗时
+agentdash archive --strict             # 将当前已完成波次封存至 .agentdash/waves/<id>/(--list 查看历史归档)
 agentdash watch --once                 # 单帧 TUI 快照(常驻交互式 TUI 请在独立终端跑 agentdash watch)
 ```
 

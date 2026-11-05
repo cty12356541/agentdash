@@ -1263,3 +1263,167 @@ fn gate_status_projects_all_four_sum_type_variants() {
 
     cleanup(&repo);
 }
+
+// ------------------------------------------------------------ W15-01:历史波次目录投影与新克隆 meta.json 回填
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn merge_wave_opts_reads_isolated_wave_dir_and_hydrates_from_meta_on_fresh_clone() {
+    let repo = fixture_repo("wave-isolated");
+    let dash_dir = repo.join(".agentdash");
+    let wave_dir = dash_dir.join("waves").join("W14");
+    fs::create_dir_all(&wave_dir).expect("create wave dir");
+
+    // 活跃台账为 W15,归档台账为 W14:merge_wave_opts 必须只读 W14
+    fs::write(
+        dash_dir.join("ledger.json"),
+        r#"{"$schema":"agentdash.tasklog.v1","wave":"W15","title":"active wave","tasks":{"W15-01":{"label":"live task","state":"active"}}}"#,
+    )
+    .expect("write live ledger");
+    fs::write(
+        wave_dir.join("ledger.json"),
+        r#"{
+          "$schema": "agentdash.tasklog.v1",
+          "wave": "W14",
+          "title": "archived fourteen",
+          "milestones": [
+            {"id": "M1", "title": "part 1", "tasks": ["W14-01"]},
+            {"id": "M2", "title": "part 2", "tasks": ["W14-02"]}
+          ],
+          "tasks": {
+            "W14-01": {"label": "task one", "state": "done", "done_at": "2026-10-28T11:50:00+08:00"},
+            "W14-02": {"label": "task two", "state": "done", "done_at": "2026-10-28T12:20:00+08:00"}
+          }
+        }"#,
+    )
+    .expect("write wave ledger");
+    fs::write(
+        wave_dir.join("events.jsonl"),
+        concat!(
+            r#"{"kind":"gate","gate":"cargo-test","state":"running","ts":"2026-10-28T11:30:00+08:00"}"#,
+            "\n",
+            r#"{"kind":"gate","gate":"cargo-test","state":"passed","exit":0,"detail":"318 passed","ts":"2026-10-28T12:30:00+08:00"}"#,
+            "\n",
+        ),
+    )
+    .expect("write wave events");
+    fs::write(
+        wave_dir.join("meta.json"),
+        r#"{
+          "$schema": "agentdash.wave.v1",
+          "wave": "W14",
+          "title": "archived fourteen",
+          "archived_at": "2026-10-28T12:31:00+08:00",
+          "window": {
+            "started_at": "2026-10-28T11:30:00+08:00",
+            "ended_at": "2026-10-28T12:30:00+08:00",
+            "span_secs": 3600,
+            "source": "stream_full"
+          },
+          "git": {
+            "branch": "release/w14",
+            "head_short": "f4a2a7e",
+            "dirty": false
+          },
+          "events_count": 2,
+          "gates": {
+            "summary": [
+              {"name": "cargo-test", "status": "passed", "detail": "318 passed"}
+            ],
+            "last_gate_passed": "2026-10-28T12:30:00+08:00"
+          }
+        }"#,
+    )
+    .expect("write wave meta");
+
+    let dash = model::merge_wave_opts(&repo, &wave_dir, true);
+    assert_eq!(dash.tasks.len(), 2);
+    assert_eq!(dash.tasks[0].id, "W14-01");
+    assert_eq!(dash.generated_at, "2026-10-28T12:31:00+08:00");
+    assert_eq!(dash.git.branch.as_deref(), Some("release/w14"));
+    assert_eq!(dash.git.dirty, 0);
+    assert!(dash.remote.is_none(), "历史归档不探测实时远程 PR");
+    assert_eq!(
+        dash.last_gate_passed.as_deref(),
+        Some("2026-10-28T12:30:00+08:00")
+    );
+    assert_eq!(dash.event_span_secs, Some(3_600));
+
+    // 删除 events.jsonl 模拟新 git clone(events.jsonl 被 .gitignore 忽略):从 meta.json 无损回填
+    fs::remove_file(wave_dir.join("events.jsonl")).expect("remove wave events");
+    let cloned = model::merge_wave_opts(&repo, &wave_dir, true);
+    assert!(cloned.events_present, "meta.json 表明曾有事件,保持对账在场");
+    assert_eq!(
+        cloned.last_gate_passed.as_deref(),
+        Some("2026-10-28T12:30:00+08:00"),
+        "新克隆无 events.jsonl 时从 meta.json 回填对账锚"
+    );
+    assert_eq!(cloned.event_span_secs, Some(3_600));
+    assert_eq!(
+        cloned.gates,
+        vec![GateView {
+            name: "cargo-test".to_owned(),
+            status: GateStatus::Passed {
+                detail: "318 passed".to_owned(),
+            },
+        }]
+    );
+
+    // 直接向 merge_opts 传入波次目录路径也自动识别并保留仓库名
+    let direct = model::merge_opts(&wave_dir, true);
+    assert_eq!(direct.project, dash.project, "直传波次目录仍解析外层仓库名");
+    assert_eq!(direct.tasks.len(), 2);
+    assert_eq!(
+        direct.last_gate_passed.as_deref(),
+        Some("2026-10-28T12:30:00+08:00")
+    );
+
+    cleanup(&repo);
+}
+
+#[test]
+fn live_merge_falls_back_last_gate_passed_to_matching_archived_wave_after_prune() {
+    let repo = fixture_repo("post-prune-anchor");
+    let dash_dir = repo.join(".agentdash");
+    let wave_dir = dash_dir.join("waves").join("W14");
+    fs::create_dir_all(&wave_dir).expect("create wave dir");
+
+    // 刚执行 archive --prune-events 后:活跃台账仍停在 W14,但活跃 events.jsonl 仅剩随后的 1 条 tool 事件
+    fs::write(
+        dash_dir.join("ledger.json"),
+        r#"{
+          "$schema": "agentdash.tasklog.v1",
+          "wave": "W14",
+          "title": "just archived",
+          "tasks": {
+            "W14-01": {"label": "done task", "state": "done", "done_at": "2026-10-28T12:00:00+08:00"}
+          }
+        }"#,
+    )
+    .expect("write live ledger");
+    fs::write(
+        dash_dir.join("events.jsonl"),
+        "{\"kind\":\"tool\",\"tool\":\"bash\",\"phase\":\"end\",\"exit\":0,\"summary\":\"agentdash archive\",\"ts\":\"2026-10-28T12:35:00+08:00\"}\n",
+    )
+    .expect("write pruned live events");
+    fs::write(
+        wave_dir.join("meta.json"),
+        r#"{
+          "$schema": "agentdash.wave.v1",
+          "wave": "W14",
+          "gates": {
+            "last_gate_passed": "2026-10-28T12:30:00+08:00"
+          }
+        }"#,
+    )
+    .expect("write wave meta");
+
+    let dash = model::merge(&repo);
+    assert_eq!(
+        dash.last_gate_passed.as_deref(),
+        Some("2026-10-28T12:30:00+08:00"),
+        "裁剪活跃事件后若同波次归档存在通过门锚点,回退读取以防误标 done ?"
+    );
+
+    cleanup(&repo);
+}

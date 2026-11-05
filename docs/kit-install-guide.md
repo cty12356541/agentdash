@@ -42,7 +42,7 @@ cd <agentdash 仓库根>
    `agentdash:begin/end` 标记,重复安装整段刷新);
 2. 注册钩子(**只动自家钩子键或命名空间**,你自己的其他配置原样;损坏 JSON 自动备份为
    `*.bak-agentdash`);
-3. `.gitignore` 追加 `.agentdash/`(已有相关行则跳过)。
+3. `.gitignore` 幂等写入 `/.agentdash/*` 白名单(追踪 `ledger.json`、`config.json` 与 `waves/` 波次归档,忽略实时与归档 `events.jsonl`;旧版单行 `.agentdash/` 自动原地升级)。
 
 安装器要求:目标目录已存在(装进既有项目)、`agentdash` 在 PATH(缺了会
 拒绝并打印指引)。
@@ -173,7 +173,7 @@ bash kits/antigravity/install.sh <project>
 
 产物:`.agents/hooks.json`(幂等写入顶层 `"agentdash"` 命名空间,保留其他插件顶层键;损坏 JSON
 自动备份为 `.bak-agentdash` 后重建)、`.agents/skills/{agentdash,agentdash-setup,agentdash-orchestrate}/`、
-`AGENTS.md`(`agentdash:begin/end` 标记段)与 `.gitignore`(`.agentdash/`)。
+`AGENTS.md`(`agentdash:begin/end` 标记段)与 `.gitignore`(`/.agentdash/*` 白名单)。
 
 - **生效时机**:首次生成或更新工作区 `.agents/hooks.json` 与 `.agents/skills/` 后,**新建会话(New Conversation)**
   或重载窗口即可拾取新钩子与技能。

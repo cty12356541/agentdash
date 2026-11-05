@@ -146,3 +146,26 @@ fn unrecognized_command_errors_in_current_lang() {
     );
     assert!(stderr_en.contains("Usage:"), "用法应随 en 切英文");
 }
+
+#[test]
+fn help_includes_archive_and_wave_option_in_both_languages() {
+    let zh = String::from_utf8_lossy(&run(&["--help"]).stdout).into_owned();
+    assert!(
+        zh.contains("archive [--list]"),
+        "中文帮助应含 archive 子命令:\n{zh}"
+    );
+    assert!(
+        zh.contains("--wave <id>"),
+        "中文帮助应含 --wave <id> 选项:\n{zh}"
+    );
+
+    let en = String::from_utf8_lossy(&run_with_lang(&["--help"], "en").stdout).into_owned();
+    assert!(
+        en.contains("archive [--list]"),
+        "英文帮助应含 archive 子命令:\n{en}"
+    );
+    assert!(
+        en.contains("--wave <id>"),
+        "英文帮助应含 --wave <id> 选项:\n{en}"
+    );
+}

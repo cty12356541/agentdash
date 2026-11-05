@@ -1,0 +1,35 @@
+{
+  "$schema": "agentdash.waves.index.v1",
+  "updated_at": "2026-11-05T12:34:44+08:00",
+  "latest": "W15",
+  "waves": [
+    {
+      "wave": "W14",
+      "title": "W14: 缺陷清零 + 契约 v1.1 + Antigravity 第七宿主插件与多轨编排",
+      "archived_at": "2026-11-05T12:34:14+08:00",
+      "window_start": "2026-10-28T11:59:19+08:00",
+      "window_end": "2026-11-05T09:50:26+08:00",
+      "head_short": "21a965c",
+      "branch": "main",
+      "tasks_done": 10,
+      "tasks_total": 10,
+      "events_count": 59,
+      "strict_passed": false,
+      "path": "waves/W14"
+    },
+    {
+      "wave": "W15",
+      "title": "W15: 原生波次归档(archive) + 历史波次透视(--wave) + 多根路由与白名单追踪",
+      "archived_at": "2026-11-05T12:34:44+08:00",
+      "window_start": "2026-11-05T10:40:00+08:00",
+      "window_end": "2026-11-05T12:34:44+08:00",
+      "head_short": "21a965c",
+      "branch": "main",
+      "tasks_done": 6,
+      "tasks_total": 6,
+      "events_count": 858,
+      "strict_passed": true,
+      "path": "waves/W15"
+    }
+  ]
+}
