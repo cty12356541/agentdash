@@ -188,7 +188,7 @@ fn in_progress_alias_preserves_active_task_metadata_and_canonical_output() {
     assert_eq!(ledger.tasks["A"].note.as_deref(), Some("dispatched"));
     assert_eq!(ledger.tasks["A"].done_at, None);
     assert_eq!(ledger.tasks["B"].state, TaskState::Pending);
-    assert!(ledger.warnings.is_empty());
+    assert_eq!(ledger.warnings, Vec::<String>::new());
     assert_eq!(
         serde_json::to_string(&ledger.tasks["A"].state).unwrap(),
         "\"active\""
