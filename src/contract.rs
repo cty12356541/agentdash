@@ -37,7 +37,8 @@ impl std::error::Error for ContractError {}
 pub enum TaskState {
     /// 未开始。
     Pending,
-    /// 进行中(富态降级的落点)。
+    /// 进行中(富态降级的落点);兼容外部台账的 `in_progress`,序列化仍为 `active`。
+    #[serde(alias = "in_progress")]
     Active,
     /// 富态:复核中。
     Review,

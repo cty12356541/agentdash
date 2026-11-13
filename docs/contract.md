@@ -1,15 +1,16 @@
-# agentdash 契约 v1.2(公开版)
+# agentdash 契约 v1.3(公开版)
 
-- **契约版本:1.2**(2026-09-16 v1.0 定稿;2026-10-28 v1.1 增订;2026-11-05 v1.2 增订)。契约版本与 crate 版本**相互独立**:凡事件词表、
+- **契约版本:1.3**(2026-09-16 v1.0 定稿;2026-10-28 v1.1 增订;2026-11-05 v1.2 增订;2026-11-13 v1.3 兼容别名)。契约版本与 crate 版本**相互独立**:凡事件词表、
   状态机、折叠/归池/配对语义、证据分级的变更,必须 bump 契约版本并更新本文档;
   纯加法的可选字段不改既有读者语义,亦须在本文档记档。
-- 台账自身的版本载体是 `$schema: agentdash.tasklog.v1`(见 §2,v1.1/v1.2 均为向后兼容纯加法,`$schema` 保持不变)。
+- 台账自身的版本载体是 `$schema: agentdash.tasklog.v1`(见 §2,v1.1/v1.2/v1.3 均为向后兼容纯加法,`$schema` 保持不变)。
 - **读者**:第三方宿主作者。照本文即可实现接入(发事件 / 写台账 / 自定义验证门 / 消费波次归档),
   无需阅读 agentdash 源码;每条语义均以 `src/archive.rs`、`src/contract.rs`、`src/events.rs`、`src/hook.rs`、
   `src/model.rs`、`src/stats.rs`、`src/tui.rs`、`src/render/` 为对账基准。
 - 运行时解析是**容错语义**;发布给集成包的**严格校验面**是
   [`schema/agentdash.tasklog.v1.json`](../schema/agentdash.tasklog.v1.json)(JSON Schema 2020-12)。
   两者关系:Schema 管类型/必填/枚举(未知字段两侧皆容忍),内核管降级与警告。
+- **v1.3 变更记事(相对 v1.2)**:运行时接受外部台账的 `in_progress` 作为 `active` 的输入别名,不增加新状态、不修改原始台账、不补造完成时间;规范序列化和严格 Schema 仍使用 `active`。历史缺失身份事件、推断配对和未知验证门的语义不变。
 - **v1.2 变更记事(相对 v1.1)**:
   1. **原生波次封存与历史波次透视**(§1、§8):新增 `agentdash archive [--list [--json]] [--wave <id>] [--strict] [--force] [--prune-events|--keep-events]` 子命令与 `--wave <id>` 历史透视旗标(覆盖 `render panel|graph|digest`、`oneline`、`stats`,并支持直传 `.agentdash/waves/<id>` 或 `.agentdash/waves/*`),新增 `agentdash.waves.index.v1`(`waves/index.json`)与 `agentdash.wave.v1`(`waves/<id>/meta.json`,含 FNV-1a64 指纹与新克隆缺 `events.jsonl` 时的门禁/对账锚/统计无损回填)。
   2. **多根工作区目标路径最长前缀路由与跨根 `Stop` 折叠**(§1、§4.1):当 `workspacePaths` 含多个根且无顶层 `cwd` 时,优先从工具载荷提取目标路径/命令提示并按组件边界最长前缀匹配根目录;`Stop` 事件在无 `cwd` 时扫描所有含在途槽或未闭合子代理的 `workspacePaths` 根目录;在途槽持久化可选 `"host"` 归属并支持同回合 `archive` 延迟恢复 Antigravity `transcript.jsonl`。
@@ -93,6 +94,7 @@
   未声明 `profile` 时自动降级为 `active`,并逐任务记降级警告(警告按任务 id 排序,保证
   输出确定)。
 - 全部合法词:`pending` / `active` / `review` / `fix-round` / `done` / `blocked`。
+  运行时还接受 `in_progress` 输入别名,等同 `active`,不要求 `profile`,也不产生降级警告。新台账及 Schema 校验应继续使用规范词 `active`;解析不会重写源文件。
 
 ### 2.4 车道与屏障
 

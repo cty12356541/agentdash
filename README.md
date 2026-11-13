@@ -4,7 +4,7 @@ agent 进度仪表盘:从任务台账、会话事件流与 git 快照三个数�
 验证门状态与里程碑进度——纯只读、降级不失败、零 Python/Node 运行时前置。
 
 Rust 单 crate 实现(ratatui + crossterm / serde_json,stable ≥**1.88**——源码使用
-let-chains,见 `rust-toolchain.toml`),通用任务契约 v1.2 见 `schema/agentdash.tasklog.v1.json`
+let-chains,见 `rust-toolchain.toml`),通用任务契约 v1.3 见 `schema/agentdash.tasklog.v1.json`
 与 [`docs/contract.md`](docs/contract.md)。
 
 ## 安装
@@ -124,9 +124,9 @@ dispatched 行(FIFO);配对行在 panel/摘要/精要中显式标注
 (`panel` / `graph` / `digest` / `oneline` / `watch` 全观测面支持)关闭启发回到严格丢弃 +
 逐行警告,行为与启发落地前逐字节一致。
 
-## 数据契约 v1.2(台账 + 事件流 + config.json + waves/ 波次归档)
+## 数据契约 v1.3(台账 + 事件流 + config.json + waves/ 波次归档)
 
-**契约公开版 v1.2 全文见 [`docs/contract.md`](docs/contract.md)**(全词表/字段语义/
+**契约公开版 v1.3 全文见 [`docs/contract.md`](docs/contract.md)**(全词表/字段语义/
 折叠与会话池/推断配对/七宿主证据分级/波次归档与新克隆回填,第三方宿主照写即可);本节为速览。
 
 约定目录 `<repo>/.agentdash/`;合并可信序 **契约 > 事件 > git 快照**,

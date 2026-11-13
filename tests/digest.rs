@@ -338,6 +338,48 @@ const BLOCKED_LEDGER: &str = r#"{
 const FAILED_GATE_EVENTS: &str =
     r#"{"kind":"gate","gate":"review","state":"failed","detail":"boom"}"#;
 
+#[test]
+fn cli_in_progress_ledger_keeps_real_counts_and_unresolved_evidence() {
+    let repo = TempDir::new("in-progress");
+    let ledger = r#"{"title":"legacy integration","tasks":{
+        "A":{"label":"working","state":"in_progress"},
+        "B":{"label":"waiting","state":"pending"}}}"#;
+    let path = repo.path().to_str().unwrap();
+    fs::write(repo.path().join(".agentdash/ledger.json"), ledger).unwrap();
+    for (events, expected_code, marker) in [
+        ("", 0, ""),
+        (
+            "{\"kind\":\"agent\",\"event\":\"completed\"}",
+            1,
+            "missing `who`",
+        ),
+        (
+            "{\"kind\":\"gate\",\"gate\":\"cargo-clippy\",\"state\":\"failed\",\"exit\":null}",
+            1,
+            "(unknown)",
+        ),
+    ] {
+        fs::write(repo.path().join(".agentdash/events.jsonl"), events).unwrap();
+        let out = run(&["render", "digest", "--strict", path]);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(out.status.code(), Some(expected_code), "{stdout}");
+        assert!(stdout.contains("✓0 ▶1 ·1"), "{stdout}");
+        assert!(!stdout.contains("corrupt ledger"), "{stdout}");
+        assert!(stdout.contains(marker), "{stdout}");
+    }
+    let out = run(&["render", "panel", path]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success());
+    assert!(
+        stdout.contains("working") && stdout.contains("waiting"),
+        "{stdout}"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.path().join(".agentdash/ledger.json")).unwrap(),
+        ledger
+    );
+}
+
 /// --strict 两态钉死:failed gate 或 blocked 任务在场退 1,干净仓退 0;
 /// 不带 --strict 恒退 0(内容照常上板)——内容性退出码只随旗标生效。
 #[test]

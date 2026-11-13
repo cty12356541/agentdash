@@ -24,6 +24,12 @@
       "tasks": [
         "W15-03"
       ]
+    },
+    {
+      "name": "compatibility-hotfix",
+      "tasks": [
+        "COMPAT-IN-PROGRESS"
+      ]
     }
   ],
   "tasks": {
@@ -98,6 +104,13 @@
       "started_at": "2026-11-05T12:08:00+08:00",
       "done_at": "2026-11-05T12:17:42+08:00",
       "note": "0.13.0 installed, 341/341 Rust tests + 346/346 verify-kits, clippy+fmt clean"
+    },
+    "COMPAT-IN-PROGRESS": {
+      "label": "兼容 llmos in_progress 台账状态并验证本机安装",
+      "state": "done",
+      "started_at": "2026-11-13T11:23:36.999483+00:00",
+      "note": "343/343 tests; fmt+clippy passed; independent review clean; installed 0.13.1; llmos panel 0 active=3 pending=2; strict 1 retains 54 missing-who/28 inferred/unknown clippy; canonical ledger SHA256 unchanged",
+      "done_at": "2026-11-13T11:26:06.331232+00:00"
     }
   },
   "barriers": [

@@ -74,7 +74,7 @@
             "description": "动词短语标签。"
           },
           "state": {
-            "description": "最小核 pending→active→done,终态 blocked;review/fix-round 为可选富态。",
+            "description": "最小核 pending→active→done,终态 blocked;review/fix-round 为可选富态。Schema 保持规范词表;运行时另兼容 in_progress 作为 active 的输入别名,新写入仍使用 active。",
             "enum": [
               "pending",
               "active",

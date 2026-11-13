@@ -168,6 +168,33 @@ fn task_state_as_str_matches_serde_roundtrip() {
     }
 }
 
+#[test]
+fn in_progress_alias_preserves_active_task_metadata_and_canonical_output() {
+    let ledger = parse_ledger(
+        r#"{
+        "title":"legacy integration", "tasks": {
+            "A":{"label":"working","state":"in_progress",
+                 "started_at":"2026-11-02T19:40:00+08:00","note":"dispatched"},
+            "B":{"label":"waiting","state":"pending"}
+        }
+    }"#,
+    )
+    .expect("in_progress is an active-state compatibility alias");
+    assert_eq!(ledger.tasks["A"].state, TaskState::Active);
+    assert_eq!(
+        ledger.tasks["A"].started_at.as_deref(),
+        Some("2026-11-02T19:40:00+08:00")
+    );
+    assert_eq!(ledger.tasks["A"].note.as_deref(), Some("dispatched"));
+    assert_eq!(ledger.tasks["A"].done_at, None);
+    assert_eq!(ledger.tasks["B"].state, TaskState::Pending);
+    assert!(ledger.warnings.is_empty());
+    assert_eq!(
+        serde_json::to_string(&ledger.tasks["A"].state).unwrap(),
+        "\"active\""
+    );
+}
+
 // ---------- W3-004 可选 `milestones`(声明式里程碑,加法扩展) ----------
 
 /// W3-004:`milestones` 合法形态逐字段解析(id/title/tasks;整数引用统一收
