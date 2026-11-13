@@ -107,10 +107,9 @@
     },
     "COMPAT-IN-PROGRESS": {
       "label": "兼容 llmos in_progress 台账状态并验证本机安装",
-      "state": "done",
+      "state": "fix-round",
       "started_at": "2026-11-13T11:23:36.999483+00:00",
-      "note": "343/343 tests; fmt+clippy passed; independent review clean; installed 0.13.1; llmos panel 0 active=3 pending=2; strict 1 retains 54 missing-who/28 inferred/unknown clippy; canonical ledger SHA256 unchanged",
-      "done_at": "2026-11-13T11:26:06.331232+00:00"
+      "note": "Runtime fixed and 343 tests pass; CI Rust 1.100 exposes two pre-existing hook Clippy warnings; applying behavior-preserving lint fixes"
     }
   },
   "barriers": [

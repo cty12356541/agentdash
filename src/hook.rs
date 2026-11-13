@@ -74,7 +74,7 @@ const TRANSCRIPT_TAIL_BYTES: u64 = 65_536;
 /// hook 子命令入口(W7-001):`agentdash hook [--host <name>] <event>`——旗标
 /// 与事件名顺序容忍;`host` 显式传入时盖到本进程产出的每条事件上(多宿主
 /// 归属,未传则字段省略,向后兼容)。恒退 0。
-#[must_use]
+#[must_use = "the hook exit code must be returned to the host"]
 pub fn run(rest: &[String]) -> ExitCode {
     let mut host: Option<String> = None;
     let mut event: Option<String> = None;
@@ -1870,11 +1870,10 @@ pub(crate) fn agy_transcript_outcome(
         };
         let mut detail = content
             .find(OUTPUT_MARKER)
-            .map(|out_pos| {
+            .map_or_else(String::new, |out_pos| {
                 let slice = &content[out_pos + OUTPUT_MARKER.len()..];
                 clip(last_nonempty_line(slice))
-            })
-            .unwrap_or_default();
+            });
         if detail.is_empty() && code != 0 {
             detail = format!("exit {code}");
         }
